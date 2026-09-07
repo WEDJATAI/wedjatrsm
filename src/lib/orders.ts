@@ -106,6 +106,7 @@ export function serializeOrder(order: OrderWithRelations): Order {
     taxAmount: round2(order.taxAmount),
     paidAmount: round2(paidAmount),
     remainingAmount: round2(total - paidAmount),
+    guests: order.guests,
     createdAt: order.createdAt.toISOString(),
     closedAt: order.closedAt ? order.closedAt.toISOString() : null,
     items: order.items.map(serializeOrderItem),
@@ -408,6 +409,7 @@ export type TableRow = {
   floorPlanId: number | null
   name: string
   capacity: number
+  shape: string
   positionX: number
   positionY: number
   status: string
@@ -420,6 +422,7 @@ export function serializeTable(table: TableRow): RestaurantTable {
     floorPlanId: table.floorPlanId,
     name: table.name,
     capacity: table.capacity,
+    shape: table.shape,
     positionX: table.positionX,
     positionY: table.positionY,
     status: table.status,
@@ -442,6 +445,7 @@ export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise
       id: true,
       tableId: true,
       totalAmount: true,
+      guests: true,
       createdAt: true,
       items: { select: { id: true, quantity: true, unitPrice: true } },
     },
@@ -465,6 +469,7 @@ export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise
       openOrderTotal: round2(open.totalAmount),
       openOrderItemCount: round2(itemCount),
       openOrderSince: open.createdAt.toISOString(),
+      openOrderGuests: open.guests,
     }
   })
 }

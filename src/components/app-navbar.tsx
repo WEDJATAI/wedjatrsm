@@ -4,13 +4,16 @@ import {
   BarChart3,
   BookOpen,
   Boxes,
+  CalendarCheck,
   ChefHat,
   ChevronDown,
+  Languages,
   LayoutDashboard,
   LogOut,
   Map,
   Package,
   Settings2,
+  ShieldCheck,
   Tags,
   Users,
   Utensils,
@@ -27,30 +30,33 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { RESTAURANT_NAME, ROLE_LABELS } from '@/lib/constants'
+import { useI18n } from '@/lib/i18n'
+import { useAppSettings } from '@/lib/use-settings'
 import type { SessionUser } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-type NavItem = { view: string; label: string; icon: LucideIcon }
+type NavItem = { view: string; permission: string; icon: LucideIcon }
 
-const MAIN_NAV: Record<string, NavItem[]> = {
-  waiter: [{ view: 'pos', label: 'POS', icon: Utensils }],
-  kitchen: [{ view: 'kitchen', label: 'Kitchen', icon: ChefHat }],
-  admin: [
-    { view: 'pos', label: 'POS', icon: Utensils },
-    { view: 'kitchen', label: 'Kitchen', icon: ChefHat },
-    { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  ],
-}
+type LocalNavItem = { view: string; label: string; icon: LucideIcon }
 
+/** first-class tabs (shown directly on the bar) */
+const MAIN_ITEMS: NavItem[] = [
+  { view: 'pos', permission: 'pos', icon: Utensils },
+  { view: 'kitchen', permission: 'kitchen', icon: ChefHat },
+  { view: 'dashboard', permission: 'dashboard', icon: LayoutDashboard },
+]
+
+/** everything else lives under the "Admin" dropdown */
 const ADMIN_MENU: NavItem[] = [
-  { view: 'products', label: 'Products', icon: Package },
-  { view: 'categories', label: 'Categories', icon: Tags },
-  { view: 'floorplans', label: 'Floor Plans', icon: Map },
-  { view: 'inventory', label: 'Inventory', icon: Boxes },
-  { view: 'recipes', label: 'Recipes', icon: BookOpen },
-  { view: 'reports', label: 'Reports', icon: BarChart3 },
-  { view: 'users', label: 'Users', icon: Users },
+  { view: 'products', permission: 'products', icon: Package },
+  { view: 'categories', permission: 'categories', icon: Tags },
+  { view: 'floorplans', permission: 'floorplans', icon: Map },
+  { view: 'inventory', permission: 'inventory', icon: Boxes },
+  { view: 'recipes', permission: 'recipes', icon: BookOpen },
+  { view: 'reports', permission: 'reports', icon: BarChart3 },
+  { view: 'users', permission: 'users', icon: Users },
+  { view: 'roles', permission: 'roles', icon: ShieldCheck },
+  { view: 'attendance', permission: 'attendance', icon: CalendarCheck },
 ]
 
 /* Soft role tints tuned for the dark Odoo navbar bar (#24232D) */
@@ -58,6 +64,7 @@ const ROLE_BADGE_CLASS: Record<string, string> = {
   admin: 'border-primary/60 bg-primary/25 text-white',
   waiter: 'border-emerald-400/30 bg-emerald-400/15 text-emerald-100',
   kitchen: 'border-rose-400/30 bg-rose-400/15 text-rose-100',
+  custom: 'border-amber-400/30 bg-amber-400/15 text-amber-100',
 }
 
 export default function AppNavbar({
@@ -71,9 +78,19 @@ export default function AppNavbar({
   onNavigate: (view: string) => void
   onLogout: () => void
 }) {
-  const mainNav = MAIN_NAV[user.role] ?? MAIN_NAV.waiter
+  const { t, toggleLang } = useI18n()
+  const { restaurantName } = useAppSettings()
+
   const isAdmin = user.role === 'admin'
-  const defaultView = user.role === 'admin' ? 'dashboard' : mainNav[0].view
+  const perms = user.permissions ?? []
+  const mainNav = MAIN_ITEMS.filter((item) => isAdmin || perms.includes(item.permission))
+  const adminMenu = ADMIN_MENU.filter((item) => isAdmin || perms.includes(item.permission))
+  const hasMenu = adminMenu.length > 0
+  const homeView = isAdmin
+    ? 'dashboard'
+    : (mainNav[0]?.view ?? adminMenu[0]?.view ?? 'pos')
+
+  const roleLabel = user.role === 'custom' ? (user.roleName ?? t('role.custom')) : t(`role.${user.role}`)
   const initials =
     user.name
       .trim()
@@ -88,63 +105,77 @@ export default function AppNavbar({
         {/* Left: brand (Odoo-style plum logo tile on the dark bar) */}
         <button
           type="button"
-          onClick={() => onNavigate(defaultView)}
-          aria-label={`${RESTAURANT_NAME} — go to home view`}
+          onClick={() => onNavigate(homeView)}
+          aria-label={`${restaurantName} — ${t('nav.home')}`}
           className="flex shrink-0 items-center gap-2.5 rounded-lg px-1 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
         >
           <span className="bg-primary text-primary-foreground grid h-9 w-9 shrink-0 place-items-center rounded-lg shadow-sm">
             <UtensilsCrossed className="h-5 w-5" aria-hidden />
           </span>
-          <span className="text-left">
+          <span className="text-left rtl:text-right">
             <span className="block truncate font-semibold leading-tight text-white max-w-[140px] sm:max-w-none">
-              {RESTAURANT_NAME}
+              {restaurantName}
             </span>
             <span className="block text-[10px] uppercase tracking-wider text-white/50">RMS</span>
           </span>
         </button>
 
         {/* Mobile nav (icon-only) */}
-        <nav aria-label="Main navigation" className="flex items-center gap-1 sm:hidden">
+        <nav aria-label={t('nav.home')} className="flex items-center gap-1 sm:hidden">
           {mainNav.map((item) => (
             <NavTab
               key={item.view}
-              item={item}
+              item={{ view: item.view, label: t(`nav.${item.view}`), icon: item.icon }}
               active={view === item.view}
               onClick={() => onNavigate(item.view)}
               iconOnly
             />
           ))}
-          {isAdmin && <AdminMenu view={view} onNavigate={onNavigate} iconOnly />}
+          {hasMenu && (
+            <AdminMenu items={adminMenu} view={view} onNavigate={onNavigate} iconOnly label={t('nav.admin')} />
+          )}
         </nav>
 
         {/* Center nav (desktop) */}
-        <nav aria-label="Main navigation" className="mx-auto hidden items-center gap-1 sm:flex">
+        <nav aria-label={t('nav.home')} className="mx-auto hidden items-center gap-1 sm:flex">
           {mainNav.map((item) => (
             <NavTab
               key={item.view}
-              item={item}
+              item={{ view: item.view, label: t(`nav.${item.view}`), icon: item.icon }}
               active={view === item.view}
               onClick={() => onNavigate(item.view)}
             />
           ))}
-          {isAdmin && <AdminMenu view={view} onNavigate={onNavigate} />}
+          {hasMenu && (
+            <AdminMenu items={adminMenu} view={view} onNavigate={onNavigate} label={t('nav.admin')} />
+          )}
         </nav>
 
-        {/* Right: user chip + logout */}
+        {/* Right: language toggle + user chip + logout */}
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:ml-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleLang}
+            aria-label={t('lang.arabic')}
+            title={t('lang.arabic')}
+            className="size-11 shrink-0 text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60"
+          >
+            <Languages className="h-5 w-5" aria-hidden />
+          </Button>
           <div className="flex min-w-0 items-center gap-2">
             <Avatar className="h-8 w-8">
               <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">
                 {initials}
               </AvatarFallback>
             </Avatar>
-            <div className="hidden min-w-0 flex-col items-start gap-0.5 md:flex">
+            <div className="hidden min-w-0 flex-col items-start gap-0.5 md:flex rtl:items-end">
               <span className="max-w-[140px] truncate text-sm font-medium text-white">{user.name}</span>
               <Badge
                 variant="outline"
                 className={cn(ROLE_BADGE_CLASS[user.role] ?? 'border-white/15 bg-white/10 text-white/80')}
               >
-                {ROLE_LABELS[user.role] ?? user.role}
+                {roleLabel}
               </Badge>
             </div>
           </div>
@@ -152,8 +183,8 @@ export default function AppNavbar({
             variant="ghost"
             size="icon"
             onClick={onLogout}
-            aria-label="Log out"
-            title="Log out"
+            aria-label={t('nav.logout')}
+            title={t('nav.logout')}
             className="size-11 shrink-0 text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60"
           >
             <LogOut className="h-4 w-4" aria-hidden />
@@ -170,7 +201,7 @@ function NavTab({
   onClick,
   iconOnly,
 }: {
-  item: NavItem
+  item: LocalNavItem
   active: boolean
   onClick: () => void
   iconOnly?: boolean
@@ -198,22 +229,27 @@ function NavTab({
 }
 
 function AdminMenu({
+  items,
   view,
   onNavigate,
   iconOnly,
+  label,
 }: {
+  items: NavItem[]
   view: string
   onNavigate: (view: string) => void
   iconOnly?: boolean
+  label: string
 }) {
-  const menuActive = ADMIN_MENU.some((m) => m.view === view)
+  const { t } = useI18n()
+  const menuActive = items.some((m) => m.view === view)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          aria-label="Admin menu"
-          title="Admin"
+          aria-label={label}
+          title={label}
           className={cn(
             'shrink-0 rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60',
             iconOnly ? 'h-11 w-11 px-0' : 'h-9 gap-1.5 px-3 text-sm',
@@ -221,12 +257,12 @@ function AdminMenu({
           )}
         >
           <Settings2 className={iconOnly ? 'h-5 w-5' : 'h-4 w-4'} aria-hidden />
-          {!iconOnly && <span>Admin</span>}
+          {!iconOnly && <span>{label}</span>}
           {!iconOnly && <ChevronDown className="h-4 w-4 opacity-60" aria-hidden />}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        {ADMIN_MENU.map((m) => {
+        {items.map((m) => {
           const Icon = m.icon
           return (
             <DropdownMenuItem
@@ -235,7 +271,7 @@ function AdminMenu({
               className="min-h-11 cursor-pointer py-2"
             >
               <Icon className="h-4 w-4" aria-hidden />
-              {m.label}
+              {t(`nav.${m.view}`)}
             </DropdownMenuItem>
           )
         })}

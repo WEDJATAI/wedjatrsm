@@ -4,7 +4,42 @@ export type SessionUser = {
   id: number
   email: string
   name: string
-  role: 'admin' | 'waiter' | 'kitchen' | string
+  role: 'admin' | 'waiter' | 'kitchen' | 'custom' | string
+  permissions: string[]
+  /** display name of the custom role (role === 'custom'), else null */
+  roleName: string | null
+}
+
+export type CustomRole = {
+  id: number
+  name: string
+  permissions: string[] // module keys
+  active: boolean
+  userCount?: number
+  createdAt?: string
+}
+
+export type Shift = {
+  id: number
+  name: string
+  startTime: string // "HH:MM"
+  endTime: string // "HH:MM"
+  active: boolean
+}
+
+export type AttendanceRecord = {
+  id: number
+  userId: number
+  user: { id: number; name: string; role: string; roleName?: string | null } | null
+  checkInAt: string
+  checkOutAt: string | null
+  lateMinutes: number
+  workedMinutes: number | null
+  shiftName: string | null
+}
+
+export type AppSettings = {
+  restaurantName: string
 }
 
 export type Category = {
@@ -36,6 +71,7 @@ export type RestaurantTable = {
   floorPlanId: number | null
   name: string
   capacity: number
+  shape: 'square' | 'round' | 'rectangle' | 'oval' | string
   positionX: number
   positionY: number
   status: 'free' | 'occupied' | 'reserved' | string
@@ -45,6 +81,7 @@ export type RestaurantTable = {
   openOrderTotal?: number | null
   openOrderItemCount?: number | null
   openOrderSince?: string | null
+  openOrderGuests?: number | null
 }
 
 export type FloorPlan = {
@@ -90,6 +127,7 @@ export type Order = {
   taxAmount: number
   paidAmount: number
   remainingAmount: number
+  guests: number
   createdAt: string
   closedAt: string | null
   items: OrderItem[]
@@ -130,6 +168,8 @@ export type SalesReport = {
   totalRevenue: number
   totalOrders: number
   avgOrderValue: number
+  totalGuests: number
+  avgCheckPerPerson: number
   byMethod: { method: string; amount: number; count: number }[]
   topProducts: { productId: number; name: string; quantity: number; revenue: number }[]
   byCategory: { categoryId: number | null; name: string; revenue: number; quantity: number }[]
@@ -143,7 +183,7 @@ export type InventoryValueReport = {
   lowStockCount: number
 }
 
-// ─── Request payload types ──────────────────────────────────────────
+// ─── Request payload types ──────────────────────────
 
 export type NewOrderItemPayload = {
   productId: number

@@ -29,7 +29,7 @@ function formatLocalDate(d: Date): string {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'reports'])
 
     const sp = new URL(req.url).searchParams
     const fromRaw = sp.get('from')
@@ -149,6 +149,8 @@ export async function GET(req: NextRequest) {
 
     const totalRevenue = round2(totalRevenueRaw)
     const totalOrders = orders.length
+    const totalGuests = orders.reduce((sum, o) => sum + (o.guests ?? 0), 0)
+    const avgCheckPerPerson = totalGuests > 0 ? round2(totalRevenue / totalGuests) : 0
     const avgOrderValue = totalOrders > 0 ? round2(totalRevenue / totalOrders) : 0
 
     const byMethod = Array.from(methodAgg.entries())
@@ -186,6 +188,8 @@ export async function GET(req: NextRequest) {
       totalRevenue,
       totalOrders,
       avgOrderValue,
+      totalGuests,
+      avgCheckPerPerson,
       byMethod,
       topProducts,
       byCategory,

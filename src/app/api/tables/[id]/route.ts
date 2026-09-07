@@ -9,7 +9,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'floorplans'])
     const { id } = await ctx.params
     const tableId = parseId(id, 'table id')
 

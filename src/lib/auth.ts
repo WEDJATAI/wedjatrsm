@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { SignJWT, jwtVerify } from 'jose'
 import bcrypt from 'bcryptjs'
 import { db } from '@/lib/db'
+import { BUILTIN_ROLE_PERMISSIONS } from '@/lib/constants'
 
 export const SESSION_COOKIE = 'rms_session'
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
@@ -16,6 +17,10 @@ export type SessionPayload = {
   email: string
   name: string
   role: string
+  /** granted module permissions (pos / kitchen / reports / ...) */
+  permissions: string[]
+  /** display name of the custom role when role === 'custom' */
+  roleName: string | null
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -24,6 +29,25 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash)
+}
+
+/**
+ * Derive the module permission list for a user.
+ * - admin / waiter / kitchen use the built-in grants
+ * - 'custom' users read their permissions from the CustomRole record
+ */
+export function derivePermissions(
+  role: string,
+  customPermissions: string | null | undefined,
+): string[] {
+  if (role === 'admin') return BUILTIN_ROLE_PERMISSIONS.admin
+  if (role === 'waiter') return BUILTIN_ROLE_PERMISSIONS.waiter
+  if (role === 'kitchen') return BUILTIN_ROLE_PERMISSIONS.kitchen
+  if (!customPermissions) return []
+  return customPermissions
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
 }
 
 export async function createSessionToken(payload: SessionPayload): Promise<string> {
@@ -37,16 +61,53 @@ export async function createSessionToken(payload: SessionPayload): Promise<strin
 export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret())
-    // Tolerate legacy tokens signed with an older payload shape ({ id } instead of { userId })
-    const rawId: unknown = (payload as Record<string, unknown>).userId ?? (payload as Record<string, unknown>).id
+    // Tolerate legacy tokens signed with older payload shapes ({ id } / no permissions)
+    const raw = payload as Record<string, unknown>
+    const rawId: unknown = raw.userId ?? raw.id
+    const rawPerms = Array.isArray(raw.permissions) ? raw.permissions : []
     return {
       userId: Number(rawId),
-      email: String(payload.email),
-      name: String(payload.name),
-      role: String(payload.role),
+      email: String(raw.email ?? ''),
+      name: String(raw.name ?? ''),
+      role: String(raw.role ?? 'waiter'),
+      permissions: rawPerms.map(String),
+      roleName: typeof raw.roleName === 'string' ? raw.roleName : null,
     }
   } catch {
     return null
+  }
+}
+
+/** Session user row shape (DB + derived permissions). */
+export type SessionUserRow = {
+  id: number
+  email: string
+  name: string
+  role: string
+  roleId: number | null
+  roleName: string | null
+  permissions: string[]
+}
+
+/** Load a user by id and derive their permissions (null if missing/inactive). */
+export async function loadSessionUser(userId: number): Promise<SessionUserRow | null> {
+  const user = await db.user.findFirst({
+    where: { id: userId, active: true },
+    include: { roleRecord: { select: { name: true, permissions: true, active: true } } },
+  })
+  if (!user) return null
+  const roleRecord = user.roleId ? user.roleRecord : null
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    roleId: user.roleId,
+    roleName: roleRecord?.name ?? null,
+    permissions: derivePermissions(
+      user.role,
+      roleRecord?.active ? roleRecord.permissions : null,
+    ),
   }
 }
 
@@ -63,12 +124,17 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
     }
   }
   if (!payload) return null
-  // Ensure user still exists and is active
-  const user = await db.user.findFirst({
-    where: { id: payload.userId, active: true },
-    select: { id: true, email: true, name: true, role: true },
-  })
-  return user ? { userId: user.id, email: user.email, name: user.name, role: user.role } : null
+  // Ensure user still exists and is active (fresh DB read also picks up role edits)
+  const user = await loadSessionUser(payload.userId)
+  if (!user) return null
+  return {
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    permissions: user.permissions,
+    roleName: user.roleName,
+  }
 }
 
 /**
@@ -127,16 +193,23 @@ export class ApiError extends Error {
 }
 
 /**
- * Guard an API route: requires an authenticated user, optionally with one of the given roles.
- * Throws ApiError(401/403) which should be caught and converted via `errorResponse()`.
+ * Guard an API route. `allowed` may contain:
+ *  - classic role names ('admin' | 'waiter' | 'kitchen') — legacy behavior
+ *  - module permission keys ('pos', 'reports', 'inventory', …) — satisfied when
+ *    the user's derived permission list contains it
+ * The admin role always passes. An empty/omitted list only requires a session.
  */
 export async function requireAuth(
   req: NextRequest,
-  roles?: string[],
+  allowed?: string[],
 ): Promise<SessionPayload> {
   const user = await getSessionUser(req)
   if (!user) throw new ApiError('Unauthorized', 401)
-  if (roles && roles.length > 0 && !roles.includes(user.role)) {
+  if (allowed && allowed.length > 0) {
+    if (user.role === 'admin') return user
+    if (allowed.includes(user.role)) return user // classic role match
+    const hasPermission = user.permissions.some((p) => allowed.includes(p))
+    if (hasPermission) return user
     throw new ApiError('Forbidden: insufficient role', 403)
   }
   return user

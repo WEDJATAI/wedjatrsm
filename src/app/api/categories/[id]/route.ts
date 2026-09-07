@@ -26,7 +26,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'categories'])
     const { id } = await params
     const categoryId = parseIdParam(id)
 
@@ -87,7 +87,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'categories'])
     const { id } = await params
     const categoryId = parseIdParam(id)
 

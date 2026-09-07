@@ -43,7 +43,7 @@ function parsePin(value: unknown): string | null | undefined {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'users'])
     const users = await db.user.findMany({
       orderBy: { createdAt: 'asc' },
       select: USER_SAFE_SELECT,
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'users'])
     const body = await readBody(req)
 
     const name = typeof body.name === 'string' ? body.name.trim() : ''

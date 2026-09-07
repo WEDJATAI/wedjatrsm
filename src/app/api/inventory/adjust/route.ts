@@ -46,7 +46,7 @@ function serializeProduct(p: DbProduct): Product & { createdAt: string } {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'inventory'])
 
     let body: unknown
     try {

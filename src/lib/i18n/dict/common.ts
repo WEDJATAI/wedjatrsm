@@ -1,0 +1,348 @@
+import type { DictPair } from '../index'
+
+// ─── Shared dictionary (owner: main agent) ──────────────────────────
+// Everyone may READ these keys; only the main agent edits this file.
+// Add view-specific strings to your own namespace dict instead.
+
+export const common: DictPair = {
+  en: {
+    // generic actions
+    'common.save': 'Save',
+    'common.cancel': 'Cancel',
+    'common.delete': 'Delete',
+    'common.edit': 'Edit',
+    'common.close': 'Close',
+    'common.back': 'Back',
+    'common.add': 'Add',
+    'common.create': 'Create',
+    'common.update': 'Update',
+    'common.confirm': 'Confirm',
+    'common.search': 'Search…',
+    'common.loading': 'Loading…',
+    'common.actions': 'Actions',
+    'common.retry': 'Retry',
+    'common.done': 'Done',
+    'common.remove': 'Remove',
+    'common.yes': 'Yes',
+    'common.no': 'No',
+    'common.ok': 'OK',
+    'common.more': 'More',
+    'common.print': 'Print',
+    'common.refresh': 'Refresh',
+    'common.apply': 'Apply',
+    'common.clear': 'Clear',
+    'common.selectAll': 'Select all',
+    'common.saved': 'Saved successfully',
+    'common.error': 'Something went wrong',
+    'common.required': 'This field is required',
+    'common.optional': 'optional',
+    'common.today': 'Today',
+    'common.live': 'live',
+    'common.since': 'since {time}',
+    'common.name': 'Name',
+    'common.email': 'Email',
+    'common.password': 'Password',
+    'common.role': 'Role',
+    'common.active': 'Active',
+    'common.inactive': 'Inactive',
+    'common.status': 'Status',
+    'common.notes': 'Notes',
+    'common.quantity': 'Quantity',
+    'common.price': 'Price',
+    'common.cost': 'Cost',
+    'common.date': 'Date',
+    'common.time': 'Time',
+    'common.table': 'Table',
+    'common.takeaway': 'Takeaway',
+    'common.order': 'Order',
+    'common.guests': 'Guests',
+    'common.people': 'people',
+    'common.seats': 'seats',
+    'common.default': 'Default',
+
+    // navigation / modules
+    'nav.pos': 'POS',
+    'nav.kitchen': 'Kitchen',
+    'nav.dashboard': 'Dashboard',
+    'nav.products': 'Products',
+    'nav.categories': 'Categories',
+    'nav.floorplans': 'Floor Plans',
+    'nav.inventory': 'Inventory',
+    'nav.recipes': 'Recipes',
+    'nav.reports': 'Reports',
+    'nav.users': 'Users',
+    'nav.roles': 'Roles',
+    'nav.attendance': 'Attendance',
+    'nav.settings': 'Settings',
+    'nav.admin': 'Admin',
+    'nav.logout': 'Log out',
+    'nav.home': 'Home',
+
+    // roles
+    'role.admin': 'Admin',
+    'role.waiter': 'Waiter',
+    'role.kitchen': 'Kitchen',
+    'role.custom': 'Custom',
+
+    // table statuses
+    'status.table.free': 'Free',
+    'status.table.occupied': 'Occupied',
+    'status.table.reserved': 'Reserved',
+
+    // table shapes
+    'shape.square': 'Square',
+    'shape.round': 'Round',
+    'shape.rectangle': 'Rectangle',
+    'shape.oval': 'Oval',
+
+    // item statuses
+    'status.item.new': 'New',
+    'status.item.preparing': 'Preparing',
+    'status.item.ready': 'Ready',
+    'status.item.served': 'Served',
+
+    // order statuses
+    'status.order.open': 'Open',
+    'status.order.paid': 'Paid',
+    'status.order.cancelled': 'Cancelled',
+    'status.order.merged': 'Merged',
+
+    // payment methods
+    'status.payment.cash': 'Cash',
+    'status.payment.card': 'Card',
+    'status.payment.other': 'Other',
+
+    // courses
+    'course.starter': 'Starter',
+    'course.main': 'Main',
+    'course.dessert': 'Dessert',
+    'course.drink': 'Drink',
+
+    // inventory reasons
+    'reason.purchase': 'Purchase (stock in)',
+    'reason.adjustment': 'Adjustment',
+    'reason.waste': 'Waste',
+    'reason.sale': 'Sale',
+
+    // money
+    'money.subtotal': 'Subtotal',
+    'money.discount': 'Discount',
+    'money.tax': 'VAT (14%)',
+    'money.total': 'Total',
+    'money.paid': 'Paid',
+    'money.remaining': 'Remaining',
+    'money.avgOrderValue': 'Avg order value',
+    'money.avgCheckPerPerson': 'Avg check per person',
+    'money.revenue': 'Revenue',
+    'money.orders': 'Orders',
+    'money.guests': 'Guests',
+
+    // language
+    'lang.toggle': 'عربي',
+    'lang.english': 'English',
+    'lang.arabic': 'العربية',
+
+    // attendance / shift (shared)
+    'attendance.checkIn': 'Check in',
+    'attendance.checkOut': 'Check out',
+    'attendance.checkedInAt': 'Checked in at {time}',
+    'attendance.checkedOutAt': 'Checked out at {time}',
+    'attendance.worked': 'Worked',
+    'attendance.late': 'Late',
+    'attendance.lateBy': 'Late by {minutes} min',
+    'attendance.onTime': 'On time',
+    'attendance.inNow': 'In now',
+    'attendance.noOpenCheckIn': 'No open check-in found for today',
+    'attendance.alreadyCheckedIn': 'Already checked in at {time}',
+    'attendance.shift': 'Shift',
+    'attendance.username': 'Username',
+    'attendance.pin': 'PIN (6 digits)',
+    'attendance.welcome': 'Welcome, {name}',
+    'attendance.roleDetected': 'Role: {role}',
+    'shift.shifts': 'Shifts',
+    'shift.startTime': 'Start time',
+    'shift.endTime': 'End time',
+    'shift.note': 'Shifts are used for attendance tracking only — they are separate from sign-in.',
+
+    // settings
+    'settings.restaurantName': 'Restaurant name',
+    'settings.profile': 'Restaurant profile',
+    'settings.saved': 'Settings saved',
+
+    // errors
+    'error.invalidCredentials': 'Invalid credentials',
+    'error.forbidden': 'You do not have permission to do this',
+    'error.notFound': 'Not found',
+    'error.generic': 'Request failed',
+  },
+  ar: {
+    // generic actions
+    'common.save': 'حفظ',
+    'common.cancel': 'إلغاء',
+    'common.delete': 'حذف',
+    'common.edit': 'تعديل',
+    'common.close': 'إغلاق',
+    'common.back': 'رجوع',
+    'common.add': 'إضافة',
+    'common.create': 'إنشاء',
+    'common.update': 'تحديث',
+    'common.confirm': 'تأكيد',
+    'common.search': 'بحث…',
+    'common.loading': 'جارٍ التحميل…',
+    'common.actions': 'إجراءات',
+    'common.retry': 'إعادة المحاولة',
+    'common.done': 'تم',
+    'common.remove': 'إزالة',
+    'common.yes': 'نعم',
+    'common.no': 'لا',
+    'common.ok': 'حسناً',
+    'common.more': 'المزيد',
+    'common.print': 'طباعة',
+    'common.refresh': 'تحديث',
+    'common.apply': 'تطبيق',
+    'common.clear': 'مسح',
+    'common.selectAll': 'تحديد الكل',
+    'common.saved': 'تم الحفظ بنجاح',
+    'common.error': 'حدث خطأ ما',
+    'common.required': 'هذا الحقل مطلوب',
+    'common.optional': 'اختياري',
+    'common.today': 'اليوم',
+    'common.live': 'مباشر',
+    'common.since': 'منذ {time}',
+    'common.name': 'الاسم',
+    'common.email': 'البريد الإلكتروني',
+    'common.password': 'كلمة المرور',
+    'common.role': 'الدور',
+    'common.active': 'نشط',
+    'common.inactive': 'غير نشط',
+    'common.status': 'الحالة',
+    'common.notes': 'ملاحظات',
+    'common.quantity': 'الكمية',
+    'common.price': 'السعر',
+    'common.cost': 'التكلفة',
+    'common.date': 'التاريخ',
+    'common.time': 'الوقت',
+    'common.table': 'طاولة',
+    'common.takeaway': 'سفري',
+    'common.order': 'طلب',
+    'common.guests': 'عدد الضيوف',
+    'common.people': 'أشخاص',
+    'common.seats': 'مقاعد',
+    'common.default': 'افتراضي',
+
+    // navigation / modules
+    'nav.pos': 'نقاط البيع',
+    'nav.kitchen': 'المطبخ',
+    'nav.dashboard': 'لوحة التحكم',
+    'nav.products': 'المنتجات',
+    'nav.categories': 'التصنيفات',
+    'nav.floorplans': 'مخططات الصالة',
+    'nav.inventory': 'المخزون',
+    'nav.recipes': 'الوصفات',
+    'nav.reports': 'التقارير',
+    'nav.users': 'المستخدمون',
+    'nav.roles': 'الأدوار',
+    'nav.attendance': 'الحضور والانصراف',
+    'nav.settings': 'الإعدادات',
+    'nav.admin': 'الإدارة',
+    'nav.logout': 'تسجيل الخروج',
+    'nav.home': 'الرئيسية',
+
+    // roles
+    'role.admin': 'مدير النظام',
+    'role.waiter': 'نادل',
+    'role.kitchen': 'مطبخ',
+    'role.custom': 'مخصص',
+
+    // table statuses
+    'status.table.free': 'متاحة',
+    'status.table.occupied': 'مشغولة',
+    'status.table.reserved': 'محجوزة',
+
+    // table shapes
+    'shape.square': 'مربعة',
+    'shape.round': 'دائرية',
+    'shape.rectangle': 'مستطيلة',
+    'shape.oval': 'بيضاوية',
+
+    // item statuses
+    'status.item.new': 'جديد',
+    'status.item.preparing': 'قيد التحضير',
+    'status.item.ready': 'جاهز',
+    'status.item.served': 'تم التقديم',
+
+    // order statuses
+    'status.order.open': 'مفتوح',
+    'status.order.paid': 'مدفوع',
+    'status.order.cancelled': 'ملغي',
+    'status.order.merged': 'مدمج',
+
+    // payment methods
+    'status.payment.cash': 'نقدي',
+    'status.payment.card': 'بطاقة',
+    'status.payment.other': 'أخرى',
+
+    // courses
+    'course.starter': 'مقبلات',
+    'course.main': 'طبق رئيسي',
+    'course.dessert': 'حلويات',
+    'course.drink': 'مشروبات',
+
+    // inventory reasons
+    'reason.purchase': 'شراء (إضافة مخزون)',
+    'reason.adjustment': 'تسوية',
+    'reason.waste': 'هالك',
+    'reason.sale': 'بيع',
+
+    // money
+    'money.subtotal': 'المجموع الفرعي',
+    'money.discount': 'الخصم',
+    'money.tax': 'ضريبة القيمة المضافة (14%)',
+    'money.total': 'الإجمالي',
+    'money.paid': 'المدفوع',
+    'money.remaining': 'المتبقي',
+    'money.avgOrderValue': 'متوسط قيمة الطلب',
+    'money.avgCheckPerPerson': 'متوسط الحساب للفرد',
+    'money.revenue': 'الإيرادات',
+    'money.orders': 'الطلبات',
+    'money.guests': 'الضيوف',
+
+    // language
+    'lang.toggle': 'عربي',
+    'lang.english': 'English',
+    'lang.arabic': 'العربية',
+
+    // attendance / shift (shared)
+    'attendance.checkIn': 'تسجيل الحضور',
+    'attendance.checkOut': 'تسجيل الانصراف',
+    'attendance.checkedInAt': 'تم تسجيل الحضور في {time}',
+    'attendance.checkedOutAt': 'تم تسجيل الانصراف في {time}',
+    'attendance.worked': 'مدة العمل',
+    'attendance.late': 'متأخر',
+    'attendance.lateBy': 'متأخر بمقدار {minutes} دقيقة',
+    'attendance.onTime': 'في الوقت',
+    'attendance.inNow': 'حاضر الآن',
+    'attendance.noOpenCheckIn': 'لا يوجد تسجيل حضور مفتوح اليوم',
+    'attendance.alreadyCheckedIn': 'تم تسجيل الحضور بالفعل في {time}',
+    'attendance.shift': 'فترة العمل',
+    'attendance.username': 'اسم المستخدم',
+    'attendance.pin': 'الرمز السري (6 أرقام)',
+    'attendance.welcome': 'أهلاً {name}',
+    'attendance.roleDetected': 'الدور: {role}',
+    'shift.shifts': 'فترات العمل',
+    'shift.startTime': 'وقت البدء',
+    'shift.endTime': 'وقت الانتهاء',
+    'shift.note': 'تُستخدم فترات العمل لمتابعة الحضور فقط — وهي منفصلة عن تسجيل الدخول.',
+
+    // settings
+    'settings.restaurantName': 'اسم المطعم',
+    'settings.profile': 'بيانات المطعم',
+    'settings.saved': 'تم حفظ الإعدادات',
+
+    // errors
+    'error.invalidCredentials': 'بيانات الدخول غير صحيحة',
+    'error.forbidden': 'ليست لديك صلاحية للقيام بهذا الإجراء',
+    'error.notFound': 'غير موجود',
+    'error.generic': 'فشل الطلب',
+  },
+}

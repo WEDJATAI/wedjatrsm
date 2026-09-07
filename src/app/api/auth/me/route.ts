@@ -6,7 +6,14 @@ export async function GET(req: NextRequest) {
     const user = await getSessionUser(req)
     if (!user) throw new ApiError('Unauthorized', 401)
     return NextResponse.json({
-      user: { id: user.userId, email: user.email, name: user.name, role: user.role },
+      user: {
+        id: user.userId,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        permissions: user.permissions,
+        roleName: user.roleName,
+      },
     })
   } catch (err) {
     return errorResponse(err)

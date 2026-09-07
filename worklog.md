@@ -395,3 +395,86 @@ Stage Summary:
 - Payment screen now has Print Check (pre-payment guest check): single or split (payment-plan/equal/by-items/custom), customizable title + customer name; after printing the payment modal stays open for cash/card.
 - Odoo-style UI: light gray + white cards + plum #714B67 + emerald payment buttons; Odoo dark navbar; Odoo floor screen w/ floor switcher, Transfer & Merge action buttons; Odoo product tiles + category pills; Odoo order panel.
 - Table transfer (order screen button + floor mode) and merge (floor 2-step mode) fully working incl. takeaway cases; merged source orders keep audit trail (status 'merged').
+
+---
+
+## ROUND 3 — Arabic i18n, custom roles, attendance, shapes, item transfer, guests, shifts, settings
+
+### Safety rules (ALL agents — MANDATORY)
+- **NEVER** run `git reset`, `git checkout --`, `git revert`, or delete files. Only additive edits + forward commits. Current stable tag: `round2-stable` (backup DB at `backups/custom-round2-*.db`).
+- **NEVER** delete or drop data; migrations are additive only.
+- Dev server is ALREADY RUNNING on :3000 (started via `setsid bun run dev`). Do NOT restart or rebuild it. Check `tail dev.log` after your changes.
+- Prisma client + schema already updated & pushed (CustomRole, Attendance, Shift, AppSetting models; Order.guests; RestaurantTable.shape; User.roleId). Do NOT run db:push again.
+- `bunx tsc --noEmit` and `bun run lint` must stay CLEAN (0 errors) for your files.
+- **Do NOT** run the round3 migration again (scripts/round3-migrate.ts already applied: 6-digit PINs 123456/111111/222222, AppSetting.restaurantName='Saffron Table', shifts Morning 09:00-17:00 + Evening 17:00-01:00, role 'Accountant' [dashboard,reports], order.guests backfilled 1-6, table shapes varied).
+
+### File ownership (STRICT — do not touch files you do not own)
+- **main (already done, do not modify)**: prisma/**, src/lib/{auth,api,constants,types,db,format,orders,rate-limit,use-settings}.ts, src/lib/i18n/index.tsx, src/lib/i18n/dict/common.ts, src/app/{page,layout}.tsx, src/components/app-navbar.tsx, src/app/api/auth/**, all requireAuth guard lists.
+- **6-a**: src/app/api/{settings,shifts,roles,attendance}/** (new) + src/app/api/users/** (roleId support edits).
+- **6-b**: src/app/api/orders/** (guests + NEW transfer-items route) + src/app/api/tables/** (shape) + reports guests aggregation edits. lib/orders.ts serializers ALREADY expose guests/shape/openOrderGuests (done by main) — only add route-level validation.
+- **6-c**: src/components/pos/**, src/components/kitchen/**, src/lib/i18n/dict/{pos,kitchen}.ts.
+- **6-d**: src/components/auth/login-view.tsx, src/lib/i18n/dict/auth.ts.
+- **6-e**: src/components/admin/** EXCEPT dashboard? NO — includes dashboard-view; owns src/lib/i18n/dict/admin.ts. Placeholder files roles-view.tsx / attendance-view.tsx / settings-view.tsx exist — REPLACE their contents with full implementations (same default export names).
+
+### i18n system (main-owned core — usage for all frontend agents)
+- `src/lib/i18n/index.tsx` exports `LanguageProvider` (mounted in page.tsx), `useI18n()` → `{ lang, isRTL, setLang, toggleLang, t }`.
+- `t('common.save')`, `t('pos.sendToKitchen')`, `t('common.since', { time })` ({var} interpolation). Fallback: English value → key tail. NEVER hardcode English strings in JSX after your pass — route them through `t()` with keys in YOUR dict namespace (or reuse existing common.* keys).
+- Your dict file: `{ en: { 'yourns.key': '…' }, ar: { 'yourns.key': '…' } }`, `export const <ns>Dict: DictPair`. You own ONLY your namespace file(s) — common.ts is read-only for you.
+- Arabic: MSA + Egyptian restaurant terminology; keep numbers Latin; money via formatCurrency (auto ج.م); dates via formatDate/formatTime (auto-locale). See common.ts for established glossary (e.g. طاولة/سفري/إرسال إلى المطبخ/طباعة الحساب/تسجيل الحضور).
+- RTL: provider sets `document.documentElement.dir`. Use Tailwind logical utilities for NEW code (`ms-*`, `me-*`, `ps-*`, `pe-*`, `text-start`, `text-end`) and add `rtl:` variants where existing physical classes break the layout. Flexbox/grid auto-flip. **Print windows**: set `<html dir="rtl" lang="ar">` in generated print HTML when lang==='ar'.
+- Status labels: replace constants-label imports (TABLE_STATUS_LABELS etc.) with `t('status.table.free')`, `t('course.main')`, `t('reason.purchase')`, `t('shape.round')` … (keys in common.ts).
+- Language toggle lives in the navbar (done). Do not add another global toggle.
+
+### Session / permissions (main-owned — binding)
+- SessionUser: `{ id, email, name, role, permissions: string[], roleName: string|null }`. Login + /api/auth/me return it. role='custom' ⇒ permissions come from CustomRole row; roleName = display name.
+- PERMISSIONS (module keys, in constants): pos, kitchen, dashboard, products, categories, floorplans, inventory, recipes, reports, users, roles, attendance, settings.
+- Built-ins: admin → all; waiter → ['pos']; kitchen → ['kitchen'].
+- requireAuth(req, allowed) — allowed may mix role names + permission keys; admin always passes. Existing routes already updated with permission keys (e.g. reports: ['admin','reports']).
+- Frontend: page.tsx view machine maps view → permission (VIEW_PERMISSION); navbar builds tabs from permissions. Custom users land on first permitted view (priority pos > kitchen > dashboard > reports > …).
+
+### NEW API contracts — 6-a (BINDING)
+- `GET /api/settings` (any authed) → `{ settings: { restaurantName: string } }` (missing key → constant 'Saffron Table').
+- `PUT /api/settings` ['admin','settings'] `{ restaurantName?: string }` (1-60 chars, trimmed, non-empty) → `{ settings }`. upsert key.
+- `GET /api/shifts` (any authed) → `{ shifts: Shift[] }` (active+inactive, id asc). `POST /api/shifts` ['admin','settings'] `{ name, startTime 'HH:MM', endTime 'HH:MM' }` (validate 24h format, endTime may be < startTime = overnight) → `{ shift }`.
+- `PUT /api/shifts/[id]` ['admin','settings'] `{ name?, startTime?, endTime?, active? }` → `{ shift }`. Soft delete via active=false only.
+- `GET /api/roles` (any authed) → `{ roles: CustomRole[] }` (permissions as string[], userCount, active+inactive). `POST /api/roles` ['admin','roles'] `{ name (unique, 2-40 chars), permissions: string[] ⊆ PERMISSIONS }` → `{ role }`. 409 on duplicate name.
+- `PUT /api/roles/[id]` ['admin','roles'] `{ name?, permissions?, active? }` → `{ role }`. Soft delete only; role with users may be deactivated (users keep roleName but lose perms until reassigned — acceptable).
+- `POST /api/attendance/check-in` **PUBLIC** (no auth!) body `{ username, pin }` — rate-limited 10/5min per ip+username via checkRateLimit (`att:<ip>:<username>`), 429 with readable message. username matches email (ci) OR name (ci, trimmed); multiple name matches → 400 `Multiple users match this name — use your email`. pin must equal user's stored pin (user must be active; pin may be null → 401 `No PIN set for this user`). Open record = latest attendance where user & checkOutAt=null; if exists (regardless of day) → 400 `Already checked in at HH:MM`. Else create with checkInAt=now, lateMinutes computed vs active shifts: find shift where check-in time-of-day ∈ [start, start+8h] (wrap overnight: endTime<startTime means window start→end+24h); late = max(0, minutes(checkIn − shiftStart) − 15 grace) when in that window; else 0. Response `{ user: { id, name, role, roleLabel, roleName }, attendance: AttendanceRecord, late: boolean, lateMinutes, shift: { id, name, startTime, endTime } | null }`.
+- `POST /api/attendance/check-out` **PUBLIC** + rate-limited, body `{ username, pin }` — same user match; find open record (checkOutAt null) → 400 `No open check-in found` if none; set checkOutAt=now. Response `{ user, attendance: AttendanceRecord (workedMinutes computed), workedMinutes, shift? }`.
+- `GET /api/attendance?date=YYYY-MM-DD` ['admin','attendance'] (default today, local day window from midnight to midnight, validate/400 garbage, allow past 31 days) → `{ records: AttendanceRecord[] }` — each: user {id,name,role,roleName}, checkInAt, checkOutAt, lateMinutes, workedMinutes (null while open), shiftName (shift whose window contained the check-in), sorted checkInAt desc. Also `{ summary: { total, checkedIn, stillIn, lateCount, totalWorkedMinutes } }`.
+- Users API edits (6-a): POST/PUT accept `role: 'admin'|'waiter'|'kitchen'|'custom'` + `roleId` (required+validated when custom: exists & active, else 400 `Role not found`; 400 when roleId sent with non-custom role). PIN validation: exactly 6 digits (`^\d{6}$`, message `PIN must be exactly 6 digits`), ''/null clears. GET /api/users rows gain `roleId`, `roleName` (resolved), `permissions` (derived). DO NOT weaken existing guards/validation.
+
+### NEW API contracts — 6-b (BINDING)
+- `POST /api/orders` gains optional `guests` (int 1-30, default 2 when tableId set, 1 takeaway; 400 outside range). `PUT /api/orders/[id]` accepts `guests` (same validation). Serialization already includes guests (done).
+- `POST /api/orders/[id]/transfer-items` ['waiter','admin','pos'] body `{ itemIds: number[], targetOrderId: number }` → `{ source: Order, target: Order }` — both orders open (400 `Only open orders can be modified` style), ids non-empty (400 `itemIds is required`), every item belongs to source order (400 `Item {id} does not belong to this order`), source≠target (400 `Cannot transfer items to the same order`). Reparent items (orderItem.updateMany orderId=targetId), recomputeTotals(source) + recomputeTotals(target) (reused helper). NO inventory changes; tables unchanged (both already occupied); payments stay. Response via getOrderOr404 + serializeOrder for BOTH.
+- `POST /api/tables` + `PUT /api/tables/[id]` accept `shape` ∈ TABLE_SHAPES (400 `Invalid shape`) — serialization already includes shape. GET /api/tables + /api/floorplans already return it.
+- Reports sales: totalGuests + avgCheckPerPerson already computed by main (verify only). SalesReport type updated.
+
+### Frontend contracts — 6-c (POS/KDS, BINDING)
+- PosView() default export unchanged. TableSelect props unchanged + may add OPTIONAL props only. CheckModal/PaymentModal/ReceiptModal/CartPanel/ProductGrid contracts unchanged (may add optional props).
+- i18n ALL pos + kitchen components (dict/pos.ts, dict/kitchen.ts — you own; extend freely with your keys).
+- Table tiles (table-select + floorplans-view? NO — floorplans is 6-e's): table-select tiles render `table.shape`: square → rounded-xl aspect-square-ish; round → rounded-full; rectangle → wider (w-32 h-24 rounded-xl); oval → w-32 h-24 rounded-full. Keep grid layout. Occupied tiles show guests (openOrderGuests) with Users icon + amount + elapsed.
+- Guests flow: selecting a FREE table → quick "Number of guests" dialog (default 2, min 1 max 30, quick chips 1-8 + stepper) → creates order with guests (POST body includes guests). Occupied table with existing order → Guests button in order top bar → edit dialog → PUT {guests}. Takeaway default 1.
+- Item transfer: cart-panel gets "Move items" mode (ArrowLeftRight button, enabled when ≥1 sent item): checkboxes on sent rows + footer "Move N items" → dialog listing OTHER open orders (from ['orders','open'] query — table chip/name or Takeaway, order #, total, guests) → POST /api/orders/{id}/transfer-items { itemIds, targetOrderId } → invalidate ['orders'],['orders','open'],['floorplans'],['pos-order',sourceId],['pos-order',targetId] + toast. Cancel exits selection mode.
+- Receipt/Check print: pull restaurantName via useAppSettings() (query ['app-settings']); print HTML root gets dir/lang from useI18n.
+- Do NOT change payment modal business logic (Print Check flow etc. stays).
+
+### Frontend contracts — 6-d (login + check-in card, BINDING)
+- `LoginView({ onLogin })` unchanged contract. i18n via t() (dict/auth.ts yours).
+- PIN keypad: SIX boxes, auto-submit at 6 digits (seeds: 123456 admin, 111111 waiter, 222222 kitchen — update demo card).
+- Tabs: "Sign in" (email tab + PIN tab) | "Employee check-in" (separate card/tab, NO system sign-in): username input (name or email) + 6-digit PIN keypad → POST /api/attendance/check-in {username, pin} → success panel: name + role (auto-detected) + check-in time + shift info + late badge ("Late by X min" amber / "On time" emerald) + Check out button → POST /api/attendance/check-out → worked duration panel. Error toast + shake. Keep restaurantName via useAppSettings().
+- The check-in flow never sets a session (no setSessionToken, no onLogin call).
+
+### Frontend contracts — 6-e (admin views, BINDING)
+- REPLACE placeholder roles-view.tsx / attendance-view.tsx / settings-view.tsx (default exports RolesView/AttendanceView/SettingsView, no props).
+- RolesView: role cards (name, permission chips w/ t('nav.*') labels, userCount, active Switch optimistic) + create/edit Dialog: name + permission TICK GRID (13 PERMISSIONS, icon + label + description, tick = checkbox) + active. POST/PUT per contracts. i18n.
+- UsersView edits: role Select = admin/waiter/kitchen + custom roles (['roles'] query) — picking custom sends role:'custom'+roleId; role badge shows roleName; PIN input exactly 6 digits (hint); i18n all.
+- AttendanceView: date picker (default today) → GET /api/attendance?date=; summary cards (In now, Late, Total, Worked hours); records table (employee + role, check-in (formatTime), check-out or "In now" pulse, worked (workedDuration), late badge, shift name); 15s poll for today; i18n.
+- SettingsView: Card "Restaurant profile" — restaurantName input + Save → PUT /api/settings → invalidate ['app-settings'] + toast (navbar/login/receipts update live). Card "Shifts" (separate card per user request): shift rows (name, start–end, active Switch, edit dialog) + Add shift dialog (name, time inputs start/end) → POST/PUT /api/shifts; note t('shift.note') visible. i18n.
+- DashboardView: ADD 5th KPI "Avg check per person" (today's sales.totalGuests/avgCheckPerPerson) + i18n all dashboard strings (breadcrumb, KPI labels, quick actions — reuse common/nav keys).
+- ReportsView: ADD "Avg check per person" KPI card (money.avgCheckPerPerson) + i18n ALL strings (labels, chart titles, payment methods via t('status.payment.*'), empty states, date range card).
+- i18n the remaining admin views (products/categories/floorplans/inventory/recipes): all user-facing strings via t() (dict/admin.ts yours — extend). floorplans-view: ADD shape rendering on tiles (square/round/rectangle/oval like 6-c's spec) + shape Select in add/edit table dialogs (t('shape.*')).
+- roleLabel helper: custom → roleName ?? t('role.custom').
+
+### Verification bar (ALL agents)
+- `bunx tsc --noEmit` clean, `bun run lint` clean for your files, live curl/agent-browser verification of your endpoints/flows, revert test data (keep seed state clean), append worklog section.

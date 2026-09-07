@@ -7,7 +7,7 @@ const round2 = (n: number): number => Math.round(n * 100) / 100
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'reports'])
 
     const products = await db.product.findMany({
       where: { isStockable: true, active: true },

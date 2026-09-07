@@ -46,7 +46,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const session = await requireAuth(req, ['admin'])
+    const session = await requireAuth(req, ['admin', 'users'])
     const { id } = await params
     const userId = Number(id)
     if (!Number.isInteger(userId)) {

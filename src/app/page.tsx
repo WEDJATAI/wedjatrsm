@@ -7,7 +7,9 @@ import { Loader2, UtensilsCrossed } from 'lucide-react'
 import { Toaster } from '@/components/ui/sonner'
 import { fetcher, apiFetch, clearSessionToken } from '@/lib/api'
 import { RESTAURANT_NAME } from '@/lib/constants'
+import { LanguageProvider, useI18n } from '@/lib/i18n'
 import type { SessionUser } from '@/lib/types'
+import { useAppSettings } from '@/lib/use-settings'
 
 import LoginView from '@/components/auth/login-view'
 import AppNavbar from '@/components/app-navbar'
@@ -21,6 +23,9 @@ import InventoryView from '@/components/admin/inventory-view'
 import RecipesView from '@/components/admin/recipes-view'
 import ReportsView from '@/components/admin/reports-view'
 import UsersView from '@/components/admin/users-view'
+import RolesView from '@/components/admin/roles-view'
+import AttendanceView from '@/components/admin/attendance-view'
+import SettingsView from '@/components/admin/settings-view'
 
 type View =
   | 'pos'
@@ -33,6 +38,26 @@ type View =
   | 'recipes'
   | 'reports'
   | 'users'
+  | 'roles'
+  | 'attendance'
+  | 'settings'
+
+/** which module permission each view requires */
+const VIEW_PERMISSION: Record<View, string> = {
+  pos: 'pos',
+  kitchen: 'kitchen',
+  dashboard: 'dashboard',
+  products: 'products',
+  categories: 'categories',
+  floorplans: 'floorplans',
+  inventory: 'inventory',
+  recipes: 'recipes',
+  reports: 'reports',
+  users: 'users',
+  roles: 'roles',
+  attendance: 'attendance',
+  settings: 'settings',
+}
 
 const ADMIN_VIEWS: View[] = [
   'dashboard',
@@ -43,23 +68,45 @@ const ADMIN_VIEWS: View[] = [
   'recipes',
   'reports',
   'users',
+  'roles',
+  'attendance',
+  'settings',
 ]
 
-function defaultView(role: string): View {
-  if (role === 'admin') return 'dashboard'
-  if (role === 'kitchen') return 'kitchen'
-  return 'pos'
+/** priority order used to pick the default view from the user's permissions */
+const VIEW_PRIORITY: View[] = [
+  'pos',
+  'kitchen',
+  'dashboard',
+  'reports',
+  'inventory',
+  'attendance',
+  'products',
+  'categories',
+  'floorplans',
+  'recipes',
+  'users',
+  'roles',
+  'settings',
+]
+
+function defaultView(user: SessionUser): View {
+  if (user.role === 'admin') return 'dashboard'
+  const perms = user.permissions ?? []
+  const first = VIEW_PRIORITY.find((v) => perms.includes(VIEW_PERMISSION[v]))
+  return first ?? 'pos'
 }
 
-function isViewAllowed(role: string, view: View): boolean {
-  if (role === 'admin') return true
-  if (role === 'waiter') return view === 'pos'
-  if (role === 'kitchen') return view === 'kitchen'
-  return false
+function isViewAllowed(user: SessionUser, view: View): boolean {
+  if (user.role === 'admin') return true
+  const perms = user.permissions ?? []
+  return perms.includes(VIEW_PERMISSION[view])
 }
 
 /** Full-screen splash while the session is being checked. */
 function SplashScreen() {
+  const { t } = useI18n()
+  const { restaurantName } = useAppSettings()
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
       <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg">
@@ -67,29 +114,34 @@ function SplashScreen() {
       </div>
       <div className="flex items-center gap-2 text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-        <span className="text-sm font-medium">Loading {RESTAURANT_NAME}…</span>
+        <span className="text-sm font-medium">
+          {t('common.loading')} {restaurantName}…
+        </span>
       </div>
     </div>
   )
 }
 
 function AdminFooter() {
+  const { t } = useI18n()
+  const { restaurantName } = useAppSettings()
   return (
     <footer className="mt-auto border-t bg-card/60 px-4 py-3 text-center text-xs text-muted-foreground">
-      {RESTAURANT_NAME} · Restaurant Management System — POS · Kitchen · Inventory · Reports
+      {restaurantName} · {t('auth.subtitle')} — {t('nav.pos')} · {t('nav.kitchen')} ·{' '}
+      {t('nav.inventory')} · {t('nav.reports')}
     </footer>
   )
 }
 
 function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
-  const [view, setViewState] = useState<View>(defaultView(user.role))
+  const [view, setViewState] = useState<View>(defaultView(user))
 
   const setView = useCallback((next: string | View) => {
     if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
     setViewState(next as View)
   }, [])
 
-  const allowed = isViewAllowed(user.role, view) ? view : defaultView(user.role)
+  const allowed = isViewAllowed(user, view) ? view : defaultView(user)
   const isAdminScreen = ADMIN_VIEWS.includes(allowed)
 
   const content = useMemo(() => {
@@ -114,6 +166,12 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <ReportsView />
       case 'users':
         return <UsersView />
+      case 'roles':
+        return <RolesView />
+      case 'attendance':
+        return <AttendanceView />
+      case 'settings':
+        return <SettingsView />
       default:
         return <PosView />
     }
@@ -146,8 +204,10 @@ export default function Home() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Toaster position="top-center" closeButton richColors />
-      <RmsApp />
+      <LanguageProvider>
+        <Toaster position="top-center" closeButton richColors />
+        <RmsApp />
+      </LanguageProvider>
     </QueryClientProvider>
   )
 }

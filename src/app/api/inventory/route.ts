@@ -29,7 +29,7 @@ function toInventoryItem(p: {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['waiter', 'admin'])
+    await requireAuth(req, ['waiter', 'admin', 'inventory'])
 
     const products = await db.product.findMany({
       where: { isStockable: true, active: true },

@@ -9,7 +9,7 @@ const MAX_LIMIT = 500
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['waiter', 'admin'])
+    await requireAuth(req, ['waiter', 'admin', 'inventory'])
 
     const rawLimit = new URL(req.url).searchParams.get('limit')
     let limit = DEFAULT_LIMIT

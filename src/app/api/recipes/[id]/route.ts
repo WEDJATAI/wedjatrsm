@@ -4,7 +4,7 @@ import { requireAuth, errorResponse, ApiError } from '@/lib/auth'
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'recipes'])
 
     const { id } = await ctx.params // Next.js 16: dynamic route params are a Promise
     const componentId = Number(id)

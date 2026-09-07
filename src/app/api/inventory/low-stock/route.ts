@@ -29,7 +29,7 @@ function toInventoryItem(p: {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['waiter', 'admin'])
+    await requireAuth(req, ['waiter', 'admin', 'inventory'])
 
     // Column-to-column comparison (stock <= lowStockThreshold) is not supported by
     // Prisma where clauses, so filter in JS after fetching stockable+active rows.

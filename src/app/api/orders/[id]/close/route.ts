@@ -16,7 +16,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin'])
+    await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 

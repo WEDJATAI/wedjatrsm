@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'products'])
     const body = await readBody(req)
 
     const name = typeof body.name === 'string' ? body.name.trim() : ''

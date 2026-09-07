@@ -10,7 +10,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['kitchen', 'waiter', 'admin'])
+    await requireAuth(req, ['kitchen', 'waiter', 'admin', 'pos', 'kitchen'])
     const { id } = await ctx.params
     const itemId = parseId(id, 'order item id')
 

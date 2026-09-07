@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin'])
+    await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 

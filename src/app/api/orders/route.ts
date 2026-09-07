@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requireAuth(req, ['waiter', 'admin'])
+    const session = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const body = await req.json().catch(() => {
       throw new ApiError('Invalid JSON body', 400)
     })

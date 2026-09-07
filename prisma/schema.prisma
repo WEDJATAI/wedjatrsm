@@ -7,19 +7,69 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Users (admin / waiter / kitchen) ───────────────────────────────
+// ─── Users (admin / waiter / kitchen / custom) ─────────────────────
 model User {
   id           Int       @id @default(autoincrement())
   email        String    @unique
   passwordHash String    @map("password_hash")
   name         String
-  role         String    @default("waiter") // 'admin' | 'waiter' | 'kitchen'
-  pin          String? // optional quick-login PIN
+  role         String    @default("waiter") // 'admin' | 'waiter' | 'kitchen' | 'custom'
+  roleId       Int?      @map("role_id") // set when role = 'custom'
+  roleRecord   CustomRole? @relation(fields: [roleId], references: [id])
+  pin          String? // 6-digit quick-login / check-in PIN
   active       Boolean   @default(true)
   createdAt    DateTime  @default(now()) @map("created_at")
   orders       Order[]
+  attendance   Attendance[]
 
+  @@index([roleId])
   @@map("users")
+}
+
+// ─── Custom roles (admin-defined, e.g. "Accountant") ────────────────
+model CustomRole {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  permissions String   @default("") // comma-separated module keys (see PERMISSIONS)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  users       User[]
+
+  @@map("roles")
+}
+
+// ─── Employee attendance (check-in / check-out) ─────────────────────
+model Attendance {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  user         User      @relation(fields: [userId], references: [id])
+  checkInAt    DateTime  @default(now()) @map("check_in_at")
+  checkOutAt   DateTime? @map("check_out_at")
+  lateMinutes  Int       @default(0) @map("late_minutes") // minutes after shift start (+15 grace)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, checkInAt])
+  @@map("attendance")
+}
+
+// ─── Work shifts (attendance reference only — NOT used for sign-in) ──
+model Shift {
+  id        Int      @id @default(autoincrement())
+  name      String
+  startTime String   @map("start_time") // "HH:MM" 24h
+  endTime   String   @map("end_time") // "HH:MM" 24h (may wrap past midnight)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("shifts")
+}
+
+// ─── App settings (editable by admin, e.g. restaurant name) ────────
+model AppSetting {
+  key   String @id
+  value String
+
+  @@map("app_settings")
 }
 
 // ─── Categories ─────────────────────────────────────────────────────
@@ -79,6 +129,7 @@ model RestaurantTable {
   floorPlan  FloorPlan? @relation(fields: [floorPlanId], references: [id])
   name       String
   capacity   Int        @default(2)
+  shape      String     @default("square") // 'square' | 'round' | 'rectangle' | 'oval'
   positionX  Float      @default(50) @map("position_x") // percentage 0-100
   positionY  Float      @default(50) @map("position_y") // percentage 0-100
   status     String     @default("free") // 'free' | 'occupied' | 'reserved'
@@ -97,6 +148,7 @@ model Order {
   userId         Int?               @map("user_id")
   user           User?              @relation(fields: [userId], references: [id])
   status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a table merge)
+  guests         Int                @default(1) // number of people seated on this order
   subtotalAmount Float              @default(0) @map("subtotal_amount")
   totalAmount    Float              @default(0) @map("total_amount")
   discountAmount Float              @default(0) @map("discount_amount")

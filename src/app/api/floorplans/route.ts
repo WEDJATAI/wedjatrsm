@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'floorplans'])
     const body = await req.json().catch(() => {
       throw new ApiError('Invalid JSON body', 400)
     })

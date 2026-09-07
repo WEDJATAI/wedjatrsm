@@ -62,7 +62,7 @@ const ingredientInclude = {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'recipes'])
 
     const raw = new URL(req.url).searchParams.get('productId')
     if (!raw) {
@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin'])
+    await requireAuth(req, ['admin', 'recipes'])
 
     let body: unknown
     try {

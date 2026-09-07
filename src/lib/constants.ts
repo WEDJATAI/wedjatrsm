@@ -2,15 +2,62 @@
 
 export const TAX_RATE = Number(process.env.TAX_RATE ?? 0.14) // 14% VAT (Egypt)
 
-export const ROLES = ['admin', 'waiter', 'kitchen'] as const
+// ─── Roles ──────────────────────────────────────────────────────────
+// 'custom' users get their module permissions from a CustomRole record (roleId).
+export const ROLES = ['admin', 'waiter', 'kitchen', 'custom'] as const
 export type Role = (typeof ROLES)[number]
 
 export const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
   waiter: 'Waiter',
   kitchen: 'Kitchen',
+  custom: 'Custom',
 }
 
+/** permission keys = UI modules; custom roles tick these in the Roles editor */
+export const PERMISSIONS = [
+  'pos',
+  'kitchen',
+  'dashboard',
+  'products',
+  'categories',
+  'floorplans',
+  'inventory',
+  'recipes',
+  'reports',
+  'users',
+  'roles',
+  'attendance',
+  'settings',
+] as const
+export type Permission = (typeof PERMISSIONS)[number]
+export type PermissionList = readonly string[]
+
+export const PERMISSION_LABELS: Record<string, string> = {
+  pos: 'POS & Orders',
+  kitchen: 'Kitchen Display',
+  dashboard: 'Dashboard',
+  products: 'Products',
+  categories: 'Categories',
+  floorplans: 'Floor Plans & Tables',
+  inventory: 'Inventory',
+  recipes: 'Recipes',
+  reports: 'Reports',
+  users: 'Users',
+  roles: 'Roles',
+  attendance: 'Attendance',
+  settings: 'Settings',
+}
+
+/** built-in module grants per classic role (custom users read theirs from CustomRole) */
+export const BUILTIN_ROLE_PERMISSIONS: Record<string, string[]> = {
+  admin: [...PERMISSIONS],
+  waiter: ['pos'],
+  kitchen: ['kitchen'],
+  custom: [], // resolved from CustomRole record
+}
+
+// ─── Payments / courses / statuses ─────────────────────────────────
 export const PAYMENT_METHODS = ['cash', 'card', 'other'] as const
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number]
 export const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -45,6 +92,15 @@ export const TABLE_STATUS_LABELS: Record<string, string> = {
   reserved: 'Reserved',
 }
 
+export const TABLE_SHAPES = ['square', 'round', 'rectangle', 'oval'] as const
+export type TableShape = (typeof TABLE_SHAPES)[number]
+export const TABLE_SHAPE_LABELS: Record<string, string> = {
+  square: 'Square',
+  round: 'Round',
+  rectangle: 'Rectangle',
+  oval: 'Oval',
+}
+
 export const ORDER_STATUSES = ['open', 'paid', 'cancelled', 'merged'] as const
 export const ORDER_STATUS_LABELS: Record<string, string> = {
   open: 'Open',
@@ -60,8 +116,16 @@ export const INVENTORY_REASON_LABELS: Record<string, string> = {
   sale: 'Sale',
 }
 
-// Restaurant identity
+// Restaurant identity (fallback — the live name is editable in Settings: AppSetting.restaurantName)
 export const RESTAURANT_NAME = 'Saffron Table'
+
+// Employee check-in
+export const PIN_LENGTH = 6 // check-in PINs are 6 digits
+export const LATE_GRACE_MINUTES = 15 // minutes of grace before a check-in counts as late
 
 // Rounding tolerance for money comparisons
 export const MONEY_EPSILON = 0.02
+
+// Guests bounds for an order (number of people)
+export const MIN_GUESTS = 1
+export const MAX_GUESTS = 30
