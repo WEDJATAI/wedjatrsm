@@ -72,3 +72,13 @@ export function parseAmount(s: string): number {
   if (!Number.isFinite(v) || v <= 0) return 0
   return round2(v)
 }
+
+/** Escape a string for safe inclusion in generated print-window HTML (user names, notes…). */
+export function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}

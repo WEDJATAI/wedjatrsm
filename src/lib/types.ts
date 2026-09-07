@@ -83,7 +83,7 @@ export type Order = {
   table?: { id: number; name: string } | null
   userId: number | null
   user?: { id: number; name: string } | null
-  status: 'open' | 'paid' | 'cancelled' | string
+  status: 'open' | 'paid' | 'cancelled' | 'merged' | string
   subtotalAmount: number
   totalAmount: number
   discountAmount: number

@@ -2,16 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Boxes,
-  ChefHat,
-  CreditCard,
   Delete,
   KeyRound,
   Loader2,
   Mail,
   UtensilsCrossed,
   X,
-  type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -19,18 +15,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, setSessionToken } from '@/lib/api'
 import { RESTAURANT_NAME } from '@/lib/constants'
 import type { SessionUser } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const PIN_LENGTH = 4
-
-const FEATURES: { icon: LucideIcon; label: string }[] = [
-  { icon: CreditCard, label: 'Split-payment POS' },
-  { icon: ChefHat, label: 'Live kitchen display' },
-  { icon: Boxes, label: 'Inventory & recipe costing' },
-]
 
 const DEMO_ACCOUNTS: [string, string][] = [
   ['admin@rms.com', 'admin123'],
@@ -57,9 +47,13 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
       setEmailLoading(true)
       setEmailError(false)
       try {
-        const { user } = await apiFetch<{ user: SessionUser }>('/api/auth/login', {
+        const { user, token } = await apiFetch<{
+          user: SessionUser
+          token?: string
+        }>('/api/auth/login', {
           body: { email: email.trim().toLowerCase(), password },
         })
+        if (token) setSessionToken(token)
         toast.success(`Welcome back, ${user.name}`)
         onLogin()
       } catch (err) {
@@ -90,9 +84,13 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
     async (value: string) => {
       setPinLoading(true)
       try {
-        const { user } = await apiFetch<{ user: SessionUser }>('/api/auth/login', {
+        const { user, token } = await apiFetch<{
+          user: SessionUser
+          token?: string
+        }>('/api/auth/login', {
           body: { pin: value },
         })
+        if (token) setSessionToken(token)
         toast.success(`Welcome back, ${user.name}`)
         onLogin()
       } catch (err) {
@@ -155,7 +153,7 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
   }, [tab])
 
   return (
-    <div className="bg-linear-to-b from-muted/60 via-background to-muted/40 grid min-h-screen w-full place-items-center p-4 sm:p-6">
+    <div className="grid min-h-screen w-full place-items-center bg-background p-4 sm:p-6">
       {/* Shake animation (used on PIN errors) */}
       <style>{`
         @keyframes rmsShake {
@@ -168,39 +166,17 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
         .rms-shake { animation: rmsShake 0.45s ease; }
       `}</style>
 
-      <div className="bg-card grid w-full max-w-4xl overflow-hidden rounded-2xl border shadow-xl md:grid-cols-2">
-        {/* ── Left brand panel (desktop only) ───────────────────────── */}
-        <div className="hidden flex-col justify-between bg-linear-to-br from-amber-600 via-orange-600 to-stone-900 p-10 text-white md:flex">
-          <div className="grid h-14 w-14 place-items-center rounded-xl bg-amber-500/20">
-            <UtensilsCrossed className="h-7 w-7 text-amber-200" aria-hidden />
-          </div>
-
-          <div className="space-y-2">
-            <h1 className="text-3xl font-bold tracking-tight">{RESTAURANT_NAME}</h1>
-            <p className="text-amber-100/90">Restaurant Management System</p>
-
-            <ul className="space-y-4 pt-8">
-              {FEATURES.map((f) => (
-                <li key={f.label} className="flex items-center gap-3">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/10">
-                    <f.icon className="h-5 w-5 text-amber-100" aria-hidden />
-                  </span>
-                  <span className="text-sm text-amber-50">{f.label}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <p className="text-xs text-white/50">
-            {RESTAURANT_NAME} · {new Date().getFullYear()}
-          </p>
-        </div>
-
-        {/* ── Right form panel ──────────────────────────────────────── */}
-        <div className="flex flex-col gap-6 p-8">
-          <div className="space-y-1">
-            <h2 className="text-2xl font-bold tracking-tight">Welcome back</h2>
-            <p className="text-sm text-muted-foreground">Sign in to your workspace</p>
+      <div className="w-full max-w-md">
+        <div className="bg-card flex w-full flex-col gap-6 rounded-xl border p-8 shadow-lg">
+          {/* Brand header — Odoo plum logo mark */}
+          <div className="flex flex-col items-center gap-3 text-center">
+            <span className="bg-primary text-primary-foreground grid h-12 w-12 place-items-center rounded-lg shadow-sm">
+              <UtensilsCrossed className="h-6 w-6" aria-hidden />
+            </span>
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold tracking-tight">{RESTAURANT_NAME}</h1>
+              <p className="text-sm text-muted-foreground">Restaurant Management System</p>
+            </div>
           </div>
 
           <Tabs value={tab} onValueChange={(v) => setTab(v as 'email' | 'pin')}>
@@ -339,6 +315,10 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
             </div>
           </div>
         </div>
+
+        <p className="mt-4 text-center text-xs text-muted-foreground">
+          {RESTAURANT_NAME} · {new Date().getFullYear()}
+        </p>
       </div>
     </div>
   )

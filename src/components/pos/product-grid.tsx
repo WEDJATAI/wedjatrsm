@@ -57,21 +57,28 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search dishes…"
-          className="h-10 pl-9 text-base"
+          className="h-11 rounded-xl border-[#E2E2E0] bg-white pl-9 text-base"
           inputMode="search"
         />
       </div>
 
-      {/* Category tabs (scrollable) */}
+      {/* Category pills (scrollable) */}
       {categories.length > 0 && (
         <div className="shrink-0 px-3 pb-3 sm:px-4">
           <Tabs value={activeCategory} onValueChange={setActiveCategory}>
-            <TabsList className="h-10 w-full max-w-full overflow-x-auto rms-scroll flex-nowrap p-[3px]">
-              <TabsTrigger value="all" className="px-4 text-sm">
+            <TabsList className="h-auto w-full max-w-full gap-1 overflow-x-auto rms-scroll flex-nowrap rounded-full border border-[#E2E2E0] bg-white p-1.5">
+              <TabsTrigger
+                value="all"
+                className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
+              >
                 All
               </TabsTrigger>
               {categories.map((c) => (
-                <TabsTrigger key={c.id} value={String(c.id)} className="px-4 text-sm">
+                <TabsTrigger
+                  key={c.id}
+                  value={String(c.id)}
+                  className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
+                >
                   {c.name}
                 </TabsTrigger>
               ))}
@@ -122,18 +129,20 @@ function ProductTile({
       aria-disabled={soldOut}
       onClick={() => onAdd(product)}
       className={cn(
-        'h-auto min-h-[84px] flex-col items-start justify-between gap-1 rounded-xl p-3 text-left active:scale-95 transition',
-        'hover:border-primary hover:bg-primary/5',
-        soldOut && 'pointer-events-none opacity-50 cursor-not-allowed',
+        'h-auto min-h-[96px] flex-col items-start justify-between gap-1.5 rounded-xl border-[#E2E2E0] bg-white p-3 text-left shadow-sm transition active:scale-95',
+        'hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] hover:shadow',
+        soldOut && 'pointer-events-none cursor-not-allowed opacity-50',
       )}
       {...rest}
     >
       <span className="flex w-full items-start justify-between gap-1">
-        <span className="line-clamp-2 text-sm leading-tight font-semibold">{product.name}</span>
+        <span className="line-clamp-2 text-sm font-medium leading-tight">{product.name}</span>
         <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground/70" aria-hidden />
       </span>
       <span className="flex w-full items-center justify-between gap-1">
-        <span className="text-primary text-sm font-bold">{formatCurrency(product.price)}</span>
+        <span className="text-sm font-semibold tabular-nums text-[#714B67]">
+          {formatCurrency(product.price)}
+        </span>
         {product.isStockable && (
           <span>
             {soldOut ? (

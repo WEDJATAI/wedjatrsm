@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { Loader2, UtensilsCrossed } from 'lucide-react'
 
 import { Toaster } from '@/components/ui/sonner'
-import { fetcher, apiFetch } from '@/lib/api'
+import { fetcher, apiFetch, clearSessionToken } from '@/lib/api'
 import { RESTAURANT_NAME } from '@/lib/constants'
 import type { SessionUser } from '@/lib/types'
 
@@ -172,6 +172,7 @@ function RmsApp() {
   }, [refetch])
 
   const handleLogout = useCallback(async () => {
+    clearSessionToken()
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' })
     } catch {

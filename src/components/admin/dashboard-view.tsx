@@ -135,9 +135,16 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
-      {/* Header */}
+      {/* Header — Odoo control-panel style (breadcrumb + title + subtitle) */}
       <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
+        <div className="space-y-1">
+          <nav aria-label="Breadcrumb" className="text-xs text-muted-foreground">
+            <span>Home</span>
+            <span className="mx-1.5" aria-hidden>
+              /
+            </span>
+            <span className="font-medium text-primary">Dashboard</span>
+          </nav>
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">Today at a glance</p>
         </div>
@@ -224,37 +231,37 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
               <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={weekData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap="28%">
-                    <CartesianGrid stroke="#e7e5e4" strokeDasharray="3 3" vertical={false} />
+                    <CartesianGrid stroke="#e2e2e0" strokeDasharray="3 3" vertical={false} />
                     <XAxis
                       dataKey="date"
                       tickFormatter={dayShort}
-                      tick={{ fontSize: 11, fill: '#78716c' }}
-                      axisLine={{ stroke: '#d6d3d1' }}
+                      tick={{ fontSize: 11, fill: '#6b6b6b' }}
+                      axisLine={{ stroke: '#e2e2e0' }}
                       tickLine={false}
                       tickMargin={8}
                     />
                     <YAxis
                       tickFormatter={yTick}
                       width={70}
-                      tick={{ fontSize: 11, fill: '#78716c' }}
+                      tick={{ fontSize: 11, fill: '#6b6b6b' }}
                       axisLine={false}
                       tickLine={false}
                     />
                     <Tooltip
-                      cursor={{ fill: 'rgba(217, 119, 6, 0.06)' }}
+                      cursor={{ fill: 'rgba(113, 75, 103, 0.06)' }}
                       contentStyle={{
                         backgroundColor: '#ffffff',
-                        border: '1px solid #e7e5e4',
+                        border: '1px solid #e2e2e0',
                         borderRadius: 8,
                         fontSize: 12,
                         boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
                       }}
-                      labelStyle={{ color: '#57534e', fontWeight: 600 }}
-                      itemStyle={{ color: '#292524' }}
+                      labelStyle={{ color: '#6b6b6b', fontWeight: 600 }}
+                      itemStyle={{ color: '#37352f' }}
                       labelFormatter={(label) => dayLabel(String(label))}
                       formatter={(value) => [formatCurrency(Number(value)), 'Revenue'] as [string, string]}
                     />
-                    <Bar dataKey="revenue" fill="#d97706" radius={[6, 6, 0, 0]} maxBarSize={44} />
+                    <Bar dataKey="revenue" fill="#714B67" radius={[6, 6, 0, 0]} maxBarSize={44} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

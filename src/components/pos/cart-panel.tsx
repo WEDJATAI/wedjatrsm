@@ -10,6 +10,7 @@ import {
   Minus,
   Pencil,
   Plus,
+  Printer,
   Send,
   ShoppingBag,
   StickyNote,
@@ -48,6 +49,8 @@ type CartPanelProps = {
   onDraftChange: (draft: DraftItem[]) => void
   onSend: () => void
   onPay: () => void
+  /** Open the pre-payment guest check (pos-view flushes the draft first). */
+  onPrintCheck?: () => void
   onCancel: () => void
   canCancel?: boolean
   sending?: boolean
@@ -69,6 +72,7 @@ export default function CartPanel({
   onDraftChange,
   onSend,
   onPay,
+  onPrintCheck,
   onCancel,
   canCancel = false,
   sending = false,
@@ -193,9 +197,9 @@ export default function CartPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E2E2E0] px-4 py-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{table.name}</p>
+          <p className="truncate text-base font-bold">{table.name}</p>
           {(order?.user?.name || userRole) && (
             <p className="text-[11px] text-muted-foreground">
               Server: {order?.user?.name ?? (userRole ? (ROLE_LABELS[userRole] ?? userRole) : '')}
@@ -203,7 +207,7 @@ export default function CartPanel({
           )}
         </div>
         {order ? (
-          <Badge variant="outline" className="shrink-0">
+          <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
             Order #{order.id}
           </Badge>
         ) : (
@@ -282,7 +286,7 @@ export default function CartPanel({
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 space-y-1.5 border-t bg-muted/30 p-4">
+      <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
         <SummaryRow label="Subtotal" value={formatCurrency(totals.subtotal)} />
         <div className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-1 text-muted-foreground">
@@ -303,7 +307,7 @@ export default function CartPanel({
           </span>
         </div>
         <SummaryRow label={`VAT ${Math.round(TAX_RATE * 100)}%`} value={formatCurrency(totals.tax)} />
-        <div className="flex items-center justify-between border-t pt-2">
+        <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
           <span className="text-sm font-semibold">Total</span>
           <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
         </div>
@@ -321,22 +325,39 @@ export default function CartPanel({
             />
           </>
         )}
-        <div className="flex gap-2 pt-2">
+
+        {/* Actions */}
+        <Button
+          variant="secondary"
+          className="h-11 w-full rounded-xl"
+          disabled={draft.length === 0 || sending}
+          onClick={onSend}
+        >
+          {sending ? <Loader2 className="animate-spin" /> : <Send />} Send to Kitchen
+          {draft.length > 0 && (
+            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+              {draft.reduce((n, d) => n + d.quantity, 0)}
+            </Badge>
+          )}
+        </Button>
+        <div className="flex gap-2">
           <Button
-            variant="secondary"
-            className="h-11 flex-1"
-            disabled={draft.length === 0 || sending}
-            onClick={onSend}
+            variant="outline"
+            className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+            disabled={!order || sending || !onPrintCheck}
+            title={!order ? 'Send items to the kitchen first' : 'Print a pre-payment guest check'}
+            onClick={onPrintCheck}
           >
-            {sending ? <Loader2 className="animate-spin" /> : <Send />} Send
-            {draft.length > 0 && (
-              <Badge className="ml-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
-                {draft.reduce((n, d) => n + d.quantity, 0)}
-              </Badge>
-            )}
+            <Printer />
+            <span className="hidden sm:inline">Print Check</span>
           </Button>
-          <Button className="h-11 flex-1" disabled={noItems || sending} onClick={onPay}>
-            <CreditCard /> Pay
+          <Button
+            className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+            disabled={noItems || sending}
+            onClick={onPay}
+          >
+            {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+            <span className="truncate">Payment · {formatCurrency(totals.total)}</span>
           </Button>
         </div>
       </div>

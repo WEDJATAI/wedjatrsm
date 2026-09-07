@@ -1,12 +1,16 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { LucideIcon } from 'lucide-react'
 import {
   AlertCircle,
+  Banknote,
   Check,
   CreditCard,
   Loader2,
+  MoreHorizontal,
   Plus,
+  Printer,
   Users,
   X,
 } from 'lucide-react'
@@ -20,7 +24,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
@@ -28,6 +31,7 @@ import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
+import CheckModal, { type CheckSplitRow } from './check-modal'
 import { newDraftKey, parseAmount, round2 } from './pos-utils'
 
 type PaymentModalProps = {
@@ -55,9 +59,19 @@ type SubmitRow = { method: string; amount: number; reference?: string }
 
 type SplitTab = 'single' | 'equal' | 'items' | 'custom'
 
+const METHOD_META: Record<string, { label: string; icon: LucideIcon }> = {
+  cash: { label: 'Cash', icon: Banknote },
+  card: { label: 'Card', icon: CreditCard },
+  other: { label: 'Other', icon: MoreHorizontal },
+}
+
 export default function PaymentModal({ order, open, onOpenChange, onSuccess }: PaymentModalProps) {
   const [tab, setTab] = useState<SplitTab>('single')
   const [submitting, setSubmitting] = useState(false)
+  const [checkOpen, setCheckOpen] = useState(false)
+
+  // Which payment row the method tiles currently target.
+  const [activeIdx, setActiveIdx] = useState(0)
 
   const [singleRow, setSingleRow] = useState<EditableRow>({ id: 'single', method: 'cash', amount: '', reference: '' })
   const [customRows, setCustomRows] = useState<EditableRow[]>([])
@@ -84,6 +98,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
     setItMethods({})
     setAssignments({})
     setSubmitting(false)
+    setActiveIdx(0)
+    setCheckOpen(false)
   }, [open, order.id, order.remainingAmount])
 
   // ── Derived payment rows per tab ──────────────────────────────────
@@ -151,6 +167,69 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
   const exact = Math.abs(diff) <= 0.01
   const canSubmit = !submitting && remaining > 0 && sum > 0 && !exceeds
 
+  // ── Active row / method tiles ─────────────────────────────────────
+  const rowCount =
+    tab === 'single' ? 1 : tab === 'equal' ? eqPayers : tab === 'items' ? itPayers : customRows.length
+  const safeActiveIdx = Math.min(activeIdx, Math.max(0, rowCount - 1))
+
+  const activeRowLabel =
+    tab === 'single'
+      ? 'Payment'
+      : tab === 'equal' || tab === 'items'
+        ? `Payer ${safeActiveIdx + 1}`
+        : `Payment ${safeActiveIdx + 1}`
+
+  const currentMethodAt = (index: number): string => {
+    if (tab === 'single') return singleRow.method
+    if (tab === 'equal') return eqMethods[index] ?? 'cash'
+    if (tab === 'items') return itMethods[index] ?? 'cash'
+    return customRows[index]?.method ?? 'cash'
+  }
+
+  const setMethodAt = (index: number, m: string) => {
+    if (tab === 'single') {
+      setSingleRow((r) => ({ ...r, method: m }))
+    } else if (tab === 'equal') {
+      setEqMethods((prev) => ({ ...prev, [index]: m }))
+    } else if (tab === 'items') {
+      setItMethods((prev) => ({ ...prev, [index]: m }))
+    } else {
+      setCustomRows((rows) => rows.map((r, i) => (i === index ? { ...r, method: m } : r)))
+    }
+  }
+
+  const handleTabChange = (v: string) => {
+    setTab(v as SplitTab)
+    setActiveIdx(0)
+  }
+
+  // ── Guest check rows mirroring the current split configuration ────
+  const checkRows: CheckSplitRow[] = useMemo(() => {
+    if (tab === 'single') {
+      const amount = parseAmount(singleRow.amount) || remaining
+      return [{ label: 'Full bill', amount, method: singleRow.method }]
+    }
+    if (tab === 'equal') {
+      return eqAmounts.map((amount, i) => ({
+        label: `Part ${i + 1} of ${eqPayers}`,
+        amount,
+        method: eqMethods[i] ?? 'cash',
+      }))
+    }
+    if (tab === 'items') {
+      return itAmounts.map((amount, i) => ({
+        label: `Payer ${i + 1}`,
+        amount,
+        method: itMethods[i] ?? 'cash',
+      }))
+    }
+    return customRows.map((r, i) => ({
+      label: `Payment ${i + 1}`,
+      amount: parseAmount(r.amount),
+      method: r.method,
+    }))
+  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining])
+
   // ── Handlers ──────────────────────────────────────────────────────
   const clampPayers = (raw: number, min: number, max: number) => {
     const n = Math.round(Number.isFinite(raw) ? raw : min)
@@ -201,231 +280,282 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
   const singleExceeds = tab === 'single' && parseAmount(singleRow.amount) > round2(remaining + 0.01)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Take payment</DialogTitle>
-          <DialogDescription>
-            Order #{order.id}
-            {order.table?.name ? ` — ${order.table.name}` : ' — Takeaway'}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Payment · {order.table?.name ?? 'Takeaway'} · Order #{order.id}
+            </DialogTitle>
+            <DialogDescription>
+              Split the bill or charge in one go. Print a check first if the customer wants to see
+              it — printing never records a payment.
+            </DialogDescription>
+          </DialogHeader>
 
-        {/* Summary */}
-        <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/50 p-3 text-center">
-          <div>
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-sm font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Paid</p>
-            <p className="text-sm font-semibold tabular-nums text-emerald-600">
-              {formatCurrency(order.paidAmount)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Remaining</p>
-            <p className="text-primary text-2xl font-bold tabular-nums">
-              {formatCurrency(remaining)}
-            </p>
-          </div>
-        </div>
-
-        <Tabs value={tab} onValueChange={(v) => setTab(v as SplitTab)}>
-          <TabsList className="grid h-10 w-full grid-cols-4">
-            <TabsTrigger value="single" className="text-xs sm:text-sm">Single</TabsTrigger>
-            <TabsTrigger value="equal" className="text-xs sm:text-sm">Equal Split</TabsTrigger>
-            <TabsTrigger value="items" className="text-xs sm:text-sm">By Items</TabsTrigger>
-            <TabsTrigger value="custom" className="text-xs sm:text-sm">Custom</TabsTrigger>
-          </TabsList>
-
-          {/* ── Single ── */}
-          <TabsContent value="single" className="space-y-2 pt-3">
-            <PayRow
-              label="Payment"
-              method={singleRow.method}
-              onMethodChange={(m) => setSingleRow((r) => ({ ...r, method: m }))}
-              amountStr={singleRow.amount}
-              onAmountChange={(v) => setSingleRow((r) => ({ ...r, amount: v }))}
-              reference={singleRow.reference}
-              onReferenceChange={(v) => setSingleRow((r) => ({ ...r, reference: v }))}
-              editable
-              error={
-                singleExceeds
-                  ? `Exceeds remaining by ${formatCurrency(round2(parseAmount(singleRow.amount) - remaining))}`
-                  : undefined
-              }
-            />
-          </TabsContent>
-
-          {/* ── Equal Split ── */}
-          <TabsContent value="equal" className="space-y-3 pt-3">
-            <div className="flex items-center gap-3 rounded-lg border p-2.5">
-              <Users className="size-4 text-muted-foreground" />
-              <span className="flex-1 text-sm font-medium">Split between</span>
-              <Input
-                type="number"
-                min={2}
-                max={12}
-                value={eqPayers}
-                onChange={(e) => setEqPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 12))}
-                className="h-10 w-16 text-center tabular-nums"
-              />
-              <span className="text-sm text-muted-foreground">payers</span>
+          {/* Summary */}
+          <div className="grid grid-cols-3 gap-2 rounded-xl border border-[#E2E2E0] bg-white p-3 text-center shadow-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="text-sm font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</p>
             </div>
-            {eqAmounts.map((amount, i) => (
-              <PayRow
-                key={i}
-                label={`Payer ${i + 1}`}
-                method={eqMethods[i] ?? 'cash'}
-                onMethodChange={(m) => setEqMethods((prev) => ({ ...prev, [i]: m }))}
-                amount={amount}
-              />
-            ))}
-            <p className="text-center text-xs text-muted-foreground">
-              Parts total: <span className="font-semibold tabular-nums">{formatCurrency(sum)}</span>
-            </p>
-          </TabsContent>
-
-          {/* ── By Items ── */}
-          <TabsContent value="items" className="space-y-3 pt-3">
-            <div className="flex items-center gap-3 rounded-lg border p-2.5">
-              <Users className="size-4 text-muted-foreground" />
-              <span className="flex-1 text-sm font-medium">Assign items to</span>
-              <Input
-                type="number"
-                min={2}
-                max={6}
-                value={itPayers}
-                onChange={(e) => setItPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 6))}
-                className="h-10 w-16 text-center tabular-nums"
-              />
-              <span className="text-sm text-muted-foreground">payers</span>
+            <div>
+              <p className="text-xs text-muted-foreground">Paid</p>
+              <p className="text-sm font-semibold tabular-nums text-emerald-600">
+                {formatCurrency(order.paidAmount)}
+              </p>
             </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Remaining</p>
+              <p className="text-primary text-2xl font-bold tabular-nums">
+                {formatCurrency(remaining)}
+              </p>
+            </div>
+          </div>
 
-            <div className="space-y-1.5">
-              {itemLines.map((line) => {
-                const active = Math.min(assignments[line.id] ?? 0, itPayers - 1)
+          {/* Method tiles — apply to the active row below */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Method — applies to <span className="text-[#714B67]">{activeRowLabel}</span>
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {PAYMENT_METHODS.map((m) => {
+                const meta = METHOD_META[m] ?? { label: PAYMENT_METHOD_LABELS[m] ?? m, icon: MoreHorizontal }
+                const Icon = meta.icon
+                const active = currentMethodAt(safeActiveIdx) === m
                 return (
-                  <div
-                    key={line.id}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2.5"
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setMethodAt(safeActiveIdx, m)}
+                    aria-pressed={active}
+                    className={cn(
+                      'flex h-16 flex-col items-center justify-center gap-1 rounded-xl border-2 text-sm font-semibold transition active:scale-95',
+                      active
+                        ? 'border-[#714B67] bg-[#714B67]/10 text-[#714B67]'
+                        : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+                    )}
                   >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{line.label}</p>
-                      <p className="text-xs text-muted-foreground tabular-nums">
-                        {formatCurrency(line.total)}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {Array.from({ length: itPayers }, (_, p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setAssignment(line.id, p)}
-                          className={cn(
-                            'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
-                            p === active
-                              ? 'border-primary bg-primary text-primary-foreground'
-                              : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/40',
-                          )}
-                          aria-pressed={p === active}
-                        >
-                          P{p + 1}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                    <Icon className="size-6" aria-hidden />
+                    {meta.label}
+                  </button>
                 )
               })}
             </div>
+          </div>
 
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Each payer pays
-              </p>
-              {itAmounts.map((amount, i) => (
+          <Tabs value={tab} onValueChange={handleTabChange}>
+            <TabsList className="grid h-10 w-full grid-cols-4">
+              <TabsTrigger value="single" className="text-xs sm:text-sm">Single</TabsTrigger>
+              <TabsTrigger value="equal" className="text-xs sm:text-sm">Equal Split</TabsTrigger>
+              <TabsTrigger value="items" className="text-xs sm:text-sm">By Items</TabsTrigger>
+              <TabsTrigger value="custom" className="text-xs sm:text-sm">Custom</TabsTrigger>
+            </TabsList>
+
+            {/* ── Single ── */}
+            <TabsContent value="single" className="space-y-2 pt-3">
+              <PayRow
+                label="Payment"
+                method={singleRow.method}
+                active
+                amountStr={singleRow.amount}
+                onAmountChange={(v) => setSingleRow((r) => ({ ...r, amount: v }))}
+                reference={singleRow.reference}
+                onReferenceChange={(v) => setSingleRow((r) => ({ ...r, reference: v }))}
+                editable
+                error={
+                  singleExceeds
+                    ? `Exceeds remaining by ${formatCurrency(round2(parseAmount(singleRow.amount) - remaining))}`
+                    : undefined
+                }
+              />
+            </TabsContent>
+
+            {/* ── Equal Split ── */}
+            <TabsContent value="equal" className="space-y-3 pt-3">
+              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+                <Users className="size-4 text-muted-foreground" />
+                <span className="flex-1 text-sm font-medium">Split between</span>
+                <Input
+                  type="number"
+                  min={2}
+                  max={12}
+                  value={eqPayers}
+                  onChange={(e) => setEqPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 12))}
+                  className="h-10 w-16 text-center tabular-nums"
+                />
+                <span className="text-sm text-muted-foreground">payers</span>
+              </div>
+              {eqAmounts.map((amount, i) => (
                 <PayRow
                   key={i}
                   label={`Payer ${i + 1}`}
-                  method={itMethods[i] ?? 'cash'}
-                  onMethodChange={(m) => setItMethods((prev) => ({ ...prev, [i]: m }))}
+                  method={eqMethods[i] ?? 'cash'}
+                  active={safeActiveIdx === i}
+                  onActivate={() => setActiveIdx(i)}
                   amount={amount}
                 />
               ))}
+              <p className="text-center text-xs text-muted-foreground">
+                Parts total: <span className="font-semibold tabular-nums">{formatCurrency(sum)}</span>
+              </p>
+            </TabsContent>
+
+            {/* ── By Items ── */}
+            <TabsContent value="items" className="space-y-3 pt-3">
+              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+                <Users className="size-4 text-muted-foreground" />
+                <span className="flex-1 text-sm font-medium">Assign items to</span>
+                <Input
+                  type="number"
+                  min={2}
+                  max={6}
+                  value={itPayers}
+                  onChange={(e) => setItPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 6))}
+                  className="h-10 w-16 text-center tabular-nums"
+                />
+                <span className="text-sm text-muted-foreground">payers</span>
+              </div>
+
+              <div className="space-y-1.5">
+                {itemLines.map((line) => {
+                  const active = Math.min(assignments[line.id] ?? 0, itPayers - 1)
+                  return (
+                    <div
+                      key={line.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E2E2E0] bg-white p-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{line.label}</p>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {formatCurrency(line.total)}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {Array.from({ length: itPayers }, (_, p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setAssignment(line.id, p)}
+                            className={cn(
+                              'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
+                              p === active
+                                ? 'border-[#714B67] bg-[#714B67] text-white'
+                                : 'border-border bg-muted/50 text-muted-foreground hover:border-[#714B67]/40',
+                            )}
+                            aria-pressed={p === active}
+                          >
+                            P{p + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Each payer pays
+                </p>
+                {itAmounts.map((amount, i) => (
+                  <PayRow
+                    key={i}
+                    label={`Payer ${i + 1}`}
+                    method={itMethods[i] ?? 'cash'}
+                    active={safeActiveIdx === i}
+                    onActivate={() => setActiveIdx(i)}
+                    amount={amount}
+                  />
+                ))}
+              </div>
+            </TabsContent>
+
+            {/* ── Custom ── */}
+            <TabsContent value="custom" className="space-y-2 pt-3">
+              {customRows.map((row, i) => (
+                <PayRow
+                  key={row.id}
+                  label={`Payment ${i + 1}`}
+                  method={row.method}
+                  active={safeActiveIdx === i}
+                  onActivate={() => setActiveIdx(i)}
+                  amountStr={row.amount}
+                  onAmountChange={(v) =>
+                    setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, amount: v } : r)))
+                  }
+                  reference={row.reference}
+                  onReferenceChange={(v) =>
+                    setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, reference: v } : r)))
+                  }
+                  onRemove={
+                    customRows.length > 1
+                      ? () => setCustomRows((rows) => rows.filter((r) => r.id !== row.id))
+                      : undefined
+                  }
+                  editable
+                />
+              ))}
+              <Button variant="outline" className="h-11 w-full rounded-xl border-dashed" onClick={addCustomRow}>
+                <Plus /> Add payment
+              </Button>
+            </TabsContent>
+          </Tabs>
+
+          {/* Live total + submit */}
+          <div className="space-y-2 border-t border-[#E2E2E0] pt-3">
+            <div
+              className={cn(
+                'flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium',
+                exceeds
+                  ? 'bg-rose-50 text-rose-700'
+                  : exact
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-amber-50 text-amber-700',
+              )}
+            >
+              {exceeds ? (
+                <>
+                  <AlertCircle className="size-4" /> Exceeds remaining by{' '}
+                  {formatCurrency(Math.abs(diff))}
+                </>
+              ) : exact ? (
+                <>
+                  <Check className="size-4" /> Exact
+                </>
+              ) : (
+                <>Remaining after: {formatCurrency(round2(remaining - sum))}</>
+              )}
             </div>
-          </TabsContent>
-
-          {/* ── Custom ── */}
-          <TabsContent value="custom" className="space-y-2 pt-3">
-            {customRows.map((row, i) => (
-              <PayRow
-                key={row.id}
-                label={`Payment ${i + 1}`}
-                method={row.method}
-                onMethodChange={(m) =>
-                  setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, method: m } : r)))
-                }
-                amountStr={row.amount}
-                onAmountChange={(v) =>
-                  setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, amount: v } : r)))
-                }
-                reference={row.reference}
-                onReferenceChange={(v) =>
-                  setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, reference: v } : r)))
-                }
-                onRemove={
-                  customRows.length > 1
-                    ? () => setCustomRows((rows) => rows.filter((r) => r.id !== row.id))
-                    : undefined
-                }
-                editable
-              />
-            ))}
-            <Button variant="outline" className="h-11 w-full border-dashed" onClick={addCustomRow}>
-              <Plus /> Add payment
-            </Button>
-          </TabsContent>
-        </Tabs>
-
-        {/* Live total + submit */}
-        <div className="space-y-2 border-t pt-3">
-          <div
-            className={cn(
-              'flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium',
-              exceeds
-                ? 'bg-rose-50 text-rose-700'
-                : exact
-                  ? 'bg-emerald-50 text-emerald-700'
-                  : 'bg-amber-50 text-amber-700',
-            )}
-          >
-            {exceeds ? (
-              <>
-                <AlertCircle className="size-4" /> Exceeds remaining by{' '}
-                {formatCurrency(Math.abs(diff))}
-              </>
-            ) : exact ? (
-              <>
-                <Check className="size-4" /> Exact
-              </>
-            ) : (
-              <>Remaining after: {formatCurrency(round2(remaining - sum))}</>
-            )}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="h-12 flex-1 rounded-xl border-[#E2E2E0]"
+                onClick={() => setCheckOpen(true)}
+                title="Print a guest check for the current split — no payment is recorded"
+              >
+                <Printer />
+                <span className="hidden sm:inline">Print Check</span>
+              </Button>
+              <Button
+                className="h-12 flex-[1.8] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+                disabled={!canSubmit}
+                onClick={handleSubmit}
+              >
+                {submitting ? <Loader2 className="animate-spin" /> : <CreditCard />}
+                Charge {formatCurrency(sum)}
+              </Button>
+            </div>
           </div>
-          <Button
-            className="h-12 w-full text-base"
-            disabled={!canSubmit}
-            onClick={handleSubmit}
-          >
-            {submitting ? <Loader2 className="animate-spin" /> : <CreditCard />}
-            Charge {formatCurrency(sum)}
-          </Button>
-        </div>
 
-        {/* Receipt is rendered by the parent (pos-view) after full payment */}
-      </DialogContent>
-    </Dialog>
+          {/* Receipt is rendered by the parent (pos-view) after full payment */}
+        </DialogContent>
+      </Dialog>
+
+      {/* Guest check for the CURRENT split configuration — printing does NOT
+          record payments; the payment modal stays open behind it. */}
+      <CheckModal order={order} open={checkOpen} onOpenChange={setCheckOpen} rows={checkRows} />
+    </>
   )
 }
 
@@ -440,7 +570,8 @@ function toSubmitRow(r: EditableRow): SubmitRow {
 function PayRow({
   label,
   method,
-  onMethodChange,
+  active = false,
+  onActivate,
   amount,
   amountStr,
   onAmountChange,
@@ -452,7 +583,9 @@ function PayRow({
 }: {
   label: string
   method: string
-  onMethodChange: (m: string) => void
+  /** Whether the method tiles currently target this row. */
+  active?: boolean
+  onActivate?: () => void
   amount?: number
   amountStr?: string
   onAmountChange?: (v: string) => void
@@ -462,16 +595,39 @@ function PayRow({
   editable?: boolean
   error?: string
 }) {
+  const meta = METHOD_META[method] ?? { label: PAYMENT_METHOD_LABELS[method] ?? method, icon: MoreHorizontal }
+  const Icon = meta.icon
+
   return (
-    <div className="rounded-lg border p-2.5">
+    <div
+      className={cn(
+        'cursor-pointer rounded-xl border p-2.5 transition-colors',
+        active ? 'border-[#714B67] ring-1 ring-[#714B67]' : 'border-[#E2E2E0] bg-white',
+      )}
+      onClick={() => onActivate?.()}
+      title={onActivate ? 'Select this row, then tap a payment method above' : undefined}
+    >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="text-sm font-medium">{label}</span>
+          <span
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+              active ? 'bg-[#714B67] text-white' : 'bg-[#714B67]/10 text-[#714B67]',
+            )}
+          >
+            <Icon className="size-3" aria-hidden /> {meta.label}
+          </span>
+        </span>
         {onRemove && (
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 text-muted-foreground hover:text-destructive"
-            onClick={onRemove}
+            className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+            onClick={(e) => {
+              e.stopPropagation()
+              onRemove()
+            }}
             title="Remove payment"
           >
             <X className="size-4" />
@@ -479,18 +635,6 @@ function PayRow({
         )}
       </div>
       <div className="mt-1.5 flex gap-2">
-        <Select value={method} onValueChange={onMethodChange}>
-          <SelectTrigger className="h-10 flex-1">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PAYMENT_METHODS.map((m) => (
-              <SelectItem key={m} value={m}>
-                {PAYMENT_METHOD_LABELS[m]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         {editable ? (
           <Input
             type="number"

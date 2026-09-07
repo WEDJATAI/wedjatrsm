@@ -53,10 +53,11 @@ const ADMIN_MENU: NavItem[] = [
   { view: 'users', label: 'Users', icon: Users },
 ]
 
+/* Soft role tints tuned for the dark Odoo navbar bar (#24232D) */
 const ROLE_BADGE_CLASS: Record<string, string> = {
-  admin: 'border-amber-300 bg-amber-50 text-amber-800',
-  waiter: 'border-emerald-300 bg-emerald-50 text-emerald-800',
-  kitchen: 'border-rose-300 bg-rose-50 text-rose-800',
+  admin: 'border-primary/60 bg-primary/25 text-white',
+  waiter: 'border-emerald-400/30 bg-emerald-400/15 text-emerald-100',
+  kitchen: 'border-rose-400/30 bg-rose-400/15 text-rose-100',
 }
 
 export default function AppNavbar({
@@ -82,23 +83,23 @@ export default function AppNavbar({
       .join('') || 'U'
 
   return (
-    <header className="sticky top-0 z-50 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+    <header className="sticky top-0 z-50 border-b border-black/30 bg-[#24232D] text-white shadow-sm">
       <div className="rms-scroll flex h-16 items-center gap-3 overflow-x-auto px-4 max-w-full">
-        {/* Left: brand */}
+        {/* Left: brand (Odoo-style plum logo tile on the dark bar) */}
         <button
           type="button"
           onClick={() => onNavigate(defaultView)}
           aria-label={`${RESTAURANT_NAME} — go to home view`}
-          className="flex shrink-0 items-center gap-2.5 rounded-lg px-1 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex shrink-0 items-center gap-2.5 rounded-lg px-1 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
         >
           <span className="bg-primary text-primary-foreground grid h-9 w-9 shrink-0 place-items-center rounded-lg shadow-sm">
             <UtensilsCrossed className="h-5 w-5" aria-hidden />
           </span>
           <span className="text-left">
-            <span className="block truncate font-bold leading-tight max-w-[140px] sm:max-w-none">
+            <span className="block truncate font-semibold leading-tight text-white max-w-[140px] sm:max-w-none">
               {RESTAURANT_NAME}
             </span>
-            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">RMS</span>
+            <span className="block text-[10px] uppercase tracking-wider text-white/50">RMS</span>
           </span>
         </button>
 
@@ -133,15 +134,15 @@ export default function AppNavbar({
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:ml-0">
           <div className="flex min-w-0 items-center gap-2">
             <Avatar className="h-8 w-8">
-              <AvatarFallback className="bg-primary/10 text-primary text-xs font-bold">
+              <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">
                 {initials}
               </AvatarFallback>
             </Avatar>
             <div className="hidden min-w-0 flex-col items-start gap-0.5 md:flex">
-              <span className="max-w-[140px] truncate text-sm font-medium">{user.name}</span>
+              <span className="max-w-[140px] truncate text-sm font-medium text-white">{user.name}</span>
               <Badge
                 variant="outline"
-                className={cn(ROLE_BADGE_CLASS[user.role] ?? 'border-stone-300 bg-stone-50 text-stone-700')}
+                className={cn(ROLE_BADGE_CLASS[user.role] ?? 'border-white/15 bg-white/10 text-white/80')}
               >
                 {ROLE_LABELS[user.role] ?? user.role}
               </Badge>
@@ -153,7 +154,7 @@ export default function AppNavbar({
             onClick={onLogout}
             aria-label="Log out"
             title="Log out"
-            className="size-11 shrink-0"
+            className="size-11 shrink-0 text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60"
           >
             <LogOut className="h-4 w-4" aria-hidden />
           </Button>
@@ -183,11 +184,11 @@ function NavTab({
       aria-label={item.label}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
         iconOnly ? 'h-11 w-11' : 'h-9 px-3',
         active
-          ? 'bg-accent text-accent-foreground font-medium'
-          : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+          ? 'bg-primary text-white font-medium shadow-sm'
+          : 'text-white/70 hover:bg-white/10 hover:text-white',
       )}
     >
       <Icon className={iconOnly ? 'h-5 w-5' : 'h-4 w-4'} aria-hidden />
@@ -210,13 +211,13 @@ function AdminMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="outline"
+          variant="ghost"
           aria-label="Admin menu"
           title="Admin"
           className={cn(
-            'shrink-0 rounded-md',
+            'shrink-0 rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60',
             iconOnly ? 'h-11 w-11 px-0' : 'h-9 gap-1.5 px-3 text-sm',
-            menuActive && 'border-primary/50 bg-accent text-accent-foreground',
+            menuActive && 'bg-primary text-white shadow-sm hover:bg-primary/90 hover:text-white',
           )}
         >
           <Settings2 className={iconOnly ? 'h-5 w-5' : 'h-4 w-4'} aria-hidden />

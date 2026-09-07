@@ -45,72 +45,74 @@
 
 :root {
   --radius: 0.625rem;
-  /* Warm restaurant palette: stone background + amber primary */
-  --background: oklch(0.985 0.004 90);
-  --foreground: oklch(0.216 0.01 60);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.216 0.01 60);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.216 0.01 60);
-  --primary: oklch(0.666 0.179 58.2);
-  --primary-foreground: oklch(0.99 0.01 90);
-  --secondary: oklch(0.946 0.01 80);
-  --secondary-foreground: oklch(0.31 0.02 60);
-  --muted: oklch(0.955 0.006 80);
-  --muted-foreground: oklch(0.52 0.015 60);
-  --accent: oklch(0.94 0.045 70);
-  --accent-foreground: oklch(0.38 0.08 55);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.915 0.008 75);
-  --input: oklch(0.915 0.008 75);
-  --ring: oklch(0.666 0.179 58.2);
-  --chart-1: oklch(0.666 0.179 58.2);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0.004 90);
-  --sidebar-foreground: oklch(0.216 0.01 60);
-  --sidebar-primary: oklch(0.666 0.179 58.2);
-  --sidebar-primary-foreground: oklch(0.99 0.01 90);
-  --sidebar-accent: oklch(0.946 0.01 80);
-  --sidebar-accent-foreground: oklch(0.31 0.02 60);
-  --sidebar-border: oklch(0.915 0.008 75);
-  --sidebar-ring: oklch(0.666 0.179 58.2);
+  /* Odoo-style: light gray + plum (ERP look — light gray background, white
+     cards, Odoo plum primary #714B67, dark Odoo navbar #24232D in shell) */
+  --background: #f2f2f2;
+  --foreground: #37352f;
+  --card: #ffffff;
+  --card-foreground: #37352f;
+  --popover: #ffffff;
+  --popover-foreground: #37352f;
+  --primary: #714b67;
+  --primary-foreground: #ffffff;
+  --secondary: #e8e6e4;
+  --secondary-foreground: #37352f;
+  --muted: #f5f4f4;
+  --muted-foreground: #6b6b6b;
+  --accent: #ede9eb;
+  --accent-foreground: #37352f;
+  --destructive: #dc2626;
+  --border: #e2e2e0;
+  --input: #e2e2e0;
+  --ring: #714b67;
+  --chart-1: #714b67; /* Odoo plum */
+  --chart-2: #059669; /* emerald */
+  --chart-3: #d97706; /* amber */
+  --chart-4: #be185d; /* rose */
+  --chart-5: #78716c; /* stone */
+  --sidebar: #f2f2f2;
+  --sidebar-foreground: #37352f;
+  --sidebar-primary: #714b67;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ede9eb;
+  --sidebar-accent-foreground: #37352f;
+  --sidebar-border: #e2e2e0;
+  --sidebar-ring: #714b67;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Odoo dark-mode equivalent: near-black gray + plum accents (app is light-only; kept consistent) */
+  --background: #1a191f;
+  --foreground: #f2f2f2;
+  --card: #24232d;
+  --card-foreground: #f2f2f2;
+  --popover: #24232d;
+  --popover-foreground: #f2f2f2;
+  --primary: #714b67;
+  --primary-foreground: #ffffff;
+  --secondary: #2f2e36;
+  --secondary-foreground: #f2f2f2;
+  --muted: #2f2e36;
+  --muted-foreground: #a3a0a6;
+  --accent: #3a3540;
+  --accent-foreground: #f2f2f2;
+  --destructive: #dc2626;
+  --border: rgb(255 255 255 / 10%);
+  --input: rgb(255 255 255 / 15%);
+  --ring: #714b67;
+  --chart-1: #714b67;
+  --chart-2: #059669;
+  --chart-3: #d97706;
+  --chart-4: #be185d;
+  --chart-5: #78716c;
+  --sidebar: #24232d;
+  --sidebar-foreground: #f2f2f2;
+  --sidebar-primary: #714b67;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #3a3540;
+  --sidebar-accent-foreground: #f2f2f2;
+  --sidebar-border: rgb(255 255 255 / 10%);
+  --sidebar-ring: #714b67;
 }
 
 @layer base {
@@ -132,11 +134,11 @@
   background: transparent;
 }
 .rms-scroll::-webkit-scrollbar-thumb {
-  background: oklch(0.85 0.02 70);
+  background: #c9c7c4;
   border-radius: 3px;
 }
 .rms-scroll::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.75 0.05 60);
+  background: #a19aa3;
 }
 
 /* No spin buttons on number inputs (touch friendly) */

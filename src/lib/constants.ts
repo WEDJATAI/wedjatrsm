@@ -45,7 +45,13 @@ export const TABLE_STATUS_LABELS: Record<string, string> = {
   reserved: 'Reserved',
 }
 
-export const ORDER_STATUSES = ['open', 'paid', 'cancelled'] as const
+export const ORDER_STATUSES = ['open', 'paid', 'cancelled', 'merged'] as const
+export const ORDER_STATUS_LABELS: Record<string, string> = {
+  open: 'Open',
+  paid: 'Paid',
+  cancelled: 'Cancelled',
+  merged: 'Merged',
+}
 export const INVENTORY_REASONS = ['purchase', 'adjustment', 'waste', 'sale'] as const
 export const INVENTORY_REASON_LABELS: Record<string, string> = {
   purchase: 'Purchase (stock in)',

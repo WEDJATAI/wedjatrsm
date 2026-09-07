@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Ban, CreditCard, Loader2, Send } from 'lucide-react'
+import { ArrowLeftRight, Ban, ChevronLeft, Loader2 } from 'lucide-react'
 
 import {
   AlertDialog,
@@ -21,6 +21,7 @@ import { elapsedSince, formatCurrency } from '@/lib/format'
 import { toast } from 'sonner'
 import type { Order, Product, RestaurantTable, SessionUser } from '@/lib/types'
 import CartPanel from './cart-panel'
+import CheckModal from './check-modal'
 import PaymentModal from './payment-modal'
 import ReceiptModal from './receipt-modal'
 import ProductGrid from './product-grid'
@@ -37,8 +38,13 @@ export default function PosView() {
   const [draft, setDraft] = useState<DraftItem[]>([])
   const [sending, setSending] = useState(false)
 
+  // Order being transferred (passed to TableSelect → starts at destination step).
+  const [transferOrderId, setTransferOrderId] = useState<number | null>(null)
+
   const [payOpen, setPayOpen] = useState(false)
   const [payOrder, setPayOrder] = useState<Order | null>(null)
+  const [checkOpen, setCheckOpen] = useState(false)
+  const [checkOrder, setCheckOrder] = useState<Order | null>(null)
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
 
@@ -104,7 +110,10 @@ export default function PosView() {
     setDraft([])
     setPayOpen(false)
     setPayOrder(null)
+    setCheckOpen(false)
+    setCheckOrder(null)
     setCancelOpen(false)
+    setTransferOrderId(null)
     readyRef.current = null
   }, [])
 
@@ -124,6 +133,7 @@ export default function PosView() {
     setSelectedTable({ id: table.id, name: table.name })
     setMode('order')
     setDraft([])
+    setTransferOrderId(null)
     readyRef.current = null
     if (table.openOrderId) {
       setActiveOrderId(table.openOrderId)
@@ -137,6 +147,7 @@ export default function PosView() {
     setMode('order')
     setDraft([])
     setActiveOrderId(null)
+    setTransferOrderId(null)
     readyRef.current = null
   }
 
@@ -144,6 +155,7 @@ export default function PosView() {
     setSelectedTable({ id: null, name: 'Takeaway' })
     setMode('order')
     setDraft([])
+    setTransferOrderId(null)
     readyRef.current = null
     queryClient.setQueryData(['pos-order', o.id], { order: o })
     setActiveOrderId(o.id)
@@ -223,6 +235,20 @@ export default function PosView() {
     setPayOpen(true)
   }
 
+  // Print Check from the cart panel: flush the draft first (same pattern as pay),
+  // then open the check modal with the fresh order state.
+  const handlePrintCheck = async () => {
+    if (sending) return
+    let current: Order | null = order
+    if (draft.length > 0) {
+      current = await sendToKitchen()
+      if (!current) return // sending failed → abort printing
+    }
+    if (!current) return
+    setCheckOrder(current)
+    setCheckOpen(true)
+  }
+
   const handlePaySuccess = async (updated: Order, closed: boolean) => {
     if (closed) {
       // Payment modal closes itself; show the receipt, then reset the screen.
@@ -242,6 +268,23 @@ export default function PosView() {
     }
   }
 
+  // Transfer clicked on the order screen → go to the floor screen with the
+  // order preselected (destination step). TableSelect reports completion.
+  const startTransfer = () => {
+    if (!order) return
+    setTransferOrderId(order.id)
+    setMode('tables')
+    setSelectedTable(null)
+    setActiveOrderId(null)
+    setDraft([])
+    readyRef.current = null
+  }
+
+  const handleTransferDone = () => {
+    setTransferOrderId(null)
+    resetToTables()
+  }
+
   const cancelMutation = useMutation({
     mutationFn: (id: number) =>
       apiFetch<{ order: Order }>(`/api/orders/${id}/cancel`, { method: 'POST' }),
@@ -259,24 +302,36 @@ export default function PosView() {
   const itemCount = (order?.items.length ?? 0) + draft.length
   const preparingCount = order?.items.filter((i) => i.status === 'preparing').length ?? 0
   const readyCount = order?.items.filter((i) => i.status === 'ready').length ?? 0
-  const draftQty = draft.reduce((n, d) => n + d.quantity, 0)
 
   // ── Render ───────────────────────────────────────────────────────
   if (mode === 'tables') {
-    return <TableSelect onSelectTable={selectTable} onTakeaway={startTakeaway} onOpenTakeawayOrder={openTakeawayOrder} />
+    return (
+      <TableSelect
+        onSelectTable={selectTable}
+        onTakeaway={startTakeaway}
+        onOpenTakeawayOrder={openTakeawayOrder}
+        transferOrderId={transferOrderId}
+        onTransferDone={handleTransferDone}
+      />
+    )
   }
 
   return (
     <div className="flex h-full min-h-[560px] flex-col">
-      {/* Top bar */}
-      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b bg-card px-3 py-2 sm:px-4">
-        <Button variant="ghost" className="h-11 px-3" onClick={resetToTables} title="Back to tables">
-          <ArrowLeft />
-          <span className="hidden sm:inline">Tables</span>
+      {/* ── Top bar (Odoo order chrome) ── */}
+      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[#E2E2E0] bg-white px-3 py-2 shadow-sm sm:px-4">
+        <Button
+          variant="ghost"
+          className="h-11 rounded-xl px-3 text-[#714B67] hover:bg-[#714B67]/10"
+          onClick={resetToTables}
+          title="Back to tables"
+        >
+          <ChevronLeft className="size-5" />
+          <span>Tables</span>
         </Button>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="truncate text-lg font-bold">{selectedTable?.name ?? 'Order'}</span>
-          {order && <Badge variant="outline">Order #{order.id}</Badge>}
+          <span className="truncate text-xl font-bold">{selectedTable?.name ?? 'Order'}</span>
+          {order && <Badge className="bg-[#714B67] text-white hover:bg-[#714B67]">Order #{order.id}</Badge>}
           {order && (
             <span className="text-xs tabular-nums text-muted-foreground" data-tick={elapsedTick}>
               {elapsedSince(order.createdAt)}
@@ -294,39 +349,33 @@ export default function PosView() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+            disabled={!order}
+            onClick={startTransfer}
+            title={order ? 'Move this order to another table' : 'Send the order to the kitchen first'}
+          >
+            <ArrowLeftRight />
+            <span className="hidden md:inline">Transfer</span>
+          </Button>
           {order && canCancel && (
             <Button
               variant="outline"
-              className="h-11 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="h-11 rounded-xl border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={() => setCancelOpen(true)}
             >
               <Ban />
               <span className="hidden md:inline">Cancel</span>
             </Button>
           )}
-          <Button
-            variant="secondary"
-            className="h-11"
-            disabled={draft.length === 0 || sending}
-            onClick={() => void sendToKitchen()}
-          >
-            {sending ? <Loader2 className="animate-spin" /> : <Send />}
-            <span className="hidden md:inline">Send to Kitchen</span>
-            {draft.length > 0 && (
-              <Badge className="h-5 min-w-5 rounded-full px-1.5 tabular-nums">{draftQty}</Badge>
-            )}
-          </Button>
-          <Button className="h-11" disabled={itemCount === 0 || sending} onClick={() => void handlePay()}>
-            <CreditCard />
-            <span className="hidden md:inline">Pay</span>
-          </Button>
         </div>
       </header>
 
-      {/* Body: product grid + cart */}
+      {/* ── Body: product grid + cart ── */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <ProductGrid products={products} onAdd={addProduct} className="min-h-0 flex-1" />
-        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t bg-card md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
+        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t border-[#E2E2E0] bg-white md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
           <CartPanel
             order={order}
             orderLoading={orderLoading}
@@ -335,6 +384,7 @@ export default function PosView() {
             onDraftChange={setDraft}
             onSend={() => void sendToKitchen()}
             onPay={() => void handlePay()}
+            onPrintCheck={() => void handlePrintCheck()}
             onCancel={() => setCancelOpen(true)}
             canCancel={canCancel}
             sending={sending}
@@ -343,7 +393,7 @@ export default function PosView() {
         </div>
       </div>
 
-      {/* Cancel order confirmation */}
+      {/* ── Cancel order confirmation ── */}
       <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -370,7 +420,7 @@ export default function PosView() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Split payment */}
+      {/* ── Split payment ── */}
       {payOrder && (
         <PaymentModal
           order={payOrder}
@@ -383,7 +433,20 @@ export default function PosView() {
         />
       )}
 
-      {/* Receipt — shown after an order is fully paid, independent of the payment modal */}
+      {/* ── Pre-payment guest check (from the cart panel) ── */}
+      {checkOrder && (
+        <CheckModal
+          key={checkOrder.id}
+          order={checkOrder}
+          open={checkOpen}
+          onOpenChange={(o) => {
+            setCheckOpen(o)
+            if (!o) setCheckOrder(null)
+          }}
+        />
+      )}
+
+      {/* ── Receipt — shown after an order is fully paid, independent of the payment modal ── */}
       {receiptOrder && (
         <ReceiptModal
           order={receiptOrder}

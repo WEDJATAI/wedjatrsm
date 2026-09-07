@@ -75,8 +75,11 @@ export async function POST(req: NextRequest) {
         name: user.name,
         role: user.role,
       },
+      // Raw token for the client-side Bearer fallback (used when cookies are
+      // unavailable, e.g. cross-site preview iframes). Kept in localStorage.
+      token,
     })
-    setSessionCookie(res, token)
+    setSessionCookie(res, token, req)
     return res
   } catch (err) {
     return errorResponse(err)

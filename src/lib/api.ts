@@ -2,9 +2,48 @@
 
 // ─── Client-side API helpers (used with TanStack Query) ──────────────
 
+const TOKEN_STORAGE_KEY = 'rms_session_token'
+
+/**
+ * Persist the raw session token (returned by /api/auth/login) for the
+ * Bearer-header fallback. Used when cookies cannot be sent back by the
+ * browser (e.g. the app runs inside a cross-site preview iframe).
+ */
+export function setSessionToken(token: string): void {
+  try {
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, token)
+  } catch {
+    // storage unavailable (private mode etc.) — cookie flow still applies
+  }
+}
+
+export function clearSessionToken(): void {
+  try {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+export function getSessionToken(): string | null {
+  try {
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function authHeaders(): HeadersInit | undefined {
+  const token = getSessionToken()
+  return token ? { Authorization: `Bearer ${token}` } : undefined
+}
+
 /** Default fetcher for TanStack Query: `useQuery({ queryKey: [...], queryFn: fetcher })` */
 export async function fetcher<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'same-origin' })
+  const res = await fetch(url, {
+    credentials: 'same-origin',
+    headers: authHeaders(),
+  })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`)
@@ -22,7 +61,10 @@ export async function apiFetch<T>(
   const { method = 'POST', body } = options
   const res = await fetch(url, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeaders(),
+    },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   })

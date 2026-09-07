@@ -37,8 +37,10 @@ export async function createSessionToken(payload: SessionPayload): Promise<strin
 export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret())
+    // Tolerate legacy tokens signed with an older payload shape ({ id } instead of { userId })
+    const rawId: unknown = (payload as Record<string, unknown>).userId ?? (payload as Record<string, unknown>).id
     return {
-      userId: Number(payload.userId),
+      userId: Number(rawId),
       email: String(payload.email),
       name: String(payload.name),
       role: String(payload.role),
@@ -48,11 +50,18 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
   }
 }
 
-/** Read the current session user from the request cookie (returns null if not authed). */
+/** Read the current session user from the request cookie or Authorization header (returns null if not authed). */
 export async function getSessionUser(req: NextRequest): Promise<SessionPayload | null> {
-  const token = req.cookies.get(SESSION_COOKIE)?.value
-  if (!token) return null
-  const payload = await verifySessionToken(token)
+  // 1) httpOnly cookie (first-party contexts)
+  const cookieToken = req.cookies.get(SESSION_COOKIE)?.value
+  let payload = cookieToken ? await verifySessionToken(cookieToken) : null
+  // 2) Bearer token fallback (cross-site iframes / previews where cookies are blocked)
+  if (!payload) {
+    const authHeader = req.headers.get('authorization')
+    if (authHeader?.toLowerCase().startsWith('bearer ')) {
+      payload = await verifySessionToken(authHeader.slice(7).trim())
+    }
+  }
   if (!payload) return null
   // Ensure user still exists and is active
   const user = await db.user.findFirst({
@@ -62,21 +71,48 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
   return user ? { userId: user.id, email: user.email, name: user.name, role: user.role } : null
 }
 
-export function setSessionCookie(res: NextResponse, token: string) {
+/**
+ * Whether the session cookie must be cross-site capable (SameSite=None; Secure).
+ *
+ * When the app is embedded in a cross-site iframe (e.g. the sandbox preview panel),
+ * browsers refuse to send `SameSite=Lax` cookies back on subresource requests, which
+ * makes logins appear to "bounce back" to the login screen. Cross-site contexts here
+ * are always served over HTTPS through the platform gateway, so any non-localhost host
+ * (or an https x-forwarded-proto) gets a `SameSite=None; Secure` cookie instead.
+ */
+function needsCrossSiteCookie(req?: NextRequest): boolean {
+  const proto = (req?.headers.get('x-forwarded-proto') ?? '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase()
+  if (proto === 'https' || req?.nextUrl.protocol === 'https:') return true
+  const host = (req?.headers.get('host') ?? '').toLowerCase()
+  const isLocalHost =
+    !host ||
+    host.startsWith('localhost') ||
+    host.startsWith('127.0.0.1') ||
+    host.startsWith('0.0.0.0') ||
+    host.startsWith('[::1]')
+  return !isLocalHost
+}
+
+export function setSessionCookie(res: NextResponse, token: string, req?: NextRequest) {
+  const crossSite = needsCrossSiteCookie(req)
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: crossSite ? 'none' : 'lax',
+    secure: crossSite,
     path: '/',
     maxAge: SESSION_MAX_AGE,
   })
 }
 
-export function clearSessionCookie(res: NextResponse) {
+export function clearSessionCookie(res: NextResponse, req?: NextRequest) {
+  const crossSite = needsCrossSiteCookie(req)
   res.cookies.set(SESSION_COOKIE, '', {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: crossSite ? 'none' : 'lax',
+    secure: crossSite,
     path: '/',
     maxAge: 0,
   })

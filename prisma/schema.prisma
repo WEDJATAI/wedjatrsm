@@ -96,7 +96,7 @@ model Order {
   table          RestaurantTable?   @relation(fields: [tableId], references: [id])
   userId         Int?               @map("user_id")
   user           User?              @relation(fields: [userId], references: [id])
-  status         String             @default("open") // 'open' | 'paid' | 'cancelled'
+  status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a table merge)
   subtotalAmount Float              @default(0) @map("subtotal_amount")
   totalAmount    Float              @default(0) @map("total_amount")
   discountAmount Float              @default(0) @map("discount_amount")

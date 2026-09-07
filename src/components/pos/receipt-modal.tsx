@@ -12,7 +12,7 @@ import {
 import { PAYMENT_METHOD_LABELS, RESTAURANT_NAME, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
 import type { Order } from '@/lib/types'
-import { round2 } from './pos-utils'
+import { escapeHtml, round2 } from './pos-utils'
 
 type ReceiptModalProps = {
   order: Order
@@ -61,20 +61,13 @@ function buildReceiptModel(order: Order): ReceiptModel {
   }
 }
 
-function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
 function buildReceiptHtml(m: ReceiptModel): string {
   const row = (l: string, r: string, cls = '') =>
-    `<div class="r ${cls}"><span>${esc(l)}</span><span>${esc(r)}</span></div>`
+    `<div class="r ${cls}"><span>${escapeHtml(l)}</span><span>${escapeHtml(r)}</span></div>`
   const dashed = '<div class="dashed"></div>'
+  const stamp = '<p class="stampline"><span class="stamp">PAID</span></p>'
   const lines: string[] = []
-  lines.push(`<h3>${esc(RESTAURANT_NAME)}</h3>`)
+  lines.push(`<h3>${escapeHtml(RESTAURANT_NAME)}</h3>`)
   lines.push('<p>SALES RECEIPT</p>')
   lines.push(dashed)
   lines.push(row(`Order #${m.orderId}`, m.tableName))
@@ -83,7 +76,7 @@ function buildReceiptHtml(m: ReceiptModel): string {
   lines.push(dashed)
   for (const it of m.items) {
     lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
-    if (it.notes) lines.push(`<p class="note">  * ${esc(it.notes)}</p>`)
+    if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
   }
   lines.push(dashed)
   lines.push(row('Subtotal', formatCurrency(m.subtotal)))
@@ -94,6 +87,7 @@ function buildReceiptHtml(m: ReceiptModel): string {
     lines.push(dashed)
     for (const p of m.payments) lines.push(row(`- ${p.label}`, formatCurrency(p.amount)))
     lines.push(row('PAID', formatCurrency(m.paid), 'bold'))
+    lines.push(stamp)
   }
   lines.push(dashed)
   lines.push('<p>Thank you — please come again!</p>')
@@ -111,7 +105,7 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
       return
     }
     w.document.write(
-      `<html><head><title>Receipt</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .note{font-size:11px;text-align:left;margin:0} .bold{font-weight:bold}</style></head><body>${html}</body></html>`,
+      `<html><head><title>Receipt</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .note{font-size:11px;text-align:left;margin:0} .bold{font-weight:bold} .stampline{margin:10px 0;text-align:center} .stamp{font-weight:bold;letter-spacing:4px;border:2px solid #047857;color:#047857;display:inline-block;padding:2px 10px;transform:rotate(-6deg)}</style></head><body>${html}</body></html>`,
     )
     w.document.close()
     w.focus()
@@ -154,6 +148,11 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
                 <ReceiptRow key={i} left={`- ${p.label}`} right={formatCurrency(p.amount)} />
               ))}
               <ReceiptRow left="PAID" right={formatCurrency(model.paid)} bold />
+              <div className="my-3 flex justify-center">
+                <span className="-rotate-6 rounded border-2 border-emerald-700 px-3 py-1 text-sm font-bold tracking-[0.3em] text-emerald-700">
+                  PAID
+                </span>
+              </div>
             </>
           )}
           <div className="my-2 border-t border-dashed border-stone-400" />
@@ -161,10 +160,13 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
         </div>
 
         <div className="flex gap-2">
-          <Button variant="outline" className="h-11 flex-1" onClick={handlePrint}>
+          <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={handlePrint}>
             <Printer /> Print
           </Button>
-          <Button className="h-11 flex-1" onClick={onClose}>
+          <Button
+            className="h-11 flex-1 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+            onClick={onClose}
+          >
             <Check /> Done
           </Button>
         </div>
