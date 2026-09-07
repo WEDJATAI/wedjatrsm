@@ -1,0 +1,988 @@
+     1→'use client'
+     2→
+     3→import { useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  ArrowLeftRight,
+     7→  Ban,
+     8→  Check,
+     9→  CreditCard,
+    10→  Loader2,
+    11→  Minus,
+    12→  Pencil,
+    13→  Plus,
+    14→  Printer,
+    15→  Send,
+    16→  ShieldAlert,
+    17→  ShoppingBag,
+    18→  StickyNote,
+    19→  Trash2,
+    20→  Users,
+    21→  X,
+    22→} from 'lucide-react'
+    23→
+    24→import { Badge } from '@/components/ui/badge'
+    25→import { Button } from '@/components/ui/button'
+    26→import {
+    27→  Dialog,
+    28→  DialogContent,
+    29→  DialogDescription,
+    30→  DialogFooter,
+    31→  DialogHeader,
+    32→  DialogTitle,
+    33→} from '@/components/ui/dialog'
+    34→import { Input } from '@/components/ui/input'
+    35→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    36→import { Skeleton } from '@/components/ui/skeleton'
+    37→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    38→import { Textarea } from '@/components/ui/textarea'
+    39→import { toast } from 'sonner'
+    40→import { apiFetch, fetcher } from '@/lib/api'
+    41→import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+    42→import { formatCurrency, formatQty } from '@/lib/format'
+    43→import { useI18n, localizedName } from '@/lib/i18n'
+    44→import { cn } from '@/lib/utils'
+    45→import type { Order, OrderItem } from '@/lib/types'
+    46→import { computeCartTotals, round2, type DraftItem } from './pos-utils'
+    47→
+    48→type CartPanelProps = {
+    49→  order: Order | null
+    50→  orderLoading?: boolean
+    51→  draft: DraftItem[]
+    52→  table: { id: number | null; name: string }
+    53→  onDraftChange: (draft: DraftItem[]) => void
+    54→  onSend: () => void
+    55→  onPay: () => void
+    56→  /** Open the pre-payment guest check (pos-view flushes the draft first). */
+    57→  onPrintCheck?: () => void
+    58→  onCancel: () => void
+    59→  canCancel?: boolean
+    60→  sending?: boolean
+    61→  userRole?: string
+    62→}
+    63→
+    64→const STATUS_CHIP: Record<string, string> = {
+    65→  new: 'bg-zinc-100 text-zinc-500',
+    66→  preparing: 'bg-amber-100 text-amber-700 animate-pulse',
+    67→  ready: 'bg-emerald-100 text-emerald-700',
+    68→  served: 'bg-muted text-muted-foreground',
+    69→}
+    70→
+    71→export default function CartPanel({
+    72→  order,
+    73→  orderLoading = false,
+    74→  draft,
+    75→  table,
+    76→  onDraftChange,
+    77→  onSend,
+    78→  onPay,
+    79→  onPrintCheck,
+    80→  onCancel,
+    81→  canCancel = false,
+    82→  sending = false,
+    83→  userRole,
+    84→}: CartPanelProps) {
+    85→  const queryClient = useQueryClient()
+    86→  const { t, lang } = useI18n()
+    87→  const orderId = order?.id ?? null
+    88→
+    89→  const [editing, setEditing] = useState<DraftItem | null>(null)
+    90→  const [editQty, setEditQty] = useState('1')
+    91→  const [editNotes, setEditNotes] = useState('')
+    92→  const [editCourse, setEditCourse] = useState('main')
+    93→
+    94→  const [discountOpen, setDiscountOpen] = useState(false)
+    95→  const [discountTab, setDiscountTab] = useState<'percent' | 'fixed'>('percent')
+    96→  const [percentInput, setPercentInput] = useState('')
+    97→  const [fixedInput, setFixedInput] = useState('')
+    98→
+    99→  // ── PIN-gated item deletion state ─────────────────────────────────
+   100→  // Sent items may only be removed with the admin's 6-digit PIN; the
+   101→  // dialog stays open on a wrong PIN so the user can retry.
+   102→  const [pinDialogItem, setPinDialogItem] = useState<OrderItem | null>(null)
+   103→  const [pinInput, setPinInput] = useState('')
+   104→  const [pinWrong, setPinWrong] = useState(false)
+   105→
+   106→  // ── Item transfer ("Move items") state ────────────────────────────
+   107→  const [moveMode, setMoveMode] = useState(false)
+   108→  const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+   109→  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+   110→
+   111→  const totals = computeCartTotals(order, draft)
+   112→  const noItems = (order?.items.length ?? 0) + draft.length === 0
+   113→
+   114→  // Open orders (for the move-items target picker) — only fetched while the
+   115→  // picker dialog is open; the query key matches the floor's live query.
+   116→  const { data: openOrdersData, isLoading: openOrdersLoading } = useQuery({
+   117→    queryKey: ['orders', 'open'],
+   118→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   119→    enabled: moveDialogOpen,
+   120→  })
+   121→  const otherOpenOrders = (openOrdersData?.orders ?? []).filter((o) => o.id !== orderId)
+   122→
+   123→  // ── Server mutations (sent items) ─────────────────────────────────
+   124→  const markServed = useMutation({
+   125→    mutationFn: (itemId: number) =>
+   126→      apiFetch<{ item: OrderItem }>(`/api/order-items/${itemId}`, {
+   127→        method: 'PUT',
+   128→        body: { status: 'served' },
+   129→      }),
+   130→    onSuccess: async (data) => {
+   131→      toast.success(
+   132→        t('pos.markedServedToast', {
+   133→          name: data.item.product
+   134→            ? localizedName(data.item.product.name, data.item.product.nameAr, lang)
+   135→            : t('pos.item'),
+   136→        }),
+   137→      )
+   138→      await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
+   139→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   140→    },
+   141→    onError: (err: Error) => toast.error(err.message),
+   142→  })
+   143→
+   144→  // Item removal is PIN-gated (PUT /api/orders/[id] { removeItemIds, removePin }):
+   145→  // the dialog collects the 6-digit PIN and the API verifies it server-side
+   146→  // (403 with a descriptive message on a wrong or missing PIN).
+   147→  const removeItem = useMutation({
+   148→    mutationFn: ({ itemId, pin }: { itemId: number; pin: string }) => {
+   149→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   150→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   151→        method: 'PUT',
+   152→        body: { removeItemIds: [itemId], removePin: pin },
+   153→      })
+   154→    },
+   155→    onSuccess: async ({ order: updated }) => {
+   156→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   157→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   158→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   159→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   160→      toast.success(t('pos.itemRemovedToast'))
+   161→      closePinDialog()
+   162→    },
+   163→    onError: (err: Error) => {
+   164→      // The API message is descriptive (403 wrong/missing PIN); the dialog
+   165→      // stays open with the inline wrong-PIN hint so the user can retry.
+   166→      toast.error(err.message)
+   167→      setPinWrong(true)
+   168→    },
+   169→  })
+   170→
+   171→  // ── PIN dialog helpers ────────────────────────────────────────────
+   172→  const openPinDialog = (item: OrderItem) => {
+   173→    setPinDialogItem(item)
+   174→    setPinInput('')
+   175→    setPinWrong(false)
+   176→  }
+   177→
+   178→  const closePinDialog = () => {
+   179→    setPinDialogItem(null)
+   180→    setPinInput('')
+   181→    setPinWrong(false)
+   182→  }
+   183→
+   184→  const confirmPin = () => {
+   185→    if (!pinDialogItem || pinInput.length < DELETE_PIN_LENGTH || removeItem.isPending) return
+   186→    removeItem.mutate({ itemId: pinDialogItem.id, pin: pinInput })
+   187→  }
+   188→
+   189→  const applyDiscount = useMutation({
+   190→    mutationFn: (discountAmount: number) => {
+   191→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   192→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   193→        method: 'PUT',
+   194→        body: { discountAmount },
+   195→      })
+   196→    },
+   197→    onSuccess: async ({ order: updated }) => {
+   198→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   199→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   200→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   201→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   202→      toast.success(t('pos.discountUpdatedToast'))
+   203→      setDiscountOpen(false)
+   204→    },
+   205→    onError: (err: Error) => toast.error(err.message),
+   206→  })
+   207→
+   208→  // ── Item transfer mutation (move sent items to another open order) ──
+   209→  const transferItems = useMutation({
+   210→    mutationFn: (vars: {
+   211→      sourceId: number
+   212→      itemIds: number[]
+   213→      targetOrderId: number
+   214→      targetLabel: string
+   215→    }) =>
+   216→      apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
+   217→        method: 'POST',
+   218→        body: { itemIds: vars.itemIds, targetOrderId: vars.targetOrderId },
+   219→      }),
+   220→    onSuccess: async (_data, vars) => {
+   221→      toast.success(
+   222→        t('pos.itemsMovedToast', { n: vars.itemIds.length, target: vars.targetLabel }),
+   223→      )
+   224→      await Promise.all([
+   225→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   226→        queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   227→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   228→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   229→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.sourceId] }),
+   230→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.targetOrderId] }),
+   231→      ])
+   232→      exitMoveMode()
+   233→    },
+   234→    onError: (err: Error) => toast.error(err.message),
+   235→  })
+   236→
+   237→  // ── Move-items helpers ───────────────────────────────────────────
+   238→  const enterMoveMode = () => {
+   239→    setMoveMode(true)
+   240→    setMoveSelected(new Set())
+   241→  }
+   242→
+   243→  const exitMoveMode = () => {
+   244→    setMoveMode(false)
+   245→    setMoveSelected(new Set())
+   246→    setMoveDialogOpen(false)
+   247→  }
+   248→
+   249→  const toggleMoveItem = (itemId: number) => {
+   250→    setMoveSelected((prev) => {
+   251→      const next = new Set(prev)
+   252→      if (next.has(itemId)) next.delete(itemId)
+   253→      else next.add(itemId)
+   254→      return next
+   255→    })
+   256→  }
+   257→
+   258→  // Only ids that still exist on the (live-polled) order — stale ids are dropped.
+   259→  const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
+   260→  const moveCount = selectedMoveIds.length
+   261→
+   262→  const pickMoveTarget = (target: Order) => {
+   263→    if (orderId == null || moveCount === 0) return
+   264→    transferItems.mutate({
+   265→      sourceId: orderId,
+   266→      itemIds: selectedMoveIds,
+   267→      targetOrderId: target.id,
+   268→      targetLabel: target.table?.name ?? t('common.takeaway'),
+   269→    })
+   270→  }
+   271→
+   272→  // ── Draft helpers ─────────────────────────────────────────────────
+   273→  const updateDraft = (key: string, patch: Partial<DraftItem>) =>
+   274→    onDraftChange(draft.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+   275→
+   276→  const changeQty = (d: DraftItem, delta: number) => {
+   277→    const next = round2(d.quantity + delta)
+   278→    if (next <= 0) onDraftChange(draft.filter((x) => x.key !== d.key))
+   279→    else updateDraft(d.key, { quantity: next })
+   280→  }
+   281→
+   282→  const openEdit = (d: DraftItem) => {
+   283→    setEditing(d)
+   284→    setEditQty(String(d.quantity))
+   285→    setEditNotes(d.notes)
+   286→    setEditCourse(d.course)
+   287→  }
+   288→
+   289→  const saveEdit = () => {
+   290→    if (!editing) return
+   291→    const qty = round2(parseFloat(editQty))
+   292→    if (!Number.isFinite(qty) || qty <= 0) return
+   293→    updateDraft(editing.key, { quantity: qty, notes: editNotes.trim(), course: editCourse })
+   294→    setEditing(null)
+   295→  }
+   296→
+   297→  // Seed discount dialog inputs from the current order discount when opening.
+   298→  const openDiscountDialog = () => {
+   299→    const current = order?.discountAmount ?? 0
+   300→    const subtotal = order?.subtotalAmount ?? 0
+   301→    setPercentInput(current > 0 && subtotal > 0 ? String(round2((current / subtotal) * 100)) : '')
+   302→    setFixedInput(current > 0 ? String(current) : '')
+   303→    setDiscountOpen(true)
+   304→  }
+   305→
+   306→  // Effective discount from the dialog inputs (clamped to [0, order subtotal]).
+   307→  const orderSubtotal = round2(order?.subtotalAmount ?? 0)
+   308→  const previewDiscount = (() => {
+   309→    if (!order) return 0
+   310→    const raw =
+   311→      discountTab === 'percent'
+   312→        ? (orderSubtotal * (parseFloat(percentInput) || 0)) / 100
+   313→        : parseFloat(fixedInput) || 0
+   314→    if (!Number.isFinite(raw) || raw < 0) return 0
+   315→    return round2(Math.min(raw, orderSubtotal))
+   316→  })()
+   317→  const previewBase = round2(orderSubtotal - previewDiscount)
+   318→  const previewVat = round2(previewBase * TAX_RATE)
+   319→  const previewServiceTax = round2(previewBase * SERVICE_TAX_RATE)
+   320→
+   321→  return (
+   322→    <div className="flex min-h-0 flex-1 flex-col">
+   323→      {/* Header */}
+   324→      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E2E2E0] px-4 py-3">
+   325→        <div className="min-w-0">
+   326→          <p className="truncate text-base font-bold">{table.name}</p>
+   327→          {(order?.user?.name || userRole) && (
+   328→            <p className="text-[11px] text-muted-foreground">
+   329→              {t('pos.server')}:{' '}
+   330→              {order?.user?.name ?? (userRole ? t(`role.${userRole}`) : '')}
+   331→            </p>
+   332→          )}
+   333→        </div>
+   334→        {order ? (
+   335→          <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
+   336→            {t('common.order')} #{order.id}
+   337→          </Badge>
+   338→        ) : (
+   339→          <Badge variant="secondary" className="shrink-0">
+   340→            {t('pos.notSent')}
+   341→          </Badge>
+   342→        )}
+   343→      </div>
+   344→
+   345→      {/* Body */}
+   346→      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto px-4">
+   347→        {orderLoading && !order && draft.length === 0 ? (
+   348→          <div className="space-y-3 py-4">
+   349→            <Skeleton className="h-14 w-full" />
+   350→            <Skeleton className="h-14 w-full" />
+   351→            <Skeleton className="h-14 w-full" />
+   352→          </div>
+   353→        ) : noItems ? (
+   354→          <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+   355→            <ShoppingBag className="size-10 opacity-30" />
+   356→            <p className="text-sm">{t('pos.tapToAdd')}</p>
+   357→          </div>
+   358→        ) : (
+   359→          <>
+   360→            {/* Sent to kitchen */}
+   361→            {order && order.items.length > 0 && (
+   362→              <section className="py-2">
+   363→                <div className="flex items-center justify-between gap-2">
+   364→                  <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   365→                    {t('pos.sentItems')} ({order.items.length})
+   366→                  </h3>
+   367→                  <div className="flex shrink-0 items-center gap-1">
+   368→                    {!moveMode && (
+   369→                      <Button
+   370→                        variant="outline"
+   371→                        size="sm"
+   372→                        className="h-8 gap-1 px-2 text-xs border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   373→                        title={t('pos.transferItems')}
+   374→                        onClick={enterMoveMode}
+   375→                      >
+   376→                        <ArrowLeftRight className="size-3.5" /> {t('pos.transferItems')}
+   377→                      </Button>
+   378→                    )}
+   379→                    {moveMode ? (
+   380→                      <span className="text-[11px] text-muted-foreground">{t('pos.moveModeHint')}</span>
+   381→                    ) : (
+   382→                      canCancel && (
+   383→                        <Button
+   384→                          variant="ghost"
+   385→                          size="sm"
+   386→                          className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+   387→                          title={t('pos.cancelOrder')}
+   388→                          onClick={onCancel}
+   389→                        >
+   390→                          <Ban className="size-3.5" /> {t('pos.cancelOrder')}
+   391→                        </Button>
+   392→                      )
+   393→                    )}
+   394→                  </div>
+   395→                </div>
+   396→                {order.items.map((item) => (
+   397→                  <SentItemRow
+   398→                    key={item.id}
+   399→                    item={item}
+   400→                    onServed={() => markServed.mutate(item.id)}
+   401→                    onRemove={() => openPinDialog(item)}
+   402→                    servedPending={markServed.isPending && markServed.variables === item.id}
+   403→                    removePending={removeItem.isPending && removeItem.variables?.itemId === item.id}
+   404→                    moveMode={moveMode}
+   405→                    moveSelected={moveSelected.has(item.id)}
+   406→                    onToggleMove={() => toggleMoveItem(item.id)}
+   407→                  />
+   408→                ))}
+   409→              </section>
+   410→            )}
+   411→
+   412→            {/* New items (draft) */}
+   413→            {draft.length > 0 && (
+   414→              <section className="py-2">
+   415→                <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   416→                  {t('pos.newItemsNotSent')} ({draft.length})
+   417→                </h3>
+   418→                {draft.map((d) => (
+   419→                  <DraftRow
+   420→                    key={d.key}
+   421→                    item={d}
+   422→                    onQty={(delta) => changeQty(d, delta)}
+   423→                    onEdit={() => openEdit(d)}
+   424→                    onRemove={() => onDraftChange(draft.filter((x) => x.key !== d.key))}
+   425→                  />
+   426→                ))}
+   427→              </section>
+   428→            )}
+   429→          </>
+   430→        )}
+   431→      </div>
+   432→
+   433→      {/* Footer */}
+   434→      <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
+   435→        <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
+   436→        <div className="flex items-center justify-between text-sm">
+   437→          <span className="flex items-center gap-1 text-muted-foreground">
+   438→            {t('money.discount')}
+   439→            <Button
+   440→              variant="ghost"
+   441→              size="icon"
+   442→              className="size-7 text-muted-foreground"
+   443→              disabled={!order}
+   444→              title={order ? t('pos.applyDiscount') : t('pos.sendFirst')}
+   445→              onClick={openDiscountDialog}
+   446→            >
+   447→              <Pencil className="size-3.5" />
+   448→            </Button>
+   449→          </span>
+   450→          <span className="tabular-nums text-muted-foreground">
+   451→            − {formatCurrency(totals.discount)}
+   452→          </span>
+   453→        </div>
+   454→        <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
+   455→        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(totals.serviceTax)} />
+   456→        <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
+   457→          <span className="text-sm font-semibold">{t('money.total')}</span>
+   458→          <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
+   459→        </div>
+   460→        {order && order.paidAmount > 0 && (
+   461→          <>
+   462→            <SummaryRow
+   463→              label={t('money.paid')}
+   464→              value={formatCurrency(order.paidAmount)}
+   465→              valueClassName="text-emerald-600"
+   466→            />
+   467→            <SummaryRow
+   468→              label={t('money.remaining')}
+   469→              value={formatCurrency(Math.max(0, order.remainingAmount))}
+   470→              valueClassName="font-bold text-amber-600"
+   471→            />
+   472→          </>
+   473→        )}
+   474→
+   475→        {moveMode ? (
+   476→          /* ── Item-transfer footer ── */
+   477→          <div className="flex gap-2 pt-1">
+   478→            <Button
+   479→              variant="outline"
+   480→              className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   481→              onClick={exitMoveMode}
+   482→              disabled={transferItems.isPending}
+   483→            >
+   484→              {t('common.cancel')}
+   485→            </Button>
+   486→            <Button
+   487→              className="h-14 flex-[1.6] rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+   488→              disabled={moveCount === 0 || transferItems.isPending}
+   489→              onClick={() => setMoveDialogOpen(true)}
+   490→            >
+   491→              {transferItems.isPending ? (
+   492→                <Loader2 className="animate-spin" />
+   493→              ) : (
+   494→                <ArrowLeftRight className="size-5" />
+   495→              )}
+   496→              <span className="truncate">{t('pos.moveNItems', { n: moveCount })}</span>
+   497→            </Button>
+   498→          </div>
+   499→        ) : (
+   500→          /* ── Normal actions ── */
+   501→          <>
+   502→            <Button
+   503→              variant="secondary"
+   504→              className="h-11 w-full rounded-xl"
+   505→              disabled={draft.length === 0 || sending}
+   506→              onClick={onSend}
+   507→            >
+   508→              {sending ? <Loader2 className="animate-spin" /> : <Send />} {t('pos.sendToKitchen')}
+   509→              {draft.length > 0 && (
+   510→                <Badge className="ms-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+   511→                  {draft.reduce((n, d) => n + d.quantity, 0)}
+   512→                </Badge>
+   513→              )}
+   514→            </Button>
+   515→            <div className="flex gap-2">
+   516→              <Button
+   517→                variant="outline"
+   518→                className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   519→                disabled={!order || sending || !onPrintCheck}
+   520→                title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
+   521→                onClick={onPrintCheck}
+   522→              >
+   523→                <Printer />
+   524→                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+   525→              </Button>
+   526→              <Button
+   527→                className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+   528→                disabled={noItems || sending}
+   529→                onClick={onPay}
+   530→              >
+   531→                {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+   532→                <span className="truncate">
+   533→                  {t('pos.payment')} · {formatCurrency(totals.total)}
+   534→                </span>
+   535→              </Button>
+   536→            </div>
+   537→          </>
+   538→        )}
+   539→      </div>
+   540→
+   541→      {/* Move-items target picker dialog */}
+   542→      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+   543→        <DialogContent className="sm:max-w-md">
+   544→          <DialogHeader>
+   545→            <DialogTitle className="flex items-center gap-2">
+   546→              <ArrowLeftRight className="size-5 text-[#714B67]" /> {t('pos.moveItemsTitle')}
+   547→            </DialogTitle>
+   548→            <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
+   549→          </DialogHeader>
+   550→          <div className="rms-scroll max-h-[50dvh] space-y-2 overflow-y-auto">
+   551→            {openOrdersLoading ? (
+   552→              <div className="space-y-2">
+   553→                <Skeleton className="h-16 w-full" />
+   554→                <Skeleton className="h-16 w-full" />
+   555→              </div>
+   556→            ) : otherOpenOrders.length === 0 ? (
+   557→              <p className="py-6 text-center text-sm text-muted-foreground">
+   558→                {t('pos.noOtherOpenOrders')}
+   559→              </p>
+   560→            ) : (
+   561→              otherOpenOrders.map((o) => (
+   562→                <button
+   563→                  key={o.id}
+   564→                  type="button"
+   565→                  disabled={transferItems.isPending}
+   566→                  onClick={() => pickMoveTarget(o)}
+   567→                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+   568→                >
+   569→                  <div className="min-w-0">
+   570→                    <p className="truncate text-sm font-semibold">
+   571→                      {o.table?.name ?? t('common.takeaway')}
+   572→                    </p>
+   573→                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+   574→                      {t('common.order')} #{o.id}
+   575→                      <span className="inline-flex items-center gap-1">
+   576→                        <Users className="size-3.5" aria-hidden /> {o.guests} {t('common.people')}
+   577→                      </span>
+   578→                    </p>
+   579→                  </div>
+   580→                  <span className="shrink-0 text-sm font-bold tabular-nums text-[#714B67]">
+   581→                    {formatCurrency(o.totalAmount)}
+   582→                  </span>
+   583→                </button>
+   584→              ))
+   585→            )}
+   586→          </div>
+   587→          <DialogFooter>
+   588→            <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={transferItems.isPending}>
+   589→              {t('common.cancel')}
+   590→            </Button>
+   591→          </DialogFooter>
+   592→        </DialogContent>
+   593→      </Dialog>
+   594→
+   595→      {/* Draft item edit dialog */}
+   596→      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+   597→        <DialogContent className="sm:max-w-sm">
+   598→          <DialogHeader>
+   599→            <DialogTitle>
+   600→              {editing ? localizedName(editing.name, editing.nameAr, lang) : ''}
+   601→            </DialogTitle>
+   602→            <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
+   603→          </DialogHeader>
+   604→          <div className="space-y-4">
+   605→            <div className="flex items-center justify-center gap-3">
+   606→              <Button
+   607→                variant="outline"
+   608→                size="icon"
+   609→                className="size-11"
+   610→                onClick={() => setEditQty(String(Math.max(1, round2((parseFloat(editQty) || 1) - 1))))}
+   611→              >
+   612→                <Minus />
+   613→              </Button>
+   614→              <Input
+   615→                type="number"
+   616→                min={1}
+   617→                step={1}
+   618→                value={editQty}
+   619→                onChange={(e) => setEditQty(e.target.value)}
+   620→                className="h-11 w-20 text-center text-lg font-semibold tabular-nums"
+   621→              />
+   622→              <Button
+   623→                variant="outline"
+   624→                size="icon"
+   625→                className="size-11"
+   626→                onClick={() => setEditQty(String(round2((parseFloat(editQty) || 0) + 1)))}
+   627→              >
+   628→                <Plus />
+   629→              </Button>
+   630→            </div>
+   631→            <div className="space-y-1.5">
+   632→              <p className="text-sm font-medium">{t('common.notes')}</p>
+   633→              <Textarea
+   634→                value={editNotes}
+   635→                onChange={(e) => setEditNotes(e.target.value)}
+   636→                placeholder={t('pos.notesPlaceholder')}
+   637→                rows={2}
+   638→              />
+   639→            </div>
+   640→            <div className="space-y-1.5">
+   641→              <p className="text-sm font-medium">{t('pos.course')}</p>
+   642→              <Select value={editCourse} onValueChange={setEditCourse}>
+   643→                <SelectTrigger className="h-11 w-full">
+   644→                  <SelectValue />
+   645→                </SelectTrigger>
+   646→                <SelectContent>
+   647→                  {COURSES.map((c) => (
+   648→                    <SelectItem key={c} value={c}>
+   649→                      {t(`course.${c}`)}
+   650→                    </SelectItem>
+   651→                  ))}
+   652→                </SelectContent>
+   653→              </Select>
+   654→            </div>
+   655→          </div>
+   656→          <DialogFooter>
+   657→            <Button variant="outline" onClick={() => setEditing(null)}>
+   658→              {t('common.cancel')}
+   659→            </Button>
+   660→            <Button onClick={saveEdit} disabled={!(parseFloat(editQty) > 0)}>
+   661→              {t('common.save')}
+   662→            </Button>
+   663→          </DialogFooter>
+   664→        </DialogContent>
+   665→      </Dialog>
+   666→
+   667→      {/* Discount dialog */}
+   668→      <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
+   669→        <DialogContent className="sm:max-w-sm">
+   670→          <DialogHeader>
+   671→            <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
+   672→            <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
+   673→          </DialogHeader>
+   674→          <Tabs value={discountTab} onValueChange={(v) => setDiscountTab(v as 'percent' | 'fixed')}>
+   675→            <TabsList className="grid h-10 w-full grid-cols-2">
+   676→              <TabsTrigger value="percent">{t('pos.percent')}</TabsTrigger>
+   677→              <TabsTrigger value="fixed">{t('pos.fixed')}</TabsTrigger>
+   678→            </TabsList>
+   679→            <TabsContent value="percent" className="pt-3">
+   680→              <div className="flex items-center gap-2">
+   681→                <Input
+   682→                  type="number"
+   683→                  min={0}
+   684→                  max={100}
+   685→                  step={0.5}
+   686→                  value={percentInput}
+   687→                  onChange={(e) => setPercentInput(e.target.value)}
+   688→                  placeholder="0"
+   689→                  className="h-11 text-right text-base tabular-nums"
+   690→                />
+   691→                <span className="text-lg font-semibold text-muted-foreground">%</span>
+   692→              </div>
+   693→            </TabsContent>
+   694→            <TabsContent value="fixed" className="pt-3">
+   695→              <div className="flex items-center gap-2">
+   696→                <Input
+   697→                  type="number"
+   698→                  min={0}
+   699→                  step={0.5}
+   700→                  value={fixedInput}
+   701→                  onChange={(e) => setFixedInput(e.target.value)}
+   702→                  placeholder="0"
+   703→                  className="h-11 text-right text-base tabular-nums"
+   704→                />
+   705→                <span className="text-lg font-semibold text-muted-foreground">
+   706→                  {t('pos.currencySuffix')}
+   707→                </span>
+   708→              </div>
+   709→            </TabsContent>
+   710→          </Tabs>
+   711→          <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
+   712→            <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
+   713→            <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
+   714→            <SummaryRow label={t('money.tax')} value={formatCurrency(previewVat)} />
+   715→            <SummaryRow label={t('money.serviceTax')} value={formatCurrency(previewServiceTax)} />
+   716→            <div className="flex items-center justify-between border-t pt-1.5 font-bold">
+   717→              <span>{t('pos.newTotal')}</span>
+   718→              <span className="tabular-nums">
+   719→                {formatCurrency(round2(previewBase + previewVat + previewServiceTax))}
+   720→              </span>
+   721→            </div>
+   722→          </div>
+   723→          <DialogFooter>
+   724→            <Button variant="outline" onClick={() => setDiscountOpen(false)}>
+   725→              {t('common.cancel')}
+   726→            </Button>
+   727→            <Button
+   728→              onClick={() => applyDiscount.mutate(previewDiscount)}
+   729→              disabled={applyDiscount.isPending}
+   730→            >
+   731→              {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
+   732→            </Button>
+   733→          </DialogFooter>
+   734→        </DialogContent>
+   735→      </Dialog>
+   736→
+   737→      {/* PIN-gated item deletion dialog — sent items only (draft rows keep
+   738→          their instant remove; they were never sent to the kitchen). */}
+   739→      <Dialog open={!!pinDialogItem} onOpenChange={(o) => !o && closePinDialog()}>
+   740→        <DialogContent className="sm:max-w-xs">
+   741→          <DialogHeader>
+   742→            <DialogTitle className="flex items-center gap-2">
+   743→              <ShieldAlert className="size-5 text-destructive" /> {t('pos.pinTitle')}
+   744→            </DialogTitle>
+   745→            <DialogDescription>
+   746→              {t('pos.pinDesc', {
+   747→                name: pinDialogItem
+   748→                  ? pinDialogItem.product
+   749→                    ? localizedName(pinDialogItem.product.name, pinDialogItem.product.nameAr, lang)
+   750→                    : t('pos.item')
+   751→                  : '',
+   752→              })}
+   753→            </DialogDescription>
+   754→          </DialogHeader>
+   755→          <div className="space-y-1.5">
+   756→            <Input
+   757→              type="password"
+   758→              inputMode="numeric"
+   759→              autoFocus
+   760→              maxLength={DELETE_PIN_LENGTH}
+   761→              value={pinInput}
+   762→              onChange={(e) => {
+   763→                // digits only — a PIN is numeric by definition
+   764→                setPinInput(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+   765→                if (pinWrong) setPinWrong(false)
+   766→              }}
+   767→              onKeyDown={(e) => {
+   768→                if (e.key === 'Enter') {
+   769→                  e.preventDefault()
+   770→                  confirmPin()
+   771→                }
+   772→              }}
+   773→              placeholder={t('pos.pinPlaceholder')}
+   774→              aria-invalid={pinWrong || undefined}
+   775→              className={cn(
+   776→                'h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums',
+   777→                pinWrong && 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+   778→              )}
+   779→            />
+   780→            {pinWrong && (
+   781→              <p className="text-xs font-medium text-destructive" role="alert">
+   782→                {t('pos.pinWrong')}
+   783→              </p>
+   784→            )}
+   785→          </div>
+   786→          <DialogFooter>
+   787→            <Button variant="outline" onClick={closePinDialog} disabled={removeItem.isPending}>
+   788→              {t('common.cancel')}
+   789→            </Button>
+   790→            <Button
+   791→              variant="destructive"
+   792→              onClick={confirmPin}
+   793→              disabled={removeItem.isPending || pinInput.length < DELETE_PIN_LENGTH}
+   794→            >
+   795→              {removeItem.isPending ? (
+   796→                <Loader2 className="animate-spin" />
+   797→              ) : (
+   798→                <Trash2 className="size-4" />
+   799→              )}{' '}
+   800→              {t('pos.pinConfirm')}
+   801→            </Button>
+   802→          </DialogFooter>
+   803→        </DialogContent>
+   804→      </Dialog>
+   805→    </div>
+   806→  )
+   807→}
+   808→
+   809→function SummaryRow({
+   810→  label,
+   811→  value,
+   812→  valueClassName,
+   813→}: {
+   814→  label: string
+   815→  value: string
+   816→  valueClassName?: string
+   817→}) {
+   818→  return (
+   819→    <div className="flex items-center justify-between text-sm">
+   820→      <span className="text-muted-foreground">{label}</span>
+   821→      <span className={cn('tabular-nums', valueClassName)}>{value}</span>
+   822→    </div>
+   823→  )
+   824→}
+   825→
+   826→function SentItemRow({
+   827→  item,
+   828→  onServed,
+   829→  onRemove,
+   830→  servedPending,
+   831→  removePending,
+   832→  moveMode,
+   833→  moveSelected,
+   834→  onToggleMove,
+   835→}: {
+   836→  item: OrderItem
+   837→  onServed: () => void
+   838→  onRemove: () => void
+   839→  servedPending: boolean
+   840→  removePending: boolean
+   841→  moveMode: boolean
+   842→  moveSelected: boolean
+   843→  onToggleMove: () => void
+   844→}) {
+   845→  const { t, lang } = useI18n()
+   846→  const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
+   847→  const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+   848→  return (
+   849→    <div
+   850→      onClick={moveMode ? onToggleMove : undefined}
+   851→      role={moveMode ? 'button' : undefined}
+   852→      aria-pressed={moveMode ? moveSelected : undefined}
+   853→      className={cn(
+   854→        'flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0',
+   855→        moveMode && 'cursor-pointer rounded-lg transition-colors',
+   856→        moveMode && moveSelected && 'bg-[#714B67]/10',
+   857→      )}
+   858→    >
+   859→      {moveMode && (
+   860→        <span
+   861→          className={cn(
+   862→            'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+   863→            moveSelected
+   864→              ? 'border-[#714B67] bg-[#714B67] text-white'
+   865→              : 'border-[#E2E2E0] bg-white',
+   866→          )}
+   867→          aria-hidden
+   868→        >
+   869→          {moveSelected && <Check className="size-3.5" />}
+   870→        </span>
+   871→      )}
+   872→      <span
+   873→        className={cn(
+   874→          'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+   875→          chip,
+   876→        )}
+   877→      >
+   878→        {t(`status.item.${item.status}`)}
+   879→      </span>
+   880→      <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
+   881→        <p className="truncate text-sm font-medium">
+   882→          {formatQty(item.quantity)} ×{' '}
+   883→          {item.product
+   884→            ? localizedName(item.product.name, item.product.nameAr, lang)
+   885→            : t('pos.item')}
+   886→        </p>
+   887→        {item.notes && (
+   888→          <p className="flex items-center gap-1 truncate text-xs text-amber-600">
+   889→            <StickyNote className="size-3 shrink-0" />
+   890→            <span className="truncate">{item.notes}</span>
+   891→          </p>
+   892→        )}
+   893→      </div>
+   894→      <div className="flex shrink-0 flex-col items-end gap-1">
+   895→        <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
+   896→        {!moveMode && (
+   897→          <div className="flex gap-1">
+   898→            {item.status === 'ready' && (
+   899→              <Button
+   900→                variant="ghost"
+   901→                size="sm"
+   902→                className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+   903→                disabled={servedPending}
+   904→                onClick={onServed}
+   905→                title={t('pos.markServed')}
+   906→              >
+   907→                {servedPending ? (
+   908→                  <Loader2 className="size-3.5 animate-spin" />
+   909→                ) : (
+   910→                  <Check className="size-3.5" />
+   911→                )}
+   912→                {t('status.item.served')}
+   913→              </Button>
+   914→            )}
+   915→            <Button
+   916→              variant="ghost"
+   917→              size="icon"
+   918→              className="size-8 text-muted-foreground hover:text-destructive"
+   919→              disabled={removePending}
+   920→              onClick={onRemove}
+   921→              title={t('pos.removeItem')}
+   922→            >
+   923→              {removePending ? (
+   924→                <Loader2 className="size-4 animate-spin" />
+   925→              ) : (
+   926→                <Trash2 className="size-4" />
+   927→              )}
+   928→            </Button>
+   929→          </div>
+   930→        )}
+   931→      </div>
+   932→    </div>
+   933→  )
+   934→}
+   935→
+   936→function DraftRow({
+   937→  item,
+   938→  onQty,
+   939→  onEdit,
+   940→  onRemove,
+   941→}: {
+   942→  item: DraftItem
+   943→  onQty: (delta: number) => void
+   944→  onEdit: () => void
+   945→  onRemove: () => void
+   946→}) {
+   947→  const { t, lang } = useI18n()
+   948→  return (
+   949→    <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
+   950→      <div className="flex shrink-0 items-center gap-1">
+   951→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(-1)}>
+   952→          <Minus className="size-3.5" />
+   953→        </Button>
+   954→        <span className="w-8 text-center text-sm font-semibold tabular-nums">
+   955→          {formatQty(item.quantity)}
+   956→        </span>
+   957→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(1)}>
+   958→          <Plus className="size-3.5" />
+   959→        </Button>
+   960→      </div>
+   961→      <button
+   962→        type="button"
+   963→        className="min-w-0 flex-1 text-start"
+   964→        onClick={onEdit}
+   965→        title={t('pos.editItemDesc')}
+   966→      >
+   967→        <p className="flex items-center gap-1 truncate text-sm font-medium">
+   968→          <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
+   969→          {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
+   970→        </p>
+   971→        <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+   972→      </button>
+   973→      <span className="shrink-0 text-sm font-semibold tabular-nums">
+   974→        {formatCurrency(round2(item.quantity * item.price))}
+   975→      </span>
+   976→      <Button
+   977→        variant="ghost"
+   978→        size="icon"
+   979→        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+   980→        onClick={onRemove}
+   981→        title={t('pos.removeLine')}
+   982→      >
+   983→        <X className="size-4" />
+   984→      </Button>
+   985→    </div>
+   986→  )
+   987→}
+   988→

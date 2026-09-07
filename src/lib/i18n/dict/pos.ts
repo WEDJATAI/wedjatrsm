@@ -98,12 +98,20 @@ export const posDict: DictPair = {
     // item transfer (Move items)
     'pos.transferItems': 'Move items',
     'pos.moveNItems': 'Move {n} items',
+    'pos.moveNUnits': 'Move {n}',
+    'pos.moveQtyOf': 'of {qty}',
+    'pos.moveQtyLabel': 'Quantity to move',
     'pos.moveItemsTitle': 'Move items to another order',
     'pos.moveItemsDesc':
-      'Select the order that will receive the {n} selected item(s). Totals are recalculated on both orders.',
+      'Select the order that will receive the {n} selected item(s). Use − / + on a row to move only part of its quantity — totals are recalculated on both orders.',
     'pos.noOtherOpenOrders': 'No other open orders.',
     'pos.itemsMovedToast': '{n} item(s) moved to {target}',
-    'pos.moveModeHint': 'Tap sent items to select them for moving.',
+    'pos.moveModeHint': 'Tap items to select them; use − / + to move just part of a quantity.',
+
+    // history back-navigation restore
+    'pos.cannotReopenToast': 'This check is no longer open.',
+    'pos.orderRestoredToast': 'Reopened order #{order}',
+    'pos.draftRestoredToast': 'Unsent items restored for {table}.',
 
     // payment modal
     'pos.paymentDesc':
@@ -330,12 +338,20 @@ export const posDict: DictPair = {
     // item transfer (Move items)
     'pos.transferItems': 'نقل الأصناف',
     'pos.moveNItems': 'نقل {n} أصناف',
+    'pos.moveNUnits': 'نقل {n}',
+    'pos.moveQtyOf': 'من {qty}',
+    'pos.moveQtyLabel': 'الكمية المراد نقلها',
     'pos.moveItemsTitle': 'نقل الأصناف إلى طلب آخر',
     'pos.moveItemsDesc':
-      'اختر الطلب الذي سيستقبل الأصناف المحددة ({n} صنف). ستتم إعادة حساب الإجماليات على الطلبين.',
+      'اختر الطلب الذي سيستقبل الأصناف المحددة ({n} صنف). استخدم − / + في أي صف لنقل جزء من كميته فقط — ستتم إعادة حساب الإجماليات على الطلبين.',
     'pos.noOtherOpenOrders': 'لا توجد طلبات مفتوحة أخرى.',
     'pos.itemsMovedToast': 'تم نقل {n} صنف/أصناف إلى {target}',
-    'pos.moveModeHint': 'اضغط على الأصناف المُرسلة لتحديدها للنقل.',
+    'pos.moveModeHint': 'اضغط على الأصناف لتحديدها؛ استخدم − / + لنقل جزء من الكمية فقط.',
+
+    // history back-navigation restore
+    'pos.cannotReopenToast': 'هذا الحساب لم يعد مفتوحاً.',
+    'pos.orderRestoredToast': 'تمت إعادة فتح الطلب رقم #{order}',
+    'pos.draftRestoredToast': 'تم استرجاع الأصناف غير المُرسلة لـ {table}.',
 
     // payment modal
     'pos.paymentDesc':

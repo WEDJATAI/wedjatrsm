@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, UtensilsCrossed } from 'lucide-react'
 
@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { fetcher, apiFetch, clearSessionToken } from '@/lib/api'
 import { RESTAURANT_NAME } from '@/lib/constants'
 import { LanguageProvider, useI18n } from '@/lib/i18n'
+import { clearNav, currentNav, onNav, pushNav, replaceNav } from '@/lib/nav'
 import type { SessionUser } from '@/lib/types'
 import { useAppSettings } from '@/lib/use-settings'
 
@@ -109,6 +110,16 @@ function isViewAllowed(user: SessionUser, view: View): boolean {
   return perms.includes(VIEW_PERMISSION[view])
 }
 
+/** All known top-level view names (hash segments). */
+const ALL_VIEWS = new Set<string>(Object.keys(VIEW_PERMISSION))
+
+/** The view for the current hash when it is valid + allowed for this user. */
+function viewFromHash(user: SessionUser): View | null {
+  const nav = currentNav()
+  if (!nav || !ALL_VIEWS.has(nav.view)) return null
+  return isViewAllowed(user, nav.view as View) ? (nav.view as View) : null
+}
+
 /** Full-screen splash while the session is being checked. */
 function SplashScreen() {
   const { t } = useI18n()
@@ -140,20 +151,55 @@ function AdminFooter() {
 }
 
 function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
-  const [view, setViewState] = useState<View>(defaultView(user))
+  // Round 7: the top-level view lives in the location hash (#/pos, #/kitchen,
+  // #/reports… — the POS appends sub-hashes like #/pos/order/12, owned by
+  // PosView). A deep-linked/refreshed hash is honored when the user is
+  // allowed to see it, otherwise we fall back to their default view.
+  const [view, setViewState] = useState<View>(() => viewFromHash(user) ?? defaultView(user))
+
+  // First-load URL normalization ONLY (the view state itself was already
+  // resolved in the lazy initializer — this effect never calls setState
+  // directly): rewrite a bare/invalid hash, or a hash this user may not open,
+  // to the current view's hash. Then subscribe to browser back/forward +
+  // hand-edited hashes so the Back button moves between views in-app.
+  useEffect(() => {
+    const nav = currentNav()
+    const hashed = nav && ALL_VIEWS.has(nav.view) ? (nav.view as View) : null
+    if (hashed == null || !isViewAllowed(user, hashed)) replaceNav(view)
+    return onNav((incoming) => {
+      if (!incoming) return
+      const next = ALL_VIEWS.has(incoming.view) ? (incoming.view as View) : null
+      if (next && isViewAllowed(user, next)) {
+        // Idempotent — popstate + hashchange may both fire for one press.
+        setViewState((prev) => (prev === next ? prev : next))
+      } else {
+        // Unknown or disallowed hash (waiter hand-typing #/users): rewrite it
+        // to the default view instead of leaving the app dead-ended.
+        const fallback = defaultView(user)
+        replaceNav(fallback)
+        setViewState((prev) => (prev === fallback ? prev : fallback))
+      }
+    })
+  }, [user, view])
 
   const setView = useCallback((next: string | View) => {
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0 })
+      // Push a history entry only when the top-level view actually changes —
+      // clicking "POS" while already on #/pos/order/12 must not flatten the
+      // POS sub-hash (PosView re-asserts its deep hash when re-activated).
+      const top = currentNav()?.view
+      if (top !== next) pushNav(String(next))
+    }
     setViewState(next as View)
   }, [])
 
   const allowed = isViewAllowed(user, view) ? view : defaultView(user)
   const isAdminScreen = ADMIN_VIEWS.includes(allowed)
+  const posAllowed = isViewAllowed(user, 'pos')
 
   const content = useMemo(() => {
     switch (allowed) {
-      case 'pos':
-        return <PosView />
       case 'kitchen':
         return <KitchenView />
       case 'dashboard':
@@ -181,7 +227,7 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
       case 'settings':
         return <SettingsView />
       default:
-        return <PosView />
+        return null
     }
   }, [allowed, setView])
 
@@ -189,7 +235,15 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
     <div className="min-h-screen flex flex-col bg-background">
       <AppNavbar user={user} view={allowed} onNavigate={setView} onLogout={onLogout} />
       <main className="flex-1 flex flex-col">
-        {content}
+        {/* Round 7: the POS stays mounted (hidden) while other views are
+            open, so an in-progress order screen and unsent draft survive view
+            switches — and the browser Back button can return to them. */}
+        {posAllowed && (
+          <div className="flex min-h-0 flex-1 flex-col" hidden={allowed !== 'pos'}>
+            <PosView active={allowed === 'pos'} />
+          </div>
+        )}
+        {allowed !== 'pos' && content}
         {isAdminScreen && <AdminFooter />}
       </main>
       {/* Idle session timeout (shared terminals) — 15 min warn + 60s countdown */}
@@ -248,6 +302,9 @@ function RmsApp() {
     } catch {
       // cookie is cleared server-side; ignore network hiccups
     }
+    // Drop the app hash so the next sign-in starts from a clean default view
+    // (Round 7 hash-based navigation).
+    clearNav()
     queryClient.removeQueries()
     await refetch()
   }, [queryClient, refetch])

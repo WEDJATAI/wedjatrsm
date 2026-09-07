@@ -104,8 +104,12 @@ export default function CartPanel({
   const [pinWrong, setPinWrong] = useState(false)
 
   // ── Item transfer ("Move items") state ────────────────────────────
+  // moveQty holds a per-row quantity to move (default = the row's full
+  // quantity when selected); a partial value splits the row on the server —
+  // the classic "wrong check" fix (e.g. move just 1 of 3 Koshari).
   const [moveMode, setMoveMode] = useState(false)
   const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+  const [moveQty, setMoveQty] = useState<Record<number, number>>({})
   const [moveDialogOpen, setMoveDialogOpen] = useState(false)
 
   const totals = computeCartTotals(order, draft)
@@ -206,20 +210,22 @@ export default function CartPanel({
   })
 
   // ── Item transfer mutation (move sent items to another open order) ──
+  // Sends the per-row quantities so the server can split rows (partial moves).
   const transferItems = useMutation({
     mutationFn: (vars: {
       sourceId: number
-      itemIds: number[]
+      items: { id: number; quantity: number }[]
       targetOrderId: number
       targetLabel: string
     }) =>
       apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
         method: 'POST',
-        body: { itemIds: vars.itemIds, targetOrderId: vars.targetOrderId },
+        body: { items: vars.items, targetOrderId: vars.targetOrderId },
       }),
     onSuccess: async (_data, vars) => {
+      const totalUnitsMoved = round2(vars.items.reduce((n, entry) => n + entry.quantity, 0))
       toast.success(
-        t('pos.itemsMovedToast', { n: vars.itemIds.length, target: vars.targetLabel }),
+        t('pos.itemsMovedToast', { n: totalUnitsMoved, target: vars.targetLabel }),
       )
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['orders'] }),
@@ -238,32 +244,70 @@ export default function CartPanel({
   const enterMoveMode = () => {
     setMoveMode(true)
     setMoveSelected(new Set())
+    setMoveQty({})
   }
 
   const exitMoveMode = () => {
     setMoveMode(false)
     setMoveSelected(new Set())
+    setMoveQty({})
     setMoveDialogOpen(false)
   }
 
-  const toggleMoveItem = (itemId: number) => {
-    setMoveSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(itemId)) next.delete(itemId)
-      else next.add(itemId)
-      return next
-    })
+  // Toggling a row ON seeds its move quantity with the FULL row quantity;
+  // toggling OFF forgets the per-row quantity.
+  const toggleMoveItem = (item: OrderItem) => {
+    if (moveSelected.has(item.id)) {
+      setMoveSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(item.id)
+        return next
+      })
+      setMoveQty((prev) => {
+        const next = { ...prev }
+        delete next[item.id]
+        return next
+      })
+    } else {
+      setMoveSelected((prev) => {
+        const next = new Set(prev)
+        next.add(item.id)
+        return next
+      })
+      setMoveQty((prev) => ({ ...prev, [item.id]: item.quantity }))
+    }
   }
 
   // Only ids that still exist on the (live-polled) order — stale ids are dropped.
   const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
   const moveCount = selectedMoveIds.length
+  const liveItemById = new Map((order?.items ?? []).map((i) => [i.id, i]))
+
+  // Effective units to move for a row: the stepper value when present,
+  // clamped against the LIVE row quantity (polling may have changed it).
+  const moveQtyFor = (id: number): number => {
+    const live = liveItemById.get(id)
+    if (!live) return 0
+    return round2(Math.min(moveQty[id] ?? live.quantity, live.quantity))
+  }
+
+  // Stepper handler — clamps between 1 and the live row quantity.
+  const changeMoveQty = (item: OrderItem, delta: number) => {
+    setMoveQty((prev) => {
+      const current = prev[item.id] ?? item.quantity
+      const next = Math.min(Math.max(round2(current + delta), 1), item.quantity)
+      return { ...prev, [item.id]: round2(next) }
+    })
+  }
+
+  // Total UNITS selected to move (CTA label + moved toast).
+  const moveUnits = round2(selectedMoveIds.reduce((n, id) => n + moveQtyFor(id), 0))
 
   const pickMoveTarget = (target: Order) => {
     if (orderId == null || moveCount === 0) return
     transferItems.mutate({
       sourceId: orderId,
-      itemIds: selectedMoveIds,
+      items: selectedMoveIds.map((id) => ({ id, quantity: moveQtyFor(id) })),
       targetOrderId: target.id,
       targetLabel: target.table?.name ?? t('common.takeaway'),
     })
@@ -403,7 +447,13 @@ export default function CartPanel({
                     removePending={removeItem.isPending && removeItem.variables?.itemId === item.id}
                     moveMode={moveMode}
                     moveSelected={moveSelected.has(item.id)}
-                    onToggleMove={() => toggleMoveItem(item.id)}
+                    onToggleMove={() => toggleMoveItem(item)}
+                    moveQty={moveMode && moveSelected.has(item.id) ? moveQtyFor(item.id) : undefined}
+                    onMoveQty={
+                      moveMode && moveSelected.has(item.id)
+                        ? (delta: number) => changeMoveQty(item, delta)
+                        : undefined
+                    }
                   />
                 ))}
               </section>
@@ -493,7 +543,7 @@ export default function CartPanel({
               ) : (
                 <ArrowLeftRight className="size-5" />
               )}
-              <span className="truncate">{t('pos.moveNItems', { n: moveCount })}</span>
+              <span className="truncate">{t('pos.moveNUnits', { n: moveUnits })}</span>
             </Button>
           </div>
         ) : (
@@ -832,6 +882,8 @@ function SentItemRow({
   moveMode,
   moveSelected,
   onToggleMove,
+  moveQty,
+  onMoveQty,
 }: {
   item: OrderItem
   onServed: () => void
@@ -841,94 +893,140 @@ function SentItemRow({
   moveMode: boolean
   moveSelected: boolean
   onToggleMove: () => void
+  /** units to move for this row (partial move); defaults to the full row */
+  moveQty?: number
+  /** stepper delta — the parent clamps against the live row quantity */
+  onMoveQty?: (delta: number) => void
 }) {
   const { t, lang } = useI18n()
   const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
   const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+  // Partial-quantity stepper: only for selected rows holding more than 1 unit.
+  const showMoveQty = moveMode && moveSelected && item.quantity > 1
+  const qty = moveQty ?? item.quantity
   return (
     <div
       onClick={moveMode ? onToggleMove : undefined}
       role={moveMode ? 'button' : undefined}
       aria-pressed={moveMode ? moveSelected : undefined}
       className={cn(
-        'flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0',
+        'border-b border-border/60 last:border-b-0',
         moveMode && 'cursor-pointer rounded-lg transition-colors',
         moveMode && moveSelected && 'bg-[#714B67]/10',
       )}
     >
-      {moveMode && (
+      <div className="flex items-start gap-2 py-2.5">
+        {moveMode && (
+          <span
+            className={cn(
+              'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+              moveSelected
+                ? 'border-[#714B67] bg-[#714B67] text-white'
+                : 'border-[#E2E2E0] bg-white',
+            )}
+            aria-hidden
+          >
+            {moveSelected && <Check className="size-3.5" />}
+          </span>
+        )}
         <span
           className={cn(
-            'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
-            moveSelected
-              ? 'border-[#714B67] bg-[#714B67] text-white'
-              : 'border-[#E2E2E0] bg-white',
+            'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+            chip,
           )}
-          aria-hidden
         >
-          {moveSelected && <Check className="size-3.5" />}
+          {t(`status.item.${item.status}`)}
         </span>
-      )}
-      <span
-        className={cn(
-          'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-          chip,
-        )}
-      >
-        {t(`status.item.${item.status}`)}
-      </span>
-      <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
-        <p className="truncate text-sm font-medium">
-          {formatQty(item.quantity)} ×{' '}
-          {item.product
-            ? localizedName(item.product.name, item.product.nameAr, lang)
-            : t('pos.item')}
-        </p>
-        {item.notes && (
-          <p className="flex items-center gap-1 truncate text-xs text-amber-600">
-            <StickyNote className="size-3 shrink-0" />
-            <span className="truncate">{item.notes}</span>
+        <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
+          <p className="truncate text-sm font-medium">
+            {formatQty(item.quantity)} ×{' '}
+            {item.product
+              ? localizedName(item.product.name, item.product.nameAr, lang)
+              : t('pos.item')}
           </p>
-        )}
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
-        {!moveMode && (
-          <div className="flex gap-1">
-            {item.status === 'ready' && (
+          {item.notes && (
+            <p className="flex items-center gap-1 truncate text-xs text-amber-600">
+              <StickyNote className="size-3 shrink-0" />
+              <span className="truncate">{item.notes}</span>
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
+          {!moveMode && (
+            <div className="flex gap-1">
+              {item.status === 'ready' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                  disabled={servedPending}
+                  onClick={onServed}
+                  title={t('pos.markServed')}
+                >
+                  {servedPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5" />
+                  )}
+                  {t('status.item.served')}
+                </Button>
+              )}
               <Button
                 variant="ghost"
-                size="sm"
-                className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
-                disabled={servedPending}
-                onClick={onServed}
-                title={t('pos.markServed')}
+                size="icon"
+                className="size-8 text-muted-foreground hover:text-destructive"
+                disabled={removePending}
+                onClick={onRemove}
+                title={t('pos.removeItem')}
               >
-                {servedPending ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                {removePending ? (
+                  <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Check className="size-3.5" />
+                  <Trash2 className="size-4" />
                 )}
-                {t('status.item.served')}
               </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 text-muted-foreground hover:text-destructive"
-              disabled={removePending}
-              onClick={onRemove}
-              title={t('pos.removeItem')}
-            >
-              {removePending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Trash2 className="size-4" />
-              )}
-            </Button>
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
+      {showMoveQty && (
+        /* Partial-quantity stepper — clicks here never toggle the selection. */
+        <div
+          role="group"
+          aria-label={t('pos.moveQtyLabel')}
+          title={t('pos.moveQtyLabel')}
+          onClick={(e) => e.stopPropagation()}
+          className="mb-2 ms-7 flex items-center gap-2 rounded-b-lg bg-[#714B67]/[0.06] px-2 py-1.5"
+        >
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-10 shrink-0"
+            disabled={qty <= 1}
+            onClick={() => onMoveQty?.(-1)}
+          >
+            <Minus className="size-4" />
+            <span className="sr-only">−</span>
+          </Button>
+          <span className="min-w-8 shrink-0 text-center text-sm font-semibold tabular-nums">
+            {formatQty(qty)}
+          </span>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-10 shrink-0"
+            disabled={qty >= item.quantity}
+            onClick={() => onMoveQty?.(1)}
+          >
+            <Plus className="size-4" />
+            <span className="sr-only">+</span>
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {t('pos.moveQtyOf', { qty: formatQty(item.quantity) })}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

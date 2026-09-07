@@ -1,0 +1,682 @@
+     1→'use client'
+     2→
+     3→import { useState, type ReactNode } from 'react'
+     4→import { Check, Minus, Plus, Printer, ReceiptText } from 'lucide-react'
+     5→
+     6→import { Button } from '@/components/ui/button'
+     7→import {
+     8→  Dialog,
+     9→  DialogContent,
+    10→  DialogDescription,
+    11→  DialogHeader,
+    12→  DialogTitle,
+    13→} from '@/components/ui/dialog'
+    14→import { Input } from '@/components/ui/input'
+    15→import { Label } from '@/components/ui/label'
+    16→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    17→import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    18→import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+    19→import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
+    20→import { bilingualLabel, bothLabels, localizedName, useI18n } from '@/lib/i18n'
+    21→import { useAppSettings } from '@/lib/use-settings'
+    22→import { cn } from '@/lib/utils'
+    23→import type { Order } from '@/lib/types'
+    24→import { escapeHtml, round2 } from './pos-utils'
+    25→
+    26→/** A split part of the check (when opened from the payment modal, mirrors its split config). */
+    27→export type CheckSplitRow = { label: string; amount: number; method?: string }
+    28→
+    29→type CheckModalProps = {
+    30→  order: Order
+    31→  open: boolean
+    32→  onOpenChange: (open: boolean) => void
+    33→  /** Optional split rows (from the payment modal) — defaults the modal to Split mode showing them. */
+    34→  rows?: CheckSplitRow[]
+    35→}
+    36→
+    37→type CheckTitleKey = 'guestCheck' | 'bill' | 'invoice'
+    38→const CHECK_TITLE_KEYS: CheckTitleKey[] = ['guestCheck', 'bill', 'invoice']
+    39→const CHECK_TITLE_LABEL_KEYS: Record<CheckTitleKey, string> = {
+    40→  guestCheck: 'pos.titleGuestCheck',
+    41→  bill: 'pos.titleBill',
+    42→  invoice: 'pos.titleInvoice',
+    43→}
+    44→
+    45→type SplitKind = 'rows' | 'equal' | 'items'
+    46→
+    47→// ── Bilingual label helpers (the paper ALWAYS shows EN + AR) ─────────
+    48→
+    49→/** "English · العربية" from a template key with its {vars} filled in. */
+    50→function bilingualVars(key: string, vars: Record<string, string | number>): string {
+    51→  const { en, ar } = bothLabels(key)
+    52→  const fill = (tpl: string) =>
+    53→    Object.entries(vars).reduce((s, [name, v]) => s.split(`{${name}}`).join(String(v)), tpl)
+    54→  const enFilled = fill(en)
+    55→  const arFilled = fill(ar)
+    56→  return enFilled === arFilled ? enFilled : `${enFilled} · ${arFilled}`
+    57→}
+    58→
+    59→/**
+    60→ * Payment-plan rows arrive with UI-language labels built by the payment
+    61→ * modal ("Part 1 of 3", "Payer 2", "Full bill"…). The printed paper shows
+    62→ * BOTH languages, so reverse-match the label against the known templates
+    63→ * and rebuild it bilingually; unknown labels pass through untouched.
+    64→ */
+    65→const SPLIT_LABEL_KEYS = ['pos.fullBill', 'pos.partOf', 'pos.payer', 'pos.paymentN'] as const
+    66→
+    67→function bilingualSplitLabel(label: string): string {
+    68→  for (const key of SPLIT_LABEL_KEYS) {
+    69→    const { en, ar } = bothLabels(key)
+    70→    if (label === en || label === ar) return en === ar ? en : `${en} · ${ar}`
+    71→    for (const tpl of [en, ar]) {
+    72→      if (!tpl.includes('{')) continue
+    73→      const pattern = tpl
+    74→        .replace(/\{[a-zA-Z]+\}/g, '\u0000')
+    75→        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    76→        .replace(/\u0000/g, '(\\d+)')
+    77→      const m = label.match(new RegExp(`^${pattern}$`))
+    78→      if (!m) continue
+    79→      const names = Array.from(tpl.matchAll(/\{([a-zA-Z]+)\}/g), (x) => x[1])
+    80→      const vars: Record<string, string | number> = {}
+    81→      names.forEach((name, i) => {
+    82→        vars[name] = m[i + 1] ?? ''
+    83→      })
+    84→      return bilingualVars(key, vars)
+    85→    }
+    86→  }
+    87→  return label
+    88→}
+    89→
+    90→type CheckModel = {
+    91→  /** bilingual "Guest Check · حساب الضيف" */
+    92→  title: string
+    93→  customer: string
+    94→  orderId: number
+    95→  tableName: string
+    96→  waiter: string
+    97→  date: string
+    98→  items: { qty: string; name: string; nameAr: string | null; total: number; notes: string | null }[]
+    99→  subtotal: number
+   100→  discount: number
+   101→  /** 14% VAT */
+   102→  tax: number
+   103→  /** 12% service tax (in addition to the VAT) */
+   104→  serviceTax: number
+   105→  total: number
+   106→  paid: number
+   107→  remaining: number
+   108→  /** deferred check (client pays later) — stamped on the paper */
+   109→  deferred: boolean
+   110→  clientName: string | null
+   111→  split: CheckSplitRow[] | null
+   112→  splitTotal: number | null
+   113→  reference: { label: string; amount: number }[]
+   114→}
+   115→
+   116→function buildCheckModel(
+   117→  order: Order,
+   118→  opts: {
+   119→    title: string
+   120→    customer: string
+   121→    mode: 'full' | 'split'
+   122→    splitKind: SplitKind
+   123→    rows: CheckSplitRow[] | undefined
+   124→    eqPayers: number
+   125→    selectedIds: Set<number>
+   126→  },
+   127→): CheckModel {
+   128→  // Paper item lines are bilingual: English primary + Arabic secondary.
+   129→  const fallbackItem = bothLabels('pos.item')
+   130→  const base = {
+   131→    title: opts.title,
+   132→    customer: opts.customer.trim(),
+   133→    orderId: order.id,
+   134→    tableName: order.table?.name ?? bilingualLabel('common.takeaway'),
+   135→    waiter: order.user?.name ?? '—',
+   136→    date: formatDateTime(order.createdAt),
+   137→  }
+   138→  const allItems = order.items.map((it) => {
+   139→    const name = it.product?.name ?? fallbackItem.en
+   140→    let nameAr: string | null = null
+   141→    if (it.product?.nameAr && it.product.nameAr.trim()) nameAr = it.product.nameAr.trim()
+   142→    else if (!it.product) nameAr = fallbackItem.ar
+   143→    return {
+   144→      qty: formatQty(it.quantity),
+   145→      name,
+   146→      nameAr: nameAr && nameAr !== name ? nameAr : null,
+   147→      total: round2(it.quantity * it.unitPrice),
+   148→      notes: it.notes,
+   149→    }
+   150→  })
+   151→  const orderSubtotal = round2(order.subtotalAmount)
+   152→  const orderDiscount = round2(order.discountAmount)
+   153→  const orderTotal = round2(order.totalAmount)
+   154→  const paid = round2(order.paidAmount)
+   155→  const remaining = round2(Math.max(0, order.remainingAmount))
+   156→  const deferred = order.status === 'deferred'
+   157→  const clientName = deferred ? order.clientName : null
+   158→  const isSplit = opts.mode === 'split'
+   159→
+   160→  // ── By items: the check covers ONLY the selected items ──
+   161→  if (isSplit && opts.splitKind === 'items') {
+   162→    const items = allItems.filter((_, i) => opts.selectedIds.has(order.items[i].id))
+   163→    const lineSum = round2(items.reduce((s, it) => s + it.total, 0))
+   164→    const ratio = orderSubtotal > 0 ? lineSum / orderSubtotal : 0
+   165→    const discount = round2(orderDiscount * ratio)
+   166→    const baseAmount = Math.max(0, round2(lineSum - discount))
+   167→    const tax = round2(baseAmount * TAX_RATE)
+   168→    const serviceTax = round2(baseAmount * SERVICE_TAX_RATE)
+   169→    const total = round2(baseAmount + tax + serviceTax)
+   170→    return {
+   171→      ...base,
+   172→      items,
+   173→      subtotal: lineSum,
+   174→      discount,
+   175→      tax,
+   176→      serviceTax,
+   177→      total,
+   178→      paid,
+   179→      remaining,
+   180→      deferred,
+   181→      clientName,
+   182→      split: null,
+   183→      splitTotal: null,
+   184→      reference: [
+   185→        { label: bilingualLabel('pos.fullBillTotal'), amount: orderTotal },
+   186→        { label: bilingualLabel('pos.remainingOnBill'), amount: remaining },
+   187→      ],
+   188→    }
+   189→  }
+   190→
+   191→  // ── Full bill / payment-plan rows / equal split: itemized full bill ──
+   192→  let split: CheckSplitRow[] | null = null
+   193→  if (isSplit && opts.splitKind === 'rows' && opts.rows && opts.rows.length > 0) {
+   194→    // mirror rows of the payment modal's split chips — printed bilingually
+   195→    split = opts.rows.map((r) => ({ ...r, label: bilingualSplitLabel(r.label) }))
+   196→  } else if (isSplit && opts.splitKind === 'equal') {
+   197→    const part = round2(remaining / opts.eqPayers)
+   198→    const amounts = Array.from({ length: opts.eqPayers }, () => part)
+   199→    amounts[opts.eqPayers - 1] = round2(Math.max(0, remaining - round2(part * (opts.eqPayers - 1))))
+   200→    split = amounts.map((amount, i) => ({
+   201→      label: bilingualVars('pos.partOf', { i: i + 1, n: opts.eqPayers }),
+   202→      amount,
+   203→    }))
+   204→  }
+   205→
+   206→  return {
+   207→    ...base,
+   208→    items: allItems,
+   209→    subtotal: orderSubtotal,
+   210→    discount: orderDiscount,
+   211→    tax: round2(order.taxAmount),
+   212→    serviceTax: round2(order.serviceTaxAmount),
+   213→    total: orderTotal,
+   214→    paid,
+   215→    remaining,
+   216→    deferred,
+   217→    clientName,
+   218→    split,
+   219→    splitTotal: split ? round2(split.reduce((s, r) => s + r.amount, 0)) : null,
+   220→    reference: [],
+   221→  }
+   222→}
+   223→
+   224→function buildCheckHtml(
+   225→  m: CheckModel,
+   226→  restaurantName: string,
+   227→  restaurantNameAr: string,
+   228→  isRTL: boolean,
+   229→): string {
+   230→  const row = (l: string, r: string, cls = '') =>
+   231→    `<div class="r ${cls}"><span>${escapeHtml(l)}</span><span>${escapeHtml(r)}</span></div>`
+   232→  const dashed = '<div class="dashed"></div>'
+   233→  const center = (text: string, cls = '') => `<p class="${cls}">${escapeHtml(text)}</p>`
+   234→  // Arabic secondary lines: RTL direction, aligned with the paper's text edge.
+   235→  const arAlign = isRTL ? 'right' : 'left'
+   236→  const deferredStamp = bothLabels('pos.deferredStamp')
+   237→  const lines: string[] = []
+   238→  lines.push(`<h3>${escapeHtml(restaurantName)}</h3>`)
+   239→  lines.push(`<p class="arn" dir="rtl">${escapeHtml(restaurantNameAr)}</p>`)
+   240→  lines.push(center(m.title.toUpperCase()))
+   241→  if (m.customer)
+   242→    lines.push(
+   243→      `<p class="cust">${escapeHtml(bilingualLabel('pos.customer'))}: ${escapeHtml(m.customer)}</p>`,
+   244→    )
+   245→  lines.push(dashed)
+   246→  lines.push(row(`${bilingualLabel('common.order')} #${m.orderId}`, m.tableName))
+   247→  lines.push(row(bilingualLabel('pos.waiter'), m.waiter))
+   248→  lines.push(row(bilingualLabel('common.date'), m.date))
+   249→  lines.push(dashed)
+   250→  for (const it of m.items) {
+   251→    lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
+   252→    if (it.nameAr) lines.push(`<p class="ar" dir="rtl">${escapeHtml(it.nameAr)}</p>`)
+   253→    if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
+   254→  }
+   255→  lines.push(dashed)
+   256→  lines.push(row(bilingualLabel('money.subtotal'), formatCurrency(m.subtotal)))
+   257→  if (m.discount > 0) lines.push(row(bilingualLabel('money.discount'), `-${formatCurrency(m.discount)}`))
+   258→  lines.push(row(bilingualLabel('money.tax'), formatCurrency(m.tax)))
+   259→  lines.push(row(bilingualLabel('money.serviceTax'), formatCurrency(m.serviceTax)))
+   260→  lines.push(row(bilingualLabel('money.total'), formatCurrency(m.total), 'bold'))
+   261→  if (m.deferred) {
+   262→    lines.push(
+   263→      `<p class="stampline"><span class="stampd"><span class="se">${escapeHtml(
+   264→        deferredStamp.en,
+   265→      )}</span><span class="sep"> · </span><span class="sar" dir="rtl">${escapeHtml(
+   266→        deferredStamp.ar,
+   267→      )}</span></span></p>`,
+   268→    )
+   269→    if (m.clientName)
+   270→      lines.push(row(bilingualLabel('pos.deferredClientLabel'), m.clientName))
+   271→  }
+   272→  if (m.paid > 0) lines.push(row(bilingualLabel('money.paid'), formatCurrency(m.paid)))
+   273→  if (m.split && m.split.length > 0) {
+   274→    lines.push(dashed)
+   275→    lines.push(center(bilingualLabel('pos.splitBill').toUpperCase(), 'bold'))
+   276→    m.split.forEach((p) => {
+   277→      const method = p.method ? ` (${bilingualLabel(`status.payment.${p.method}`)})` : ''
+   278→      lines.push(row(`${p.label}${method}`, formatCurrency(p.amount)))
+   279→    })
+   280→    if (m.splitTotal != null)
+   281→      lines.push(row(bilingualLabel('pos.splitTotal'), formatCurrency(m.splitTotal), 'bold'))
+   282→    lines.push(row(bilingualLabel('pos.remainingTotal'), formatCurrency(m.remaining)))
+   283→  }
+   284→  for (const ref of m.reference) lines.push(row(ref.label, formatCurrency(ref.amount)))
+   285→  lines.push(dashed)
+   286→  lines.push(center(bilingualLabel('pos.checkFooter')))
+   287→  return lines.join('\n')
+   288→}
+   289→
+   290→export default function CheckModal({ order, open, onOpenChange, rows }: CheckModalProps) {
+   291→  const { t, lang, isRTL } = useI18n()
+   292→  const { restaurantName, restaurantNameAr } = useAppSettings()
+   293→  // Initial state is derived from the props at mount time — parents mount this
+   294→  // modal fresh whenever a new check flow starts (pos-view keys it by order,
+   295→  // the payment modal keeps it mounted for one payment session). The `rows`
+   296→  // prop itself is read LIVE so a check opened from the payment screen always
+   297→  // mirrors its CURRENT split configuration.
+   298→  const [customerName, setCustomerName] = useState('')
+   299→  const [title, setTitle] = useState<CheckTitleKey>('guestCheck')
+   300→  const [mode, setMode] = useState<'full' | 'split'>(() => ((rows?.length ?? 0) > 0 ? 'split' : 'full'))
+   301→  const [splitKind, setSplitKind] = useState<SplitKind>(() => ((rows?.length ?? 0) > 0 ? 'rows' : 'equal'))
+   302→  const [eqPayers, setEqPayers] = useState(2)
+   303→  const [selectedIds, setSelectedIds] = useState<Set<number>>(
+   304→    () => new Set(order.items.map((it) => it.id)),
+   305→  )
+   306→
+   307→  const hasRows = (rows?.length ?? 0) > 0
+   308→  const effSplitKind: SplitKind = hasRows ? splitKind : splitKind === 'rows' ? 'equal' : splitKind
+   309→  const titleLabel = t(CHECK_TITLE_LABEL_KEYS[title])
+   310→  // The paper title is always bilingual (EN · AR), independent of the UI language.
+   311→  const titleBi = bilingualLabel(CHECK_TITLE_LABEL_KEYS[title])
+   312→
+   313→  const model = buildCheckModel(order, {
+   314→    title: titleBi,
+   315→    customer: customerName,
+   316→    mode,
+   317→    splitKind: effSplitKind,
+   318→    rows,
+   319→    eqPayers,
+   320→    selectedIds,
+   321→  })
+   322→
+   323→  const clampPayers = (raw: number) => {
+   324→    const n = Math.round(Number.isFinite(raw) ? raw : 2)
+   325→    return Math.min(12, Math.max(2, n))
+   326→  }
+   327→
+   328→  const toggleItem = (itemId: number) => {
+   329→    setSelectedIds((prev) => {
+   330→      const next = new Set(prev)
+   331→      if (next.has(itemId)) next.delete(itemId)
+   332→      else next.add(itemId)
+   333→      return next
+   334→    })
+   335→  }
+   336→
+   337→  const selectedCount = order.items.filter((it) => selectedIds.has(it.id)).length
+   338→  const selectedSum = round2(
+   339→    order.items
+   340→      .filter((it) => selectedIds.has(it.id))
+   341→      .reduce((s, it) => s + it.quantity * it.unitPrice, 0),
+   342→  )
+   343→
+   344→  const handlePrint = () => {
+   345→    const html = buildCheckHtml(model, restaurantName, restaurantNameAr, isRTL)
+   346→    const w = window.open('', '_blank', 'width=380,height=640')
+   347→    if (!w) {
+   348→      window.alert(t('pos.popupBlocked'))
+   349→      return
+   350→    }
+   351→    const noteAlign = isRTL ? 'right' : 'left'
+   352→    const arAlign = isRTL ? 'right' : 'left'
+   353→    // Letter-spacing on the Latin part only (Arabic letters must stay joined),
+   354→    // and only when the UI language is English.
+   355→    const stampSpacing = isRTL ? 'normal' : '4px'
+   356→    w.document.write(
+   357→      `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(
+   358→        model.title,
+   359→      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold} .ar{font-size:11px;text-align:${arAlign};direction:rtl;margin:0} .arn{font-weight:bold;direction:rtl;margin:2px 0} .stampline{margin:10px 0;text-align:center} .stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stampd .se{letter-spacing:${stampSpacing}} .stampd .sar{direction:rtl} .stampd .sep{letter-spacing:normal}</style></head><body>${html}</body></html>`,
+   360→    )
+   361→    w.document.close()
+   362→    w.focus()
+   363→    w.print()
+   364→  }
+   365→
+   366→  const deferredStamp = bothLabels('pos.deferredStamp')
+   367→
+   368→  return (
+   369→    <Dialog open={open} onOpenChange={onOpenChange}>
+   370→      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-3xl">
+   371→        <DialogHeader>
+   372→          <DialogTitle className="flex items-center gap-2">
+   373→            <ReceiptText className="size-5 text-[#714B67]" /> {t('pos.printCheck')} —{' '}
+   374→            {t('common.order')} #{order.id}
+   375→          </DialogTitle>
+   376→          <DialogDescription>{t('pos.checkDesc')}</DialogDescription>
+   377→        </DialogHeader>
+   378→
+   379→        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_320px] md:items-start">
+   380→          {/* ── Controls ── */}
+   381→          <div className="space-y-4">
+   382→            <div className="space-y-1.5">
+   383→              <Label htmlFor="check-customer">{t('pos.customerNameHint')}</Label>
+   384→              <Input
+   385→                id="check-customer"
+   386→                value={customerName}
+   387→                onChange={(e) => setCustomerName(e.target.value)}
+   388→                placeholder={t('pos.customerPlaceholder')}
+   389→                maxLength={60}
+   390→                className="h-11 rounded-xl"
+   391→              />
+   392→            </div>
+   393→
+   394→            <div className="space-y-1.5">
+   395→              <Label>{t('pos.checkTitleLabel')}</Label>
+   396→              <Select value={title} onValueChange={(v) => setTitle(v as CheckTitleKey)}>
+   397→                <SelectTrigger className="h-11 w-full rounded-xl">
+   398→                  <SelectValue />
+   399→                </SelectTrigger>
+   400→                <SelectContent>
+   401→                  {CHECK_TITLE_KEYS.map((k) => (
+   402→                    <SelectItem key={k} value={k}>
+   403→                      {t(CHECK_TITLE_LABEL_KEYS[k])}
+   404→                    </SelectItem>
+   405→                  ))}
+   406→                </SelectContent>
+   407→              </Select>
+   408→            </div>
+   409→
+   410→            <div className="space-y-1.5">
+   411→              <Label>{t('pos.mode')}</Label>
+   412→              <Tabs value={mode} onValueChange={(v) => setMode(v as 'full' | 'split')}>
+   413→                <TabsList className="grid h-11 w-full grid-cols-2 rounded-xl">
+   414→                  <TabsTrigger value="full" className="rounded-lg text-sm">
+   415→                    {t('pos.fullBill')}
+   416→                  </TabsTrigger>
+   417→                  <TabsTrigger value="split" className="rounded-lg text-sm">
+   418→                    {t('pos.split')}
+   419→                  </TabsTrigger>
+   420→                </TabsList>
+   421→              </Tabs>
+   422→            </div>
+   423→
+   424→            {mode === 'split' && (
+   425→              <div className="space-y-3 rounded-xl border border-[#E2E2E0] bg-white p-3">
+   426→                <div className="flex flex-wrap gap-2">
+   427→                  {hasRows && (
+   428→                    <SplitPill active={splitKind === 'rows'} onClick={() => setSplitKind('rows')}>
+   429→                      {t('pos.paymentPlan')}
+   430→                    </SplitPill>
+   431→                  )}
+   432→                  <SplitPill active={splitKind === 'equal'} onClick={() => setSplitKind('equal')}>
+   433→                    {t('pos.equalSplit')}
+   434→                  </SplitPill>
+   435→                  <SplitPill active={splitKind === 'items'} onClick={() => setSplitKind('items')}>
+   436→                    {t('pos.byItems')}
+   437→                  </SplitPill>
+   438→                </div>
+   439→
+   440→                {effSplitKind === 'rows' && rows && (
+   441→                  <div className="space-y-1.5">
+   442→                    {rows.map((r, i) => (
+   443→                      <div
+   444→                        key={i}
+   445→                        className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm"
+   446→                      >
+   447→                        <span className="min-w-0 truncate">
+   448→                          {r.label}
+   449→                          {r.method && (
+   450→                            <span className="ms-1.5 text-xs text-muted-foreground">
+   451→                              ({t(`status.payment.${r.method}`)})
+   452→                            </span>
+   453→                          )}
+   454→                        </span>
+   455→                        <span className="shrink-0 font-semibold tabular-nums text-[#714B67]">
+   456→                          {formatCurrency(r.amount)}
+   457→                        </span>
+   458→                      </div>
+   459→                    ))}
+   460→                    <p className="text-xs text-muted-foreground">{t('pos.mirrorHint')}</p>
+   461→                  </div>
+   462→                )}
+   463→
+   464→                {effSplitKind === 'equal' && (
+   465→                  <div className="space-y-2">
+   466→                    <div className="flex items-center justify-between gap-2">
+   467→                      <span className="text-sm font-medium">{t('pos.splitBetween')}</span>
+   468→                      <div className="flex items-center gap-1">
+   469→                        <Button
+   470→                          variant="outline"
+   471→                          size="icon"
+   472→                          className="size-11 rounded-lg"
+   473→                          disabled={eqPayers <= 2}
+   474→                          onClick={() => setEqPayers(clampPayers(eqPayers - 1))}
+   475→                          aria-label={t('pos.fewerPayers')}
+   476→                        >
+   477→                          <Minus />
+   478→                        </Button>
+   479→                        <span className="w-10 text-center text-base font-bold tabular-nums">
+   480→                          {eqPayers}
+   481→                        </span>
+   482→                        <Button
+   483→                          variant="outline"
+   484→                          size="icon"
+   485→                          className="size-11 rounded-lg"
+   486→                          disabled={eqPayers >= 12}
+   487→                          onClick={() => setEqPayers(clampPayers(eqPayers + 1))}
+   488→                          aria-label={t('pos.morePayers')}
+   489→                        >
+   490→                          <Plus />
+   491→                        </Button>
+   492→                      </div>
+   493→                    </div>
+   494→                    <p className="text-xs text-muted-foreground">{t('pos.equalHint')}</p>
+   495→                  </div>
+   496→                )}
+   497→
+   498→                {effSplitKind === 'items' && (
+   499→                  <div className="space-y-2">
+   500→                    <div className="rms-scroll max-h-44 space-y-1.5 overflow-y-auto">
+   501→                      {order.items.map((it) => {
+   502→                        const active = selectedIds.has(it.id)
+   503→                        return (
+   504→                          <button
+   505→                            key={it.id}
+   506→                            type="button"
+   507→                            onClick={() => toggleItem(it.id)}
+   508→                            aria-pressed={active}
+   509→                            className={cn(
+   510→                              'flex h-11 w-full items-center justify-between gap-2 rounded-lg border px-3 text-start text-sm transition-colors',
+   511→                              active
+   512→                                ? 'border-[#714B67] bg-[#714B67]/10 font-semibold text-[#714B67]'
+   513→                                : 'border-[#E2E2E0] bg-white text-muted-foreground',
+   514→                            )}
+   515→                          >
+   516→                            <span className="min-w-0 truncate">
+   517→                              {formatQty(it.quantity)} ×{' '}
+   518→                              {it.product
+   519→                                ? localizedName(it.product.name, it.product.nameAr, lang)
+   520→                                : t('pos.item')}
+   521→                            </span>
+   522→                            <span className="shrink-0 tabular-nums">
+   523→                              {formatCurrency(round2(it.quantity * it.unitPrice))}
+   524→                            </span>
+   525→                          </button>
+   526→                        )
+   527→                      })}
+   528→                    </div>
+   529→                    <p className="text-xs text-muted-foreground tabular-nums">
+   530→                      {t('pos.selectedItems', {
+   531→                        n: selectedCount,
+   532→                        total: order.items.length,
+   533→                        amount: formatCurrency(selectedSum),
+   534→                      })}
+   535→                    </p>
+   536→                  </div>
+   537→                )}
+   538→              </div>
+   539→            )}
+   540→          </div>
+   541→
+   542→          {/* ── Live preview (thermal style — bilingual EN + AR) ── */}
+   543→          <div className="rounded-xl bg-stone-200/70 p-3">
+   544→            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
+   545→              <ReceiptText className="size-3.5" /> {t('pos.preview')}
+   546→            </p>
+   547→            <div className="mx-auto w-full max-w-[300px] rounded-md border border-stone-300 bg-white p-4 font-mono text-[12px] leading-tight text-stone-900 shadow-md">
+   548→              <p className="text-center font-bold uppercase tracking-widest">{restaurantName}</p>
+   549→              <p className="text-center font-bold" dir="rtl" lang="ar">
+   550→                {restaurantNameAr}
+   551→              </p>
+   552→              <p className="text-center uppercase">{model.title}</p>
+   553→              {model.customer && (
+   554→                <p className="text-center font-bold">
+   555→                  {bilingualLabel('pos.customer')}: {model.customer}
+   556→                </p>
+   557→              )}
+   558→              <div className="my-2 border-t border-dashed border-stone-400" />
+   559→              <CheckRow left={`${bilingualLabel('common.order')} #${model.orderId}`} right={model.tableName} />
+   560→              <CheckRow left={bilingualLabel('pos.waiter')} right={model.waiter} />
+   561→              <CheckRow left={bilingualLabel('common.date')} right={model.date} />
+   562→              <div className="my-2 border-t border-dashed border-stone-400" />
+   563→              {model.items.map((it, i) => (
+   564→                <div key={i}>
+   565→                  <CheckRow left={`${it.qty}× ${it.name}`} right={formatCurrency(it.total)} />
+   566→                  {it.nameAr && (
+   567→                    <p
+   568→                      className="text-left rtl:text-right text-[10px] text-stone-600"
+   569→                      dir="rtl"
+   570→                      lang="ar"
+   571→                    >
+   572→                      {it.nameAr}
+   573→                    </p>
+   574→                  )}
+   575→                  {it.notes && <p className="ps-3 text-[10px] text-stone-500">* {it.notes}</p>}
+   576→                </div>
+   577→              ))}
+   578→              <div className="my-2 border-t border-dashed border-stone-400" />
+   579→              <CheckRow left={bilingualLabel('money.subtotal')} right={formatCurrency(model.subtotal)} />
+   580→              {model.discount > 0 && (
+   581→                <CheckRow left={bilingualLabel('money.discount')} right={`-${formatCurrency(model.discount)}`} />
+   582→              )}
+   583→              <CheckRow left={bilingualLabel('money.tax')} right={formatCurrency(model.tax)} />
+   584→              <CheckRow left={bilingualLabel('money.serviceTax')} right={formatCurrency(model.serviceTax)} />
+   585→              <CheckRow left={bilingualLabel('money.total')} right={formatCurrency(model.total)} bold />
+   586→              {model.deferred && (
+   587→                <>
+   588→                  <div className="my-2 flex justify-center">
+   589→                    <span className="inline-flex -rotate-6 items-baseline gap-1.5 rounded border-2 border-[#7C3AED] px-3 py-1 text-sm font-bold text-[#7C3AED]">
+   590→                      <span className={isRTL ? undefined : 'tracking-[0.3em]'}>
+   591→                        {deferredStamp.en}
+   592→                      </span>
+   593→                      <span aria-hidden>·</span>
+   594→                      <span dir="rtl" lang="ar">
+   595→                        {deferredStamp.ar}
+   596→                      </span>
+   597→                    </span>
+   598→                  </div>
+   599→                  {model.clientName && (
+   600→                    <CheckRow
+   601→                      left={bilingualLabel('pos.deferredClientLabel')}
+   602→                      right={model.clientName}
+   603→                    />
+   604→                  )}
+   605→                </>
+   606→              )}
+   607→              {model.paid > 0 && <CheckRow left={bilingualLabel('money.paid')} right={formatCurrency(model.paid)} />}
+   608→              {model.split && model.split.length > 0 && (
+   609→                <>
+   610→                  <div className="my-2 border-t border-dashed border-stone-400" />
+   611→                  <p className="text-center font-semibold uppercase">{bilingualLabel('pos.splitBill')}</p>
+   612→                  {model.split.map((p, i) => (
+   613→                    <CheckRow
+   614→                      key={i}
+   615→                      left={`${p.label}${p.method ? ` · ${bilingualLabel(`status.payment.${p.method}`)}` : ''}`}
+   616→                      right={formatCurrency(p.amount)}
+   617→                    />
+   618→                  ))}
+   619→                  {model.splitTotal != null && (
+   620→                    <CheckRow left={bilingualLabel('pos.splitTotal')} right={formatCurrency(model.splitTotal)} bold />
+   621→                  )}
+   622→                  <CheckRow left={bilingualLabel('pos.remainingTotal')} right={formatCurrency(model.remaining)} />
+   623→                </>
+   624→              )}
+   625→              {model.reference.map((r, i) => (
+   626→                <CheckRow key={i} left={r.label} right={formatCurrency(r.amount)} />
+   627→              ))}
+   628→              <div className="my-2 border-t border-dashed border-stone-400" />
+   629→              <p className="text-center">{bilingualLabel('pos.checkFooter')}</p>
+   630→            </div>
+   631→          </div>
+   632→        </div>
+   633→
+   634→        <div className="flex gap-2 border-t pt-3">
+   635→          <Button variant="outline" className="h-12 flex-1 rounded-xl" onClick={() => onOpenChange(false)}>
+   636→            <Check /> {t('common.done')}
+   637→          </Button>
+   638→          <Button
+   639→            className="h-12 flex-[2] rounded-xl bg-[#714B67] text-base text-white hover:bg-[#714B67]/90"
+   640→            onClick={handlePrint}
+   641→          >
+   642→            <Printer /> {t('common.print')} {titleLabel}
+   643→          </Button>
+   644→        </div>
+   645→      </DialogContent>
+   646→    </Dialog>
+   647→  )
+   648→}
+   649→
+   650→function SplitPill({
+   651→  active,
+   652→  onClick,
+   653→  children,
+   654→}: {
+   655→  active: boolean
+   656→  onClick: () => void
+   657→  children: ReactNode
+   658→}) {
+   659→  return (
+   660→    <button
+   661→      type="button"
+   662→      onClick={onClick}
+   663→      className={cn(
+   664→        'h-11 rounded-full px-4 text-sm font-semibold transition-colors disabled:opacity-50',
+   665→        active ? 'bg-[#714B67] text-white' : 'bg-white text-[#714B67] border border-[#714B67]/40 hover:bg-[#714B67]/10',
+   666→      )}
+   667→    >
+   668→      {children}
+   669→    </button>
+   670→  )
+   671→}
+   672→
+   673→function CheckRow({ left, right, bold }: { left: string; right: string; bold?: boolean }) {
+   674→  return (
+   675→    <div className={cn('flex items-baseline gap-1', bold && 'font-bold')}>
+   676→      <span className="shrink-0">{left}</span>
+   677→      <span className="min-w-2 flex-1 border-b border-dotted border-stone-300" aria-hidden />
+   678→      <span className="shrink-0 tabular-nums">{right}</span>
+   679→    </div>
+   680→  )
+   681→}
+   682→

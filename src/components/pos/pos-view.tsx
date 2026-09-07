@@ -28,9 +28,10 @@ import { apiFetch, fetcher } from '@/lib/api'
 import { MAX_GUESTS, MIN_GUESTS } from '@/lib/constants'
 import { elapsedSince, formatCurrency } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
+import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import type { Order, Product, RestaurantTable, SessionUser } from '@/lib/types'
+import type { FloorPlan, Order, Product, RestaurantTable, SessionUser } from '@/lib/types'
 import CartPanel from './cart-panel'
 import CheckModal from './check-modal'
 import PaymentModal from './payment-modal'
@@ -51,7 +52,10 @@ type GuestsTarget =
 
 const GUEST_QUICK_CHIPS = [1, 2, 3, 4, 5, 6, 7, 8]
 
-export default function PosView() {
+/** `active` — true while the POS view is the visible top-level view. page.tsx
+ *  keeps PosView mounted (hidden) when the user switches views so the order
+ *  state survives; defaults to true when the prop is not passed. */
+export default function PosView({ active = true }: { active?: boolean }) {
   const queryClient = useQueryClient()
   const { t } = useI18n()
 
@@ -87,6 +91,30 @@ export default function PosView() {
   const [checkOrder, setCheckOrder] = useState<Order | null>(null)
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
+
+  // ── Round 7: history-aware navigation (browser/OS back button) ────
+  // Unsent drafts stashed per context (table:N / takeaway) so going back
+  // never loses items that were never sent to the kitchen.
+  const draftStashRef = useRef<Map<string, DraftItem[]>>(new Map())
+  // Sub-hash of the screen the state currently shows ('order/5', 'table/7',
+  // 'takeaway'; null = floor). Set SYNCHRONOUSLY by the entry helpers so the
+  // onNav idempotency checks hold even before React re-renders — a single
+  // back press can fire both popstate and hashchange.
+  const appliedNavRef = useRef<string | null>(null)
+  // True only while a restore applies state through an entry helper: navPush()
+  // stays silent then, so popstate-driven restores never add duplicate
+  // history entries (otherwise Back would bounce forward).
+  const suppressNavPushRef = useRef(false)
+  // In-flight restore target + epoch: rejects duplicate restores (the
+  // popstate/hashchange double fire) and aborts stale ones when the user
+  // navigates again mid-flight.
+  const navInFlightRef = useRef<string | null>(null)
+  const navEpochRef = useRef(0)
+  // Latest onNav handler (single subscription, always-fresh state).
+  const navHandlerRef = useRef<(nav: NavHash | null) => void>(() => {})
+  // Previous `active` value — detects the hidden → visible flip used to
+  // re-assert the deep hash after page.tsx pushed a shallow '#/pos'.
+  const prevActiveRef = useRef(active)
 
   // 30s tick so elapsed times stay fresh.
   const [elapsedTick, setElapsedTick] = useState(0)
@@ -125,6 +153,9 @@ export default function PosView() {
   const products = productsData?.products ?? []
 
   // ── Newly-ready items → toast (once) ─────────────────────────────
+  // PosView stays mounted while another view is active (page.tsx keeps it
+  // hidden), so only toast while the POS is actually on screen — the ref
+  // still tracks readiness so nothing double-fires on return.
   const readyRef = useRef<Set<number> | null>(null)
   useEffect(() => {
     if (!order) {
@@ -135,7 +166,7 @@ export default function PosView() {
     const prev = readyRef.current
     if (prev) {
       const newlyReady = order.items.filter((i) => i.status === 'ready' && !prev.has(i.id))
-      if (newlyReady.length > 0) {
+      if (newlyReady.length > 0 && active) {
         toast.success(
           t('pos.readyToast', {
             n: newlyReady.length,
@@ -145,7 +176,7 @@ export default function PosView() {
       }
     }
     readyRef.current = readyIds
-  }, [order, selectedTable?.name, t])
+  }, [order, selectedTable?.name, t, active])
 
   // ── Helpers ──────────────────────────────────────────────────────
   const clampGuests = useCallback(
@@ -156,7 +187,56 @@ export default function PosView() {
     [],
   )
 
-  const resetToTables = useCallback(() => {
+  // ── Round 7: nav + draft-stash helpers ───────────────────────────
+
+  /** pushNav wrapper — silent while a restore applies state (restores must
+   *  not create history entries); a user-initiated push supersedes any
+   *  in-flight restore (aborts it via the epoch). */
+  const navPush = (view: string, sub?: string | null) => {
+    if (suppressNavPushRef.current) return
+    if (navInFlightRef.current != null) navEpochRef.current += 1
+    pushNav(view, sub)
+  }
+
+  /** Stash key for a draft context (per-table, or takeaway). */
+  const draftStashKey = (table: { id: number | null } | null) =>
+    table?.id != null ? `table:${table.id}` : 'takeaway'
+
+  /** Stash the unsent draft of the current context before leaving it. */
+  const stashDraft = () => {
+    if (draft.length > 0) {
+      draftStashRef.current.set(draftStashKey(selectedTable), draft)
+    }
+  }
+
+  /** Pop a stashed draft for `key`: restored (with a toast) when non-empty;
+   *  the entry is removed either way so stashes never leak. */
+  const restoreStash = (key: string, label: string) => {
+    const stashed = draftStashRef.current.get(key)
+    draftStashRef.current.delete(key)
+    if (stashed?.length) {
+      setDraft(stashed)
+      toast.success(t('pos.draftRestoredToast', { table: label }))
+    }
+  }
+
+  /** Run a state-applying entry helper with nav pushes suppressed. */
+  const withNavSuppression = (fn: () => void) => {
+    suppressNavPushRef.current = true
+    try {
+      fn()
+    } finally {
+      suppressNavPushRef.current = false
+    }
+  }
+
+  /** Leave order mode for the floor: stash any unsent draft, full state
+   *  reset, then rewrite the current history entry to '#/pos' (replace, never
+   *  push — the in-app back button must not spam history). Every exit path
+   *  goes through here, so the browser back button and the in-app button
+   *  land the user on the floor with the same draft preservation. */
+  const resetToTables = () => {
+    stashDraft()
     setMode('tables')
     setSelectedTable(null)
     setActiveOrderId(null)
@@ -173,7 +253,9 @@ export default function PosView() {
     setPendingSeatTables(null)
     setSeatingTables(null)
     readyRef.current = null
-  }, [])
+    appliedNavRef.current = null
+    replaceNav('pos')
+  }
 
   const invalidateShared = useCallback(
     async () => {
@@ -202,6 +284,13 @@ export default function PosView() {
     } else {
       setActiveOrderId(null)
     }
+    appliedNavRef.current = table.openOrderId ? `order/${table.openOrderId}` : `table/${table.id}`
+    // Entering an order screen adds a history entry (occupied → live order
+    // hash, free → table draft hash); silent during popstate restores.
+    navPush('pos', table.openOrderId ? `order/${table.openOrderId}` : `table/${table.id}`)
+    // Re-entering a table pops its stashed unsent draft — occupied or free:
+    // a waiter may have backed out of this table with items not yet sent.
+    restoreStash(`table:${table.id}`, table.name)
   }
 
   // Table clicked on the floor: occupied tables open their order directly;
@@ -226,6 +315,9 @@ export default function PosView() {
     setGuestsDraft(1) // takeaway orders default to a single guest — no dialog
     setSeatingTables(null) // no tables — tableIds stays unset
     readyRef.current = null
+    appliedNavRef.current = 'takeaway'
+    navPush('pos', 'takeaway')
+    restoreStash('takeaway', t('common.takeaway'))
   }
 
   const openTakeawayOrder = (o: Order) => {
@@ -238,6 +330,8 @@ export default function PosView() {
     readyRef.current = null
     queryClient.setQueryData(['pos-order', o.id], { order: o })
     setActiveOrderId(o.id)
+    appliedNavRef.current = `order/${o.id}`
+    navPush('pos', `order/${o.id}`)
   }
 
   // ── Seat Party (merged seating from the beginning) ────────────────
@@ -420,6 +514,7 @@ export default function PosView() {
   const handlePaySuccess = async (updated: Order, closed: boolean) => {
     if (closed) {
       // Payment modal closes itself; show the receipt, then reset the screen.
+      stashDraft() // normally empty — the draft was flushed by sendToKitchen
       setReceiptOrder(updated)
       setMode('tables')
       setSelectedTable(null)
@@ -429,6 +524,8 @@ export default function PosView() {
       setPendingSeatTables(null)
       setSeatingTables(null)
       readyRef.current = null
+      appliedNavRef.current = null
+      replaceNav('pos') // paid check → floor entry, no extra history
       await invalidateShared()
     } else {
       queryClient.setQueryData(['pos-order', updated.id], { order: updated })
@@ -444,6 +541,7 @@ export default function PosView() {
   // order preselected (destination step). TableSelect reports completion.
   const startTransfer = () => {
     if (!order) return
+    stashDraft() // never lose unsent items while detouring through the floor
     setTransferOrderId(order.id)
     setMode('tables')
     setSelectedTable(null)
@@ -453,6 +551,8 @@ export default function PosView() {
     setPendingSeatTables(null)
     setSeatingTables(null)
     readyRef.current = null
+    appliedNavRef.current = null // transfer destination step lives on the floor
+    replaceNav('pos') // replace, never push — no history spam
   }
 
   const handleTransferDone = () => {
@@ -498,6 +598,206 @@ export default function PosView() {
   const mergedExtraCount = order
     ? (order.extraTableIds?.length ?? 0)
     : Math.max(0, (seatingTables?.length ?? 1) - 1)
+
+  // ── Round 7: popstate-driven restores (browser/OS back & forward) ──
+
+  /** Enter order mode for a live order — mirrors openTakeawayOrder /
+   *  applySelectTable semantics. Hash-driven, so it never pushes history. */
+  const restoreLiveOrder = (restored: Order) => {
+    setSelectedTable(
+      restored.table
+        ? { id: restored.table.id, name: restored.table.name }
+        : { id: null, name: t('common.takeaway') },
+    )
+    setMode('order')
+    setDraft([])
+    setTransferOrderId(null)
+    setGuestsDraft(clampGuests(restored.guests ?? 1))
+    setSeatingTables(restored.table ? [{ id: restored.table.id, name: restored.table.name }] : null)
+    readyRef.current = null
+    appliedNavRef.current = `order/${restored.id}`
+    queryClient.setQueryData(['pos-order', restored.id], { order: restored })
+    setActiveOrderId(restored.id)
+    toast.success(t('pos.orderRestoredToast', { order: restored.id }))
+  }
+
+  /** Claim the right to run a deep restore for `target`. Returns the epoch, or
+   *  null when the identical restore is already in flight (popstate +
+   *  hashchange double fire). A different target supersedes the old one. */
+  const claimNavRestore = (target: string): number | null => {
+    if (navInFlightRef.current === target) return null
+    navInFlightRef.current = target
+    navEpochRef.current += 1
+    return navEpochRef.current
+  }
+
+  /** Release the restore guards — only the owning epoch may clear them. */
+  const releaseNavRestore = (epoch: number) => {
+    if (epoch !== navEpochRef.current) return
+    navInFlightRef.current = null
+  }
+
+  /** True when the hash still points at `target` (mid-flight re-check). */
+  const hashStill = (target: string) => {
+    const now = currentNav()
+    return now != null && now.view === 'pos' && now.sub === target
+  }
+
+  /** Failed restore → toast + a safe floor entry. */
+  const cannotReopen = () => {
+    toast.error(t('pos.cannotReopenToast'))
+    replaceNav('pos')
+    resetToTables()
+  }
+
+  /** Fetch an order imperatively (null on error). */
+  const fetchOrderOrNull = async (id: number): Promise<Order | null> => {
+    try {
+      const data = await fetcher<{ order: Order }>(`/api/orders/${id}`)
+      return data.order ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Restore the live-order screen for '#/pos/order/{id}'. */
+  const restoreOrderById = async (id: number, target: string) => {
+    const epoch = claimNavRestore(target)
+    if (epoch == null) return
+    stashDraft() // leaving the current context — never lose unsent items
+    try {
+      const fetched = await fetchOrderOrNull(id)
+      // The user navigated again mid-flight → abort silently.
+      if (epoch !== navEpochRef.current || !hashStill(target)) return
+      if (fetched && fetched.status === 'open') {
+        restoreLiveOrder(fetched)
+      } else {
+        cannotReopen() // closed / cancelled / merged away / fetch error
+      }
+    } finally {
+      releaseNavRestore(epoch)
+    }
+  }
+
+  /** Restore the screen for '#/pos/table/{id}': its live order when the table
+   *  got occupied meanwhile (hash fixed to order/{id}), or the free-table
+   *  draft screen — applySelectTable pops any stashed draft for it. */
+  const restoreTableById = async (id: number, target: string) => {
+    const epoch = claimNavRestore(target)
+    if (epoch == null) return
+    stashDraft()
+    try {
+      // Same data source as the floor screen (TableSelect's floorplans query).
+      const data = await fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans')
+      if (epoch !== navEpochRef.current || !hashStill(target)) return
+      queryClient.setQueryData(['floorplans'], data)
+      const table =
+        data.floorPlans.flatMap((fp) => fp.tables).find((tb) => tb.id === id) ?? null
+      if (!table) {
+        cannotReopen()
+        return
+      }
+      if (table.openOrderId != null) {
+        // Occupied meanwhile → its live order screen; fix the hash to it.
+        const orderTarget = `order/${table.openOrderId}`
+        replaceNav('pos', orderTarget)
+        const fetched = await fetchOrderOrNull(table.openOrderId)
+        if (epoch !== navEpochRef.current || !hashStill(orderTarget)) return
+        if (fetched && fetched.status === 'open') restoreLiveOrder(fetched)
+        else cannotReopen()
+        return
+      }
+      // Free table → draft mode (restores are push-suppressed inside).
+      withNavSuppression(() => applySelectTable(table, 2))
+    } catch {
+      // Floorplans fetch failed — only bail to the floor when the hash still
+      // points at this target (never clobber another view's hash).
+      if (epoch === navEpochRef.current && hashStill(target)) cannotReopen()
+    } finally {
+      releaseNavRestore(epoch)
+    }
+  }
+
+  /** onNav handler — browser back/forward + hand-edited hashes. Idempotent:
+   *  navigating to the state we are already in is a no-op (checked against
+   *  both the rendered state and the synchronous appliedNavRef mirror). */
+  const handleNavEvent = (nav: NavHash | null) => {
+    if (nav == null || nav.view !== 'pos') return // another view owns the hash
+    const sub = nav.sub
+    if (sub == null) {
+      // Floor — leave order mode exactly like the in-app back button
+      // (stash + reset + replaceNav('#/pos'), itself idempotent here).
+      if (mode === 'order' || appliedNavRef.current != null) resetToTables()
+      return
+    }
+    if (sub.startsWith('order/')) {
+      const id = Number.parseInt(sub.slice('order/'.length), 10)
+      if (!Number.isInteger(id) || id <= 0) return
+      if (appliedNavRef.current === sub) return // idempotent re-entry
+      if (mode === 'order' && activeOrderId === id) return
+      void restoreOrderById(id, sub)
+      return
+    }
+    if (sub.startsWith('table/')) {
+      const id = Number.parseInt(sub.slice('table/'.length), 10)
+      if (!Number.isInteger(id) || id <= 0) return
+      if (appliedNavRef.current === sub) return
+      if (mode === 'order' && selectedTable?.id === id && activeOrderId == null) return
+      void restoreTableById(id, sub)
+      return
+    }
+    if (sub === 'takeaway') {
+      if (appliedNavRef.current === sub) return
+      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null) return
+      const epoch = claimNavRestore(sub)
+      if (epoch == null) return
+      try {
+        stashDraft()
+        // startTakeaway semantics with pushes suppressed; pops the
+        // 'takeaway' stash (toast when items come back).
+        withNavSuppression(() => startTakeaway())
+      } finally {
+        releaseNavRestore(epoch)
+      }
+    }
+  }
+
+  // Always dispatch nav events to the handler of the LATEST render (single
+  // subscription created below, no stale closures).
+  useEffect(() => {
+    navHandlerRef.current = handleNavEvent
+  })
+
+  // Single subscription for the component's lifetime (idempotent handler).
+  useEffect(() => {
+    const unsubscribe = onNav((nav) => navHandlerRef.current(nav))
+    return unsubscribe
+  }, [])
+
+  // Mount-time deep-link restore: refresh/bookmark on '#/pos/order/N',
+  // '#/pos/table/N' or '#/pos/takeaway' reopens that screen (pushes are
+  // suppressed — the hash already points here). Floor is the default state.
+  useEffect(() => {
+    const nav = currentNav()
+    if (nav && nav.view === 'pos' && nav.sub) navHandlerRef.current(nav)
+  }, [])
+
+  // Re-assert the deep hash when this view becomes active again: page.tsx
+  // pushes a shallow '#/pos' when returning from another view, and this
+  // replaces it with the real deep hash of the preserved order screen.
+  useEffect(() => {
+    const wasActive = prevActiveRef.current
+    prevActiveRef.current = active
+    // Fire only on the hidden → visible flip (wasActive false, now true)
+    // while an order screen is preserved.
+    if (wasActive || !active || mode !== 'order') return
+    const sub = activeOrderId
+      ? `order/${activeOrderId}`
+      : selectedTable?.id != null
+        ? `table/${selectedTable.id}`
+        : 'takeaway'
+    replaceNav('pos', sub)
+  }, [active, mode, activeOrderId, selectedTable?.id])
 
   // ── Render ───────────────────────────────────────────────────────
   if (mode === 'tables') {

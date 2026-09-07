@@ -1,0 +1,828 @@
+     1→'use client'
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import { ArrowLeftRight, Ban, Check, ChevronLeft, Combine, Loader2, Minus, Plus, Users } from 'lucide-react'
+     6→
+     7→import {
+     8→  AlertDialog,
+     9→  AlertDialogAction,
+    10→  AlertDialogCancel,
+    11→  AlertDialogContent,
+    12→  AlertDialogDescription,
+    13→  AlertDialogFooter,
+    14→  AlertDialogHeader,
+    15→  AlertDialogTitle,
+    16→} from '@/components/ui/alert-dialog'
+    17→import { Badge } from '@/components/ui/badge'
+    18→import { Button } from '@/components/ui/button'
+    19→import {
+    20→  Dialog,
+    21→  DialogContent,
+    22→  DialogDescription,
+    23→  DialogFooter,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→} from '@/components/ui/dialog'
+    27→import { apiFetch, fetcher } from '@/lib/api'
+    28→import { MAX_GUESTS, MIN_GUESTS } from '@/lib/constants'
+    29→import { elapsedSince, formatCurrency } from '@/lib/format'
+    30→import { useI18n } from '@/lib/i18n'
+    31→import { cn } from '@/lib/utils'
+    32→import { toast } from 'sonner'
+    33→import type { Order, Product, RestaurantTable, SessionUser } from '@/lib/types'
+    34→import CartPanel from './cart-panel'
+    35→import CheckModal from './check-modal'
+    36→import PaymentModal from './payment-modal'
+    37→import ReceiptModal from './receipt-modal'
+    38→import ProductGrid from './product-grid'
+    39→import TableSelect from './table-select'
+    40→import { guessCourse, newDraftKey, round2, type DraftItem } from './pos-utils'
+    41→
+    42→/** Who the guests dialog edits: a fresh table draft, the unsent draft guest
+    43→ *  count, the persisted guests value of an existing order, or a Seat Party
+    44→ *  (multi-table seating) about to enter order mode. */
+    45→type GuestsTarget =
+    46→  | { kind: 'new-table'; table: RestaurantTable }
+    47→  | { kind: 'draft' }
+    48→  | { kind: 'order'; orderId: number }
+    49→  | { kind: 'seat-party' }
+    50→  | null
+    51→
+    52→const GUEST_QUICK_CHIPS = [1, 2, 3, 4, 5, 6, 7, 8]
+    53→
+    54→export default function PosView() {
+    55→  const queryClient = useQueryClient()
+    56→  const { t } = useI18n()
+    57→
+    58→  // ── State machine ────────────────────────────────────────────────
+    59→  const [mode, setMode] = useState<'tables' | 'order'>('tables')
+    60→  const [selectedTable, setSelectedTable] = useState<{ id: number | null; name: string } | null>(null)
+    61→  const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
+    62→  const [draft, setDraft] = useState<DraftItem[]>([])
+    63→  const [sending, setSending] = useState(false)
+    64→
+    65→  // Guest count for the order that will be created from this screen
+    66→  // (takeaway defaults to 1, table drafts to the dialog value).
+    67→  const [guestsDraft, setGuestsDraft] = useState(2)
+    68→
+    69→  // Guests dialog (create-before-order-mode + edit on the order screen).
+    70→  const [guestsDialogOpen, setGuestsDialogOpen] = useState(false)
+    71→  const [guestsValue, setGuestsValue] = useState(2)
+    72→  const [guestsTarget, setGuestsTarget] = useState<GuestsTarget>(null)
+    73→
+    74→  // Order being transferred (passed to TableSelect → starts at destination step).
+    75→  const [transferOrderId, setTransferOrderId] = useState<number | null>(null)
+    76→
+    77→  // Round5 Seat Party: the free tables picked on the floor, awaiting the
+    78→  // guests dialog before entering order mode.
+    79→  const [pendingSeatTables, setPendingSeatTables] = useState<RestaurantTable[] | null>(null)
+    80→  // Round5: the full seating list backing this order screen (merged seating
+    81→  // from the beginning). null/[single] = a regular single-table order.
+    82→  const [seatingTables, setSeatingTables] = useState<{ id: number; name: string }[] | null>(null)
+    83→
+    84→  const [payOpen, setPayOpen] = useState(false)
+    85→  const [payOrder, setPayOrder] = useState<Order | null>(null)
+    86→  const [checkOpen, setCheckOpen] = useState(false)
+    87→  const [checkOrder, setCheckOrder] = useState<Order | null>(null)
+    88→  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
+    89→  const [cancelOpen, setCancelOpen] = useState(false)
+    90→
+    91→  // 30s tick so elapsed times stay fresh.
+    92→  const [elapsedTick, setElapsedTick] = useState(0)
+    93→  useEffect(() => {
+    94→    if (mode !== 'order') return
+    95→    const timer = window.setInterval(() => setElapsedTick((x) => x + 1), 30000)
+    96→    return () => window.clearInterval(timer)
+    97→  }, [mode])
+    98→
+    99→  // ── Session (for cancel permission display — server enforces anyway) ──
+   100→  const { data: sessionData } = useQuery({
+   101→    queryKey: ['session'],
+   102→    queryFn: () => fetcher<{ user: SessionUser }>('/api/auth/me'),
+   103→    retry: false,
+   104→    staleTime: 5 * 60 * 1000,
+   105→  })
+   106→  const user = sessionData?.user
+   107→
+   108→  // ── Live order (poll while open) ─────────────────────────────────
+   109→  const { data: orderData, isLoading: orderLoading } = useQuery({
+   110→    queryKey: ['pos-order', activeOrderId],
+   111→    queryFn: () => fetcher<{ order: Order }>(`/api/orders/${activeOrderId}`),
+   112→    enabled: mode === 'order' && activeOrderId != null,
+   113→    refetchInterval: 5000,
+   114→  })
+   115→  const order: Order | null =
+   116→    mode === 'order' && activeOrderId != null ? (orderData?.order ?? null) : null
+   117→
+   118→  // ── Products ─────────────────────────────────────────────────────
+   119→  const { data: productsData } = useQuery({
+   120→    queryKey: ['pos-products'],
+   121→    queryFn: () => fetcher<{ products: Product[] }>('/api/products?sellable=1'),
+   122→    enabled: mode === 'order',
+   123→    staleTime: 15000,
+   124→  })
+   125→  const products = productsData?.products ?? []
+   126→
+   127→  // ── Newly-ready items → toast (once) ─────────────────────────────
+   128→  const readyRef = useRef<Set<number> | null>(null)
+   129→  useEffect(() => {
+   130→    if (!order) {
+   131→      readyRef.current = null
+   132→      return
+   133→    }
+   134→    const readyIds = new Set(order.items.filter((i) => i.status === 'ready').map((i) => i.id))
+   135→    const prev = readyRef.current
+   136→    if (prev) {
+   137→      const newlyReady = order.items.filter((i) => i.status === 'ready' && !prev.has(i.id))
+   138→      if (newlyReady.length > 0) {
+   139→        toast.success(
+   140→          t('pos.readyToast', {
+   141→            n: newlyReady.length,
+   142→            table: selectedTable?.name ?? t('pos.order'),
+   143→          }),
+   144→        )
+   145→      }
+   146→    }
+   147→    readyRef.current = readyIds
+   148→  }, [order, selectedTable?.name, t])
+   149→
+   150→  // ── Helpers ──────────────────────────────────────────────────────
+   151→  const clampGuests = useCallback(
+   152→    (raw: number) => {
+   153→      const n = Math.round(Number.isFinite(raw) ? raw : 2)
+   154→      return Math.min(MAX_GUESTS, Math.max(MIN_GUESTS, n))
+   155→    },
+   156→    [],
+   157→  )
+   158→
+   159→  const resetToTables = useCallback(() => {
+   160→    setMode('tables')
+   161→    setSelectedTable(null)
+   162→    setActiveOrderId(null)
+   163→    setDraft([])
+   164→    setGuestsDraft(2)
+   165→    setGuestsDialogOpen(false)
+   166→    setGuestsTarget(null)
+   167→    setPayOpen(false)
+   168→    setPayOrder(null)
+   169→    setCheckOpen(false)
+   170→    setCheckOrder(null)
+   171→    setCancelOpen(false)
+   172→    setTransferOrderId(null)
+   173→    setPendingSeatTables(null)
+   174→    setSeatingTables(null)
+   175→    readyRef.current = null
+   176→  }, [])
+   177→
+   178→  const invalidateShared = useCallback(
+   179→    async () => {
+   180→      await Promise.all([
+   181→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   182→        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
+   183→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   184→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   185→        queryClient.invalidateQueries({ queryKey: ['pos-products'] }),
+   186→      ])
+   187→    },
+   188→    [queryClient],
+   189→  )
+   190→
+   191→  /** Enter order mode for a table (occupied → live order, free → fresh draft). */
+   192→  const applySelectTable = (table: RestaurantTable, guests: number) => {
+   193→    setSelectedTable({ id: table.id, name: table.name })
+   194→    setMode('order')
+   195→    setDraft([])
+   196→    setTransferOrderId(null)
+   197→    setGuestsDraft(clampGuests(guests))
+   198→    setSeatingTables([{ id: table.id, name: table.name }])
+   199→    readyRef.current = null
+   200→    if (table.openOrderId) {
+   201→      setActiveOrderId(table.openOrderId)
+   202→    } else {
+   203→      setActiveOrderId(null)
+   204→    }
+   205→  }
+   206→
+   207→  // Table clicked on the floor: occupied tables open their order directly;
+   208→  // a FREE table first asks for the number of guests (quick dialog), then
+   209→  // enters order mode with that guest count baked into the draft.
+   210→  const selectTable = (table: RestaurantTable) => {
+   211→    if (table.openOrderId != null) {
+   212→      applySelectTable(table, table.openOrderGuests ?? 2)
+   213→      return
+   214→    }
+   215→    setGuestsTarget({ kind: 'new-table', table })
+   216→    setGuestsValue(2)
+   217→    setGuestsDialogOpen(true)
+   218→  }
+   219→
+   220→  const startTakeaway = () => {
+   221→    setSelectedTable({ id: null, name: t('common.takeaway') })
+   222→    setMode('order')
+   223→    setDraft([])
+   224→    setActiveOrderId(null)
+   225→    setTransferOrderId(null)
+   226→    setGuestsDraft(1) // takeaway orders default to a single guest — no dialog
+   227→    setSeatingTables(null) // no tables — tableIds stays unset
+   228→    readyRef.current = null
+   229→  }
+   230→
+   231→  const openTakeawayOrder = (o: Order) => {
+   232→    setSelectedTable({ id: null, name: t('common.takeaway') })
+   233→    setMode('order')
+   234→    setDraft([])
+   235→    setTransferOrderId(null)
+   236→    setGuestsDraft(o.guests ?? 1)
+   237→    setSeatingTables(null) // no tables — tableIds stays unset
+   238→    readyRef.current = null
+   239→    queryClient.setQueryData(['pos-order', o.id], { order: o })
+   240→    setActiveOrderId(o.id)
+   241→  }
+   242→
+   243→  // ── Seat Party (merged seating from the beginning) ────────────────
+   244→  // TableSelect hands over the selected free tables → ask for the guest
+   245→  // count (seeded to the total capacity), then enter order mode with the
+   246→  // full seating list. The first table is the primary table.
+   247→  const handleSeatParty = (tables: RestaurantTable[]) => {
+   248→    if (tables.length === 0) return
+   249→    setPendingSeatTables(tables)
+   250→    const totalSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   251→    setGuestsValue(clampGuests(totalSeats))
+   252→    setGuestsTarget({ kind: 'seat-party' })
+   253→    setGuestsDialogOpen(true)
+   254→  }
+   255→
+   256→  // ── Guests dialog handlers ───────────────────────────────────────
+   257→  const cancelGuestsDialog = () => {
+   258→    if (guestsTarget?.kind === 'seat-party') setPendingSeatTables(null)
+   259→    setGuestsDialogOpen(false)
+   260→    setGuestsTarget(null)
+   261→  }
+   262→
+   263→  const openGuestsEdit = () => {
+   264→    setGuestsValue(order ? order.guests : guestsDraft)
+   265→    setGuestsTarget(order ? { kind: 'order', orderId: order.id } : { kind: 'draft' })
+   266→    setGuestsDialogOpen(true)
+   267→  }
+   268→
+   269→  const updateGuests = useMutation({
+   270→    mutationFn: (vars: { id: number; guests: number }) =>
+   271→      apiFetch<{ order: Order }>(`/api/orders/${vars.id}`, {
+   272→        method: 'PUT',
+   273→        body: { guests: vars.guests },
+   274→      }),
+   275→    onSuccess: async ({ order: updated }) => {
+   276→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   277→      await Promise.all([
+   278→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   279→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   280→      ])
+   281→      toast.success(t('pos.guestsUpdatedToast'))
+   282→    },
+   283→    onError: (err: Error) => toast.error(err.message),
+   284→  })
+   285→
+   286→  const confirmGuests = () => {
+   287→    const value = clampGuests(guestsValue)
+   288→    if (guestsTarget?.kind === 'new-table') {
+   289→      applySelectTable(guestsTarget.table, value)
+   290→    } else if (guestsTarget?.kind === 'seat-party') {
+   291→      const seatTables = pendingSeatTables ?? []
+   292→      const primary = seatTables[0]
+   293→      if (primary) {
+   294→        // Enter order mode on the primary table, then widen the seating list
+   295→        // to the full party selection (batched setStates — last write wins).
+   296→        applySelectTable(primary, value)
+   297→        setSeatingTables(seatTables.map((tb) => ({ id: tb.id, name: tb.name })))
+   298→      }
+   299→      setPendingSeatTables(null)
+   300→    } else if (guestsTarget?.kind === 'draft') {
+   301→      setGuestsDraft(value)
+   302→    } else if (guestsTarget?.kind === 'order' && order) {
+   303→      updateGuests.mutate({ id: order.id, guests: value })
+   304→    }
+   305→    setGuestsDialogOpen(false)
+   306→    setGuestsTarget(null)
+   307→  }
+   308→
+   309→  const addProduct = (p: Product) => {
+   310→    setDraft((prev) => {
+   311→      const course = guessCourse(p)
+   312→      const existing = prev.find((d) => d.productId === p.id && !d.notes && d.course === course)
+   313→      if (existing) {
+   314→        return prev.map((d) =>
+   315→          d.key === existing.key ? { ...d, quantity: round2(d.quantity + 1) } : d,
+   316→        )
+   317→      }
+   318→      return [
+   319→        ...prev,
+   320→        {
+   321→          key: newDraftKey(),
+   322→          productId: p.id,
+   323→          name: p.name,
+   324→          nameAr: p.nameAr ?? null,
+   325→          price: p.price,
+   326→          quantity: 1,
+   327→          notes: '',
+   328→          course,
+   329→        },
+   330→      ]
+   331→    })
+   332→  }
+   333→
+   334→  const draftToPayload = (d: DraftItem[]) =>
+   335→    d.map((d) => ({
+   336→      productId: d.productId,
+   337→      quantity: d.quantity,
+   338→      notes: d.notes.trim() || undefined,
+   339→      course: d.course,
+   340→    }))
+   341→
+   342→  const sendToKitchen = async (): Promise<Order | null> => {
+   343→    if (draft.length === 0 || sending) return order
+   344→    setSending(true)
+   345→    try {
+   346→      let result: { order: Order }
+   347→      // Multi-table seating (Seat Party): create the order spanning ALL the
+   348→      // selected tables (tableIds — primary first). Single-table and takeaway
+   349→      // paths keep the classic tableId payload byte-identical.
+   350→      const seatingList = seatingTables ?? null
+   351→      const multiSeating = (seatingList?.length ?? 0) > 1
+   352→      if (!order && multiSeating && seatingList) {
+   353→        result = await apiFetch<{ order: Order }>('/api/orders', {
+   354→          method: 'POST',
+   355→          body: {
+   356→            tableIds: seatingList.map((tb) => tb.id),
+   357→            items: draftToPayload(draft),
+   358→            guests: clampGuests(guestsDraft),
+   359→          },
+   360→        })
+   361→      } else if (!order) {
+   362→        result = await apiFetch<{ order: Order }>('/api/orders', {
+   363→          method: 'POST',
+   364→          body: {
+   365→            tableId: selectedTable?.id ?? null,
+   366→            items: draftToPayload(draft),
+   367→            guests: clampGuests(guestsDraft),
+   368→          },
+   369→        })
+   370→      } else {
+   371→        result = await apiFetch<{ order: Order }>(`/api/orders/${order.id}`, {
+   372→          method: 'PUT',
+   373→          body: { addItems: draftToPayload(draft) },
+   374→        })
+   375→      }
+   376→      setDraft([])
+   377→      queryClient.setQueryData(['pos-order', result.order.id], { order: result.order })
+   378→      setActiveOrderId(result.order.id)
+   379→      await invalidateShared()
+   380→      toast.success(
+   381→        multiSeating && !order && seatingList
+   382→          ? t('pos.seatedToast', { n: seatingList.length })
+   383→          : t('pos.orderSentToast'),
+   384→      )
+   385→      return result.order
+   386→    } catch (err) {
+   387→      toast.error(err instanceof Error ? err.message : t('pos.sendFailedToast'))
+   388→      return null
+   389→    } finally {
+   390→      setSending(false)
+   391→    }
+   392→  }
+   393→
+   394→  const handlePay = async () => {
+   395→    if (sending) return
+   396→    let current: Order | null = order
+   397→    if (draft.length > 0) {
+   398→      current = await sendToKitchen()
+   399→      if (!current) return // sending failed → abort payment
+   400→    }
+   401→    if (!current) return
+   402→    setPayOrder(current)
+   403→    setPayOpen(true)
+   404→  }
+   405→
+   406→  // Print Check from the cart panel: flush the draft first (same pattern as pay),
+   407→  // then open the check modal with the fresh order state.
+   408→  const handlePrintCheck = async () => {
+   409→    if (sending) return
+   410→    let current: Order | null = order
+   411→    if (draft.length > 0) {
+   412→      current = await sendToKitchen()
+   413→      if (!current) return // sending failed → abort printing
+   414→    }
+   415→    if (!current) return
+   416→    setCheckOrder(current)
+   417→    setCheckOpen(true)
+   418→  }
+   419→
+   420→  const handlePaySuccess = async (updated: Order, closed: boolean) => {
+   421→    if (closed) {
+   422→      // Payment modal closes itself; show the receipt, then reset the screen.
+   423→      setReceiptOrder(updated)
+   424→      setMode('tables')
+   425→      setSelectedTable(null)
+   426→      setActiveOrderId(null)
+   427→      setDraft([])
+   428→      setGuestsDraft(2)
+   429→      setPendingSeatTables(null)
+   430→      setSeatingTables(null)
+   431→      readyRef.current = null
+   432→      await invalidateShared()
+   433→    } else {
+   434→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   435→      await Promise.all([
+   436→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   437→        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
+   438→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   439→      ])
+   440→    }
+   441→  }
+   442→
+   443→  // Transfer clicked on the order screen → go to the floor screen with the
+   444→  // order preselected (destination step). TableSelect reports completion.
+   445→  const startTransfer = () => {
+   446→    if (!order) return
+   447→    setTransferOrderId(order.id)
+   448→    setMode('tables')
+   449→    setSelectedTable(null)
+   450→    setActiveOrderId(null)
+   451→    setDraft([])
+   452→    setGuestsDraft(2)
+   453→    setPendingSeatTables(null)
+   454→    setSeatingTables(null)
+   455→    readyRef.current = null
+   456→  }
+   457→
+   458→  const handleTransferDone = () => {
+   459→    setTransferOrderId(null)
+   460→    resetToTables()
+   461→  }
+   462→
+   463→  // ── Deferred checks ─────────────────────────────────────────────
+   464→  // Chip clicked on the floor → settle the outstanding deferred check via
+   465→  // the payment modal (rendered in tables mode too; the modal hides its own
+   466→  // defer button for already-deferred orders).
+   467→  const handleSettleDeferred = (deferredOrder: Order) => {
+   468→    setPayOrder(deferredOrder)
+   469→    setPayOpen(true)
+   470→  }
+   471→
+   472→  // Defer completed inside the payment modal (modal closes itself + fires
+   473→  // the toast) → reset the order screen and refresh everything.
+   474→  const handleOrderDeferred = async (_deferredOrder: Order) => {
+   475→    resetToTables()
+   476→    await invalidateShared()
+   477→  }
+   478→
+   479→  const cancelMutation = useMutation({
+   480→    mutationFn: (id: number) =>
+   481→      apiFetch<{ order: Order }>(`/api/orders/${id}/cancel`, { method: 'POST' }),
+   482→    onSuccess: async () => {
+   483→      toast.success(t('pos.cancelToast'))
+   484→      await invalidateShared()
+   485→      resetToTables()
+   486→    },
+   487→    onError: (err: Error) => toast.error(err.message),
+   488→  })
+   489→
+   490→  const canCancel =
+   491→    !!order && !!user && (user.role === 'admin' || (order.userId != null && order.userId === user.id))
+   492→
+   493→  const preparingCount = order?.items.filter((i) => i.status === 'preparing').length ?? 0
+   494→  const readyCount = order?.items.filter((i) => i.status === 'ready').length ?? 0
+   495→
+   496→  // Merged-seating badge: extra tables joined to this order (live order field
+   497→  // wins once the order exists; draft mode falls back to the seating list).
+   498→  const mergedExtraCount = order
+   499→    ? (order.extraTableIds?.length ?? 0)
+   500→    : Math.max(0, (seatingTables?.length ?? 1) - 1)
+   501→
+   502→  // ── Render ───────────────────────────────────────────────────────
+   503→  if (mode === 'tables') {
+   504→    return (
+   505→      <>
+   506→        <TableSelect
+   507→          onSelectTable={selectTable}
+   508→          onTakeaway={startTakeaway}
+   509→          onOpenTakeawayOrder={openTakeawayOrder}
+   510→          transferOrderId={transferOrderId}
+   511→          onTransferDone={handleTransferDone}
+   512→          onSeatParty={handleSeatParty}
+   513→          onSettleDeferred={handleSettleDeferred}
+   514→        />
+   515→        {/* Guests quick dialog — shown BEFORE entering order mode on a free
+   516→            table (or after a Seat Party selection). */}
+   517→        <GuestsDialog
+   518→          open={guestsDialogOpen}
+   519→          value={guestsValue}
+   520→          pending={updateGuests.isPending}
+   521→          onValueChange={setGuestsValue}
+   522→          onConfirm={confirmGuests}
+   523→          onCancel={cancelGuestsDialog}
+   524→        />
+   525→        {/* Deferred-check settlement (chips on the floor) — same payment modal
+   526→            as order mode; hides its defer button for already-deferred orders. */}
+   527→        {payOrder && (
+   528→          <PaymentModal
+   529→            order={payOrder}
+   530→            open={payOpen}
+   531→            onOpenChange={(o) => {
+   532→              setPayOpen(o)
+   533→              if (!o) setPayOrder(null)
+   534→            }}
+   535→            onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+   536→            onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
+   537→          />
+   538→        )}
+   539→        {/* Receipt after a full payment — the screen resets to the floor while
+   540→            the receipt stays on top (independent of the payment modal). */}
+   541→        {receiptOrder && (
+   542→          <ReceiptModal
+   543→            order={receiptOrder}
+   544→            open={!!receiptOrder}
+   545→            onOpenChange={(o) => {
+   546→              if (!o) setReceiptOrder(null)
+   547→            }}
+   548→            onClose={() => setReceiptOrder(null)}
+   549→          />
+   550→        )}
+   551→      </>
+   552→    )
+   553→  }
+   554→
+   555→  return (
+   556→    <div className="flex h-full min-h-[560px] flex-col">
+   557→      {/* ── Top bar (Odoo order chrome) ── */}
+   558→      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[#E2E2E0] bg-white px-3 py-2 shadow-sm sm:px-4">
+   559→        <Button
+   560→          variant="ghost"
+   561→          className="h-11 rounded-xl px-3 text-[#714B67] hover:bg-[#714B67]/10"
+   562→          onClick={resetToTables}
+   563→          title={t('pos.backToTables')}
+   564→        >
+   565→          <ChevronLeft className="size-5 rtl:rotate-180" />
+   566→          <span>{t('pos.title')}</span>
+   567→        </Button>
+   568→        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+   569→          <span className="truncate text-xl font-bold">{selectedTable?.name ?? t('pos.order')}</span>
+   570→          {mergedExtraCount > 0 && (
+   571→            <Badge className="gap-1 border-violet-300 bg-violet-100 text-violet-800 hover:bg-violet-100">
+   572→              <Combine className="size-3" aria-hidden />
+   573→              {t('pos.mergedTablesBadge', { n: mergedExtraCount })}
+   574→            </Badge>
+   575→          )}
+   576→          {order && (
+   577→            <Badge className="bg-[#714B67] text-white hover:bg-[#714B67]">
+   578→              {t('common.order')} #{order.id}
+   579→            </Badge>
+   580→          )}
+   581→          {order && (
+   582→            <span className="text-xs tabular-nums text-muted-foreground" data-tick={elapsedTick}>
+   583→              {elapsedSince(order.createdAt)}
+   584→            </span>
+   585→          )}
+   586→          {preparingCount > 0 && (
+   587→            <Badge className="border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-100">
+   588→              {t('pos.preparingCount', { n: preparingCount })}
+   589→            </Badge>
+   590→          )}
+   591→          {readyCount > 0 && (
+   592→            <Badge className="border-emerald-300 bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+   593→              {t('pos.readyCount', { n: readyCount })}
+   594→            </Badge>
+   595→          )}
+   596→        </div>
+   597→        <div className="flex items-center gap-2">
+   598→          {/* Guests: N — edit while drafting (sent with the order) or on the live order */}
+   599→          <Button
+   600→            variant="outline"
+   601→            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   602→            onClick={openGuestsEdit}
+   603→            title={t('pos.editGuests')}
+   604→          >
+   605→            <Users />
+   606→            <span className="hidden sm:inline">{t('common.guests')}:</span>
+   607→            <span className="font-semibold tabular-nums">{order ? order.guests : guestsDraft}</span>
+   608→          </Button>
+   609→          <Button
+   610→            variant="outline"
+   611→            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   612→            disabled={!order}
+   613→            onClick={startTransfer}
+   614→            title={order ? t('pos.transferHint') : t('pos.transferDisabledHint')}
+   615→          >
+   616→            <ArrowLeftRight />
+   617→            <span className="hidden md:inline">{t('pos.transfer')}</span>
+   618→          </Button>
+   619→          {order && canCancel && (
+   620→            <Button
+   621→              variant="outline"
+   622→              className="h-11 rounded-xl border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+   623→              onClick={() => setCancelOpen(true)}
+   624→            >
+   625→              <Ban />
+   626→              <span className="hidden md:inline">{t('common.cancel')}</span>
+   627→            </Button>
+   628→          )}
+   629→        </div>
+   630→      </header>
+   631→
+   632→      {/* ── Body: product grid + cart ── */}
+   633→      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+   634→        <ProductGrid products={products} onAdd={addProduct} className="min-h-0 flex-1" />
+   635→        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t border-[#E2E2E0] bg-white md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
+   636→          <CartPanel
+   637→            order={order}
+   638→            orderLoading={orderLoading}
+   639→            draft={draft}
+   640→            table={selectedTable ?? { id: null, name: t('pos.order') }}
+   641→            onDraftChange={setDraft}
+   642→            onSend={() => void sendToKitchen()}
+   643→            onPay={() => void handlePay()}
+   644→            onPrintCheck={() => void handlePrintCheck()}
+   645→            onCancel={() => setCancelOpen(true)}
+   646→            canCancel={canCancel}
+   647→            sending={sending}
+   648→            userRole={user?.role ?? ''}
+   649→          />
+   650→        </div>
+   651→      </div>
+   652→
+   653→      {/* ── Guests edit dialog (order mode) ── */}
+   654→      <GuestsDialog
+   655→        open={guestsDialogOpen}
+   656→        value={guestsValue}
+   657→        pending={updateGuests.isPending}
+   658→        onValueChange={setGuestsValue}
+   659→        onConfirm={confirmGuests}
+   660→        onCancel={cancelGuestsDialog}
+   661→      />
+   662→
+   663→      {/* ── Cancel order confirmation ── */}
+   664→      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+   665→        <AlertDialogContent>
+   666→          <AlertDialogHeader>
+   667→            <AlertDialogTitle>{t('pos.cancelTitle')}</AlertDialogTitle>
+   668→            <AlertDialogDescription>
+   669→              {t('pos.cancelDesc', {
+   670→                order: order?.id ?? 0,
+   671→                table: selectedTable?.name ?? t('pos.order'),
+   672→                total: formatCurrency(order?.totalAmount ?? 0),
+   673→                items: order?.items.length ?? 0,
+   674→              })}
+   675→            </AlertDialogDescription>
+   676→          </AlertDialogHeader>
+   677→          <AlertDialogFooter>
+   678→            <AlertDialogCancel disabled={cancelMutation.isPending}>
+   679→              {t('pos.keepOrder')}
+   680→            </AlertDialogCancel>
+   681→            <AlertDialogAction
+   682→              className="bg-destructive text-white hover:bg-destructive/90"
+   683→              disabled={cancelMutation.isPending}
+   684→              onClick={(e) => {
+   685→                e.preventDefault()
+   686→                if (order) cancelMutation.mutate(order.id)
+   687→              }}
+   688→            >
+   689→              {cancelMutation.isPending && <Loader2 className="animate-spin" />}{' '}
+   690→              {t('pos.cancelOrder')}
+   691→            </AlertDialogAction>
+   692→          </AlertDialogFooter>
+   693→        </AlertDialogContent>
+   694→      </AlertDialog>
+   695→
+   696→      {/* ── Split payment ── */}
+   697→      {payOrder && (
+   698→        <PaymentModal
+   699→          order={payOrder}
+   700→          open={payOpen}
+   701→          onOpenChange={(o) => {
+   702→            setPayOpen(o)
+   703→            if (!o) setPayOrder(null)
+   704→          }}
+   705→          onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+   706→          onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
+   707→        />
+   708→      )}
+   709→
+   710→      {/* ── Pre-payment guest check (from the cart panel) ── */}
+   711→      {checkOrder && (
+   712→        <CheckModal
+   713→          key={checkOrder.id}
+   714→          order={checkOrder}
+   715→          open={checkOpen}
+   716→          onOpenChange={(o) => {
+   717→            setCheckOpen(o)
+   718→            if (!o) setCheckOrder(null)
+   719→          }}
+   720→        />
+   721→      )}
+   722→
+   723→      {/* ── Receipt — shown after an order is fully paid, independent of the payment modal ── */}
+   724→      {receiptOrder && (
+   725→        <ReceiptModal
+   726→          order={receiptOrder}
+   727→          open={!!receiptOrder}
+   728→          onOpenChange={(o) => {
+   729→            if (!o) setReceiptOrder(null)
+   730→          }}
+   731→          onClose={() => setReceiptOrder(null)}
+   732→        />
+   733→      )}
+   734→    </div>
+   735→  )
+   736→}
+   737→
+   738→/** Quick guests picker — stepper + 1-8 chips (min MIN_GUESTS, max MAX_GUESTS). */
+   739→function GuestsDialog({
+   740→  open,
+   741→  value,
+   742→  pending,
+   743→  onValueChange,
+   744→  onConfirm,
+   745→  onCancel,
+   746→}: {
+   747→  open: boolean
+   748→  value: number
+   749→  pending: boolean
+   750→  onValueChange: (v: number) => void
+   751→  onConfirm: () => void
+   752→  onCancel: () => void
+   753→}) {
+   754→  const { t } = useI18n()
+   755→
+   756→  const step = (delta: number) => {
+   757→    const next = Math.min(MAX_GUESTS, Math.max(MIN_GUESTS, Math.round(value + delta)))
+   758→    onValueChange(next)
+   759→  }
+   760→
+   761→  return (
+   762→    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+   763→      <DialogContent className="sm:max-w-sm">
+   764→        <DialogHeader>
+   765→          <DialogTitle className="flex items-center gap-2">
+   766→            <Users className="size-5 text-[#714B67]" /> {t('pos.editGuests')}
+   767→          </DialogTitle>
+   768→          <DialogDescription>{t('pos.guestsDialogDesc')}</DialogDescription>
+   769→        </DialogHeader>
+   770→        <div className="space-y-4">
+   771→          <div className="flex items-center justify-center gap-4">
+   772→            <Button
+   773→              variant="outline"
+   774→              size="icon"
+   775→              className="size-12 rounded-xl"
+   776→              disabled={value <= MIN_GUESTS}
+   777→              onClick={() => step(-1)}
+   778→              aria-label={t('pos.fewerGuests')}
+   779→            >
+   780→              <Minus />
+   781→            </Button>
+   782→            <span className="w-16 text-center text-4xl font-bold tabular-nums">{value}</span>
+   783→            <Button
+   784→              variant="outline"
+   785→              size="icon"
+   786→              className="size-12 rounded-xl"
+   787→              disabled={value >= MAX_GUESTS}
+   788→              onClick={() => step(1)}
+   789→              aria-label={t('pos.moreGuests')}
+   790→            >
+   791→              <Plus />
+   792→            </Button>
+   793→          </div>
+   794→          <div className="grid grid-cols-4 gap-1.5">
+   795→            {GUEST_QUICK_CHIPS.map((n) => (
+   796→              <button
+   797→                key={n}
+   798→                type="button"
+   799→                onClick={() => onValueChange(n)}
+   800→                className={cn(
+   801→                  'h-11 rounded-full border text-sm font-semibold tabular-nums transition-colors',
+   802→                  value === n
+   803→                    ? 'border-[#714B67] bg-[#714B67] text-white'
+   804→                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+   805→                )}
+   806→              >
+   807→                {n}
+   808→              </button>
+   809→            ))}
+   810→          </div>
+   811→        </div>
+   812→        <DialogFooter>
+   813→          <Button variant="outline" onClick={onCancel} disabled={pending}>
+   814→            {t('common.cancel')}
+   815→          </Button>
+   816→          <Button
+   817→            className="bg-[#714B67] text-white hover:bg-[#714B67]/90"
+   818→            onClick={onConfirm}
+   819→            disabled={pending}
+   820→          >
+   821→            {pending ? <Loader2 className="animate-spin" /> : <Check />} {t('common.confirm')}
+   822→          </Button>
+   823→        </DialogFooter>
+   824→      </DialogContent>
+   825→    </Dialog>
+   826→  )
+   827→}
+   828→
