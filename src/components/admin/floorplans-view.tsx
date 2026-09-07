@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Armchair, Loader2, Map, MapPin, Plus, Trash2, Users } from 'lucide-react'
+import { Armchair, Clock, Loader2, Map, MapPin, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -39,6 +39,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { apiFetch, fetcher } from '@/lib/api'
+import { elapsedSince, formatCurrency } from '@/lib/format'
 import { TABLE_SHAPES } from '@/lib/constants'
 import type { FloorPlan, RestaurantTable } from '@/lib/types'
 import { useI18n } from '@/lib/i18n'
@@ -57,22 +58,43 @@ type DragState = {
   movedPx: number
 }
 
-const TABLE_STYLES: Record<string, { surface: string; dot: string }> = {
-  free: { surface: 'border-emerald-400 bg-emerald-50 text-emerald-900', dot: 'bg-emerald-500' },
-  occupied: { surface: 'border-amber-400 bg-amber-100 text-amber-950', dot: 'bg-amber-500' },
-  reserved: { surface: 'border-rose-400 bg-rose-50 text-rose-900', dot: 'bg-rose-500' },
-}
-
-/** Canvas tile sizing per table shape (6-c spec): round → circle, etc. */
+/** Odoo 17-style tile silhouettes (BINDING — mirrors the POS floor screen). */
 const SHAPE_TILE_CLASSES: Record<string, string> = {
-  square: 'h-20 w-24 rounded-xl',
-  round: 'h-24 w-24 rounded-full',
-  rectangle: 'h-24 w-32 rounded-xl',
-  oval: 'h-24 w-32 rounded-full',
+  square: 'aspect-square rounded-2xl',
+  round: 'aspect-square rounded-full',
+  rectangle: 'h-24 rounded-2xl',
+  oval: 'h-24 rounded-full',
 }
 
 function shapeTileClasses(shape: string): string {
   return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+}
+
+/** Occupied-tile duration heat: <15m emerald · 15–44 amber · 45–89 orange · ≥90 rose. */
+function occupiedHeatClasses(mins: number): { surface: string; amount: string } {
+  if (mins < 15)
+    return { surface: 'bg-emerald-50 border-emerald-200 text-emerald-900', amount: 'text-emerald-700' }
+  if (mins < 45)
+    return { surface: 'bg-amber-50 border-amber-200 text-amber-900', amount: 'text-amber-700' }
+  if (mins < 90)
+    return { surface: 'bg-orange-100 border-orange-300 text-orange-900', amount: 'text-orange-700' }
+  return { surface: 'bg-rose-100 border-rose-300 text-rose-900', amount: 'text-rose-700' }
+}
+
+/** Tile surface per live status: free = white, reserved = amber ring, occupied = duration heat. */
+function tableSurfaceClasses(
+  table: RestaurantTable,
+  mins: number,
+): { surface: string; amount: string | null } {
+  if (table.status === 'occupied') {
+    const heat = occupiedHeatClasses(mins)
+    return { surface: heat.surface, amount: heat.amount }
+  }
+  if (table.status === 'reserved')
+    return { surface: 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400', amount: null }
+  if (table.status === 'free') return { surface: 'bg-white border-[#E2E2E0] shadow-sm', amount: null }
+  // unknown status — neutral stone fallback (keeps tiles readable)
+  return { surface: 'border-stone-300 bg-stone-50 text-stone-700', amount: null }
 }
 
 /** Tiny shape glyph used next to each Select option. */
@@ -608,14 +630,14 @@ export default function FloorPlansView() {
                     const isDragging = drag !== null && drag.table.id === table.id
                     const x = isDragging ? drag.x : table.positionX
                     const y = isDragging ? drag.y : table.positionY
-                    const styles =
-                      TABLE_STYLES[table.status] ?? {
-                        surface: 'border-stone-300 bg-stone-50 text-stone-700',
-                        dot: 'bg-stone-400',
-                      }
+                    // Minutes since the open order started (duration heat driver).
+                    const mins = table.openOrderSince
+                      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+                      : 0
+                    const { surface, amount: amountClass } = tableSurfaceClasses(table, mins)
+                    const isOccupied = table.status === 'occupied'
+                    const shape = table.shape ?? 'square'
                     const statusLabel = t(`status.table.${table.status}`)
-                    const showGuests =
-                      table.status === 'occupied' && table.openOrderGuests != null
                     return (
                       <div
                         key={table.id}
@@ -634,29 +656,54 @@ export default function FloorPlansView() {
                           }
                         }}
                         className={cn(
-                          'absolute flex -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none flex-col items-center justify-center gap-0.5 border-2 p-1 font-semibold shadow-sm transition-shadow active:cursor-grabbing',
-                          shapeTileClasses(table.shape ?? 'square'),
-                          styles.surface,
-                          isDragging && 'z-30 cursor-grabbing scale-105 shadow-lg ring-2 ring-ring/60',
+                          'absolute w-28 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none',
+                          isDragging && 'z-30 cursor-grabbing',
                         )}
                       >
-                        <span className="max-w-full truncate px-1 text-sm font-bold leading-tight">
-                          {table.name}
-                        </span>
-                        {showGuests ? (
-                          <span className="flex items-center gap-1 text-[11px] font-medium opacity-80">
-                            <Users className="size-3 shrink-0" aria-hidden />
-                            {table.openOrderGuests} {t('common.people')}
+                        <div
+                          className={cn(
+                            'flex w-full flex-col items-center justify-center gap-1 border-2 p-3 text-center shadow-sm transition hover:shadow-md',
+                            shapeTileClasses(shape),
+                            (shape === 'round' || shape === 'oval') && 'px-4',
+                            surface,
+                            isDragging && 'scale-105 shadow-lg ring-2 ring-ring/60',
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'max-w-full truncate px-1 leading-tight',
+                              isOccupied
+                                ? 'text-base font-bold'
+                                : 'text-sm font-bold text-stone-500',
+                            )}
+                          >
+                            {table.name}
                           </span>
-                        ) : (
-                          <span className="text-[11px] font-medium opacity-75">
-                            {table.capacity} {t('common.seats')}
-                          </span>
-                        )}
-                        <span className="mt-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider opacity-80">
-                          <span className={cn('size-2 rounded-full', styles.dot)} />
-                          {statusLabel}
-                        </span>
+                          {isOccupied ? (
+                            <>
+                              <span
+                                className={cn(
+                                  'text-lg font-extrabold tabular-nums',
+                                  amountClass,
+                                )}
+                              >
+                                {formatCurrency(table.openOrderTotal ?? 0)}
+                              </span>
+                              <span className="flex items-center gap-1 text-[11px] font-medium">
+                                <Users className="size-3 shrink-0" aria-hidden />
+                                {table.openOrderGuests ?? table.capacity}
+                                <span aria-hidden>·</span>
+                                <Clock className="size-3 shrink-0" aria-hidden />
+                                {elapsedSince(table.openOrderSince ?? new Date())}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="flex items-center gap-1 text-xs text-stone-400">
+                              <Users className="size-3 shrink-0" aria-hidden />
+                              {table.capacity} {t('common.seats')}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     )
                   })

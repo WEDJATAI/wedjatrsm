@@ -76,6 +76,7 @@ model AppSetting {
 model Category {
   id           Int       @id @default(autoincrement())
   name         String
+  nameAr       String?   @map("name_ar") // optional Arabic display name (menu localization)
   displayOrder Int       @default(0) @map("display_order")
   active       Boolean   @default(true)
   products     Product[]
@@ -87,6 +88,7 @@ model Category {
 model Product {
   id                Int      @id @default(autoincrement())
   name              String
+  nameAr            String?  @map("name_ar") // optional Arabic display name (menu localization)
   categoryId        Int?     @map("category_id")
   category          Category? @relation(fields: [categoryId], references: [id])
   price             Float    @default(0)

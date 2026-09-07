@@ -4,7 +4,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 
 const PRODUCT_INCLUDE = {
-  category: { select: { id: true, name: true } },
+  category: { select: { id: true, name: true, nameAr: true } },
 } as const
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
@@ -121,6 +121,8 @@ export async function PUT(
     if (sku !== undefined) data.sku = sku
 
     const imageUrl = parseStringField(body, 'imageUrl', 'Image URL')
+    const nameAr = parseStringField(body, 'nameAr', 'Arabic name')
+    if (nameAr !== undefined) data.nameAr = nameAr
     if (imageUrl !== undefined) data.imageUrl = imageUrl
 
     if (body.categoryId !== undefined) {

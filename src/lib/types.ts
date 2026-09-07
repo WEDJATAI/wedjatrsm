@@ -45,6 +45,8 @@ export type AppSettings = {
 export type Category = {
   id: number
   name: string
+  /** optional Arabic display name — shown when the UI language is Arabic */
+  nameAr?: string | null
   displayOrder: number
   active: boolean
   productCount?: number
@@ -53,8 +55,10 @@ export type Category = {
 export type Product = {
   id: number
   name: string
+  /** optional Arabic display name — shown when the UI language is Arabic */
+  nameAr?: string | null
   categoryId: number | null
-  category?: { id: number; name: string } | null
+  category?: { id: number; name: string; nameAr?: string | null } | null
   price: number
   cost: number
   isStockable: boolean
@@ -96,7 +100,7 @@ export type OrderItem = {
   id: number
   orderId: number
   productId: number | null
-  product?: { id: number; name: string } | null
+  product?: { id: number; name: string; nameAr?: string | null } | null
   quantity: number
   unitPrice: number
   notes: string | null

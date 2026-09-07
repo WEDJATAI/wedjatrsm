@@ -21,6 +21,15 @@ function parseIdParam(id: string): number {
   return n
 }
 
+/** Optional Arabic name field → trimmed string | null (empty/null clears) | undefined (absent). */
+function parseNameAr(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw new ApiError('Arabic name must be a string', 400)
+  const s = value.trim()
+  return s === '' ? null : s
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -45,6 +54,9 @@ export async function PUT(
       }
       data.name = body.name.trim()
     }
+
+    const nameAr = parseNameAr(body.nameAr)
+    if (nameAr !== undefined) data.nameAr = nameAr
 
     if (body.displayOrder !== undefined) {
       const n = Number(body.displayOrder)
@@ -72,6 +84,7 @@ export async function PUT(
       category: {
         id: updated.id,
         name: updated.name,
+        nameAr: updated.nameAr,
         displayOrder: updated.displayOrder,
         active: updated.active,
         productCount: updated._count.products,

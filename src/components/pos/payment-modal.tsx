@@ -29,7 +29,7 @@ import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
 import { PAYMENT_METHODS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import CheckModal, { type CheckSplitRow } from './check-modal'
@@ -67,7 +67,7 @@ const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
 }
 
 export default function PaymentModal({ order, open, onOpenChange, onSuccess }: PaymentModalProps) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [tab, setTab] = useState<SplitTab>('single')
   const [submitting, setSubmitting] = useState(false)
   const [checkOpen, setCheckOpen] = useState(false)
@@ -117,10 +117,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
     () =>
       order.items.map((it) => ({
         id: it.id,
-        label: `${formatQty(it.quantity)} × ${it.product?.name ?? t('pos.item')}`,
+        label: `${formatQty(it.quantity)} × ${
+          it.product ? localizedName(it.product.name, it.product.nameAr, lang) : t('pos.item')
+        }`,
         total: round2(it.quantity * it.unitPrice),
       })),
-    [order.items, t],
+    [order.items, t, lang],
   )
 
   const itAmounts = useMemo(() => {

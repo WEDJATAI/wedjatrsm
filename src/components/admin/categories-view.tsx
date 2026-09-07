@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { GripVertical, MoreHorizontal, Pencil, Plus, Tags, Trash2, TriangleAlert } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
 import type { Category } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
@@ -44,6 +44,7 @@ import { Switch } from '@/components/ui/switch'
 
 type CategoryForm = {
   name: string
+  nameAr: string // '' = no Arabic name (clears it)
   displayOrder: string
 }
 
@@ -75,15 +76,27 @@ function BadgeOrder({ order }: { order: number }) {
   )
 }
 
+/** Amber outline badge for untranslated categories — Arabic mode only. */
+function MissingArBadge({ label }: { label: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className="h-5 shrink-0 border-amber-500/40 px-1.5 text-[10px] font-medium text-amber-700 dark:border-amber-400/40 dark:text-amber-400"
+    >
+      {label}
+    </Badge>
+  )
+}
+
 // ─── View ───────────────────────────────────────────────────────────
 
 export default function CategoriesView() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const queryClient = useQueryClient()
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Category | null>(null)
-  const [form, setForm] = useState<CategoryForm>({ name: '', displayOrder: '0' })
+  const [form, setForm] = useState<CategoryForm>({ name: '', nameAr: '', displayOrder: '0' })
   const [deleteTarget, setDeleteTarget] = useState<Category | null>(null)
 
   const categoriesQuery = useQuery({
@@ -111,7 +124,11 @@ export default function CategoriesView() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const payload = { name: form.name.trim(), displayOrder: Number(form.displayOrder) }
+      const payload = {
+        name: form.name.trim(),
+        nameAr: form.nameAr.trim(),
+        displayOrder: Number(form.displayOrder),
+      }
       return editing === null
         ? apiFetch<{ category: Category }>('/api/categories', { method: 'POST', body: payload })
         : apiFetch<{ category: Category }>(`/api/categories/${editing.id}`, {
@@ -168,13 +185,13 @@ export default function CategoriesView() {
 
   function openCreate() {
     setEditing(null)
-    setForm({ name: '', displayOrder: nextDisplayOrder() })
+    setForm({ name: '', nameAr: '', displayOrder: nextDisplayOrder() })
     setFormOpen(true)
   }
 
   function openEdit(category: Category) {
     setEditing(category)
-    setForm({ name: category.name, displayOrder: String(category.displayOrder) })
+    setForm({ name: category.name, nameAr: category.nameAr ?? '', displayOrder: String(category.displayOrder) })
     setFormOpen(true)
   }
 
@@ -247,9 +264,17 @@ export default function CategoriesView() {
               >
                 <GripVertical className="size-4 shrink-0 text-muted-foreground/40" aria-hidden />
                 <div className="min-w-0 flex-1">
-                  <p className={cn('truncate font-medium', !c.active && 'text-muted-foreground')}>
-                    {c.name}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className={cn('truncate font-medium', !c.active && 'text-muted-foreground')}>
+                      {localizedName(c.name, c.nameAr, lang)}
+                    </p>
+                    {lang === 'ar' && !(c.nameAr ?? '').trim() && (
+                      <MissingArBadge label={t('admin.missingAr')} />
+                    )}
+                  </div>
+                  {lang === 'ar' && c.name !== localizedName(c.name, c.nameAr, lang) ? (
+                    <p className="truncate text-muted-foreground text-xs">{c.name}</p>
+                  ) : null}
                   <p className="text-muted-foreground text-sm">
                     {t('admin.productsCount', { count: c.productCount ?? 0 })}
                   </p>
@@ -295,19 +320,34 @@ export default function CategoriesView() {
             <DialogDescription>{t('admin.categoryDesc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="category-name">
-                {t('common.name')} *
-              </Label>
-              <Input
-                id="category-name"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder={t('admin.categoryPlaceholder')}
-                className="h-11"
-                aria-invalid={errors.name ? true : undefined}
-              />
-              <FieldError message={errors.name} />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="category-name">
+                  {t('common.name')} *
+                </Label>
+                <Input
+                  id="category-name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder={t('admin.categoryPlaceholder')}
+                  className="h-11"
+                  aria-invalid={errors.name ? true : undefined}
+                />
+                <FieldError message={errors.name} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="category-name-ar">{t('admin.nameArLabel')}</Label>
+                <Input
+                  id="category-name-ar"
+                  lang="ar"
+                  dir="rtl"
+                  value={form.nameAr}
+                  onChange={(e) => setForm({ ...form, nameAr: e.target.value })}
+                  placeholder={t('admin.nameArPlaceholder')}
+                  className="h-11"
+                />
+                <p className="text-muted-foreground text-xs">{t('admin.nameArHint')}</p>
+              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="category-order">{t('admin.displayOrder')}</Label>

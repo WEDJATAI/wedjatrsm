@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n, type Lang } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
@@ -76,6 +76,7 @@ function buildCheckModel(
     rows: CheckSplitRow[] | undefined
     eqPayers: number
     selectedIds: Set<number>
+    lang: Lang
   },
   t: TFunc,
 ): CheckModel {
@@ -89,7 +90,7 @@ function buildCheckModel(
   }
   const allItems = order.items.map((it) => ({
     qty: formatQty(it.quantity),
-    name: it.product?.name ?? t('pos.item'),
+    name: it.product ? localizedName(it.product.name, it.product.nameAr, opts.lang) : t('pos.item'),
     total: round2(it.quantity * it.unitPrice),
     notes: it.notes,
   }))
@@ -229,6 +230,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
     rows,
     eqPayers,
     selectedIds,
+    lang,
   }, t)
 
   const clampPayers = (raw: number) => {
@@ -419,7 +421,10 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                             )}
                           >
                             <span className="min-w-0 truncate">
-                              {formatQty(it.quantity)} × {it.product?.name ?? t('pos.item')}
+                              {formatQty(it.quantity)} ×{' '}
+                              {it.product
+                                ? localizedName(it.product.name, it.product.nameAr, lang)
+                                : t('pos.item')}
                             </span>
                             <span className="shrink-0 tabular-nums">
                               {formatCurrency(round2(it.quantity * it.unitPrice))}

@@ -4,7 +4,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 
 const PRODUCT_INCLUDE = {
-  category: { select: { id: true, name: true } },
+  category: { select: { id: true, name: true, nameAr: true } },
 } as const
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
@@ -130,6 +130,7 @@ export async function POST(req: NextRequest) {
     const isSellable = parseBoolField(body, 'isSellable', 'Is sellable') ?? true
     const sku = parseStringField(body, 'sku', 'SKU')
     const imageUrl = parseStringField(body, 'imageUrl', 'Image URL')
+    const nameAr = parseStringField(body, 'nameAr', 'Arabic name')
     const categoryId = parseCategoryId(body)
 
     if (categoryId !== null && categoryId !== undefined) {
@@ -142,6 +143,7 @@ export async function POST(req: NextRequest) {
 
     const data: Prisma.ProductUncheckedCreateInput = {
       name,
+      nameAr: nameAr ?? null,
       price,
       cost,
       lowStockThreshold,

@@ -1,0 +1,870 @@
+     1→'use client'
+     2→
+     3→import { useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  ArrowLeftRight,
+     7→  Ban,
+     8→  Check,
+     9→  CreditCard,
+    10→  Loader2,
+    11→  Minus,
+    12→  Pencil,
+    13→  Plus,
+    14→  Printer,
+    15→  Send,
+    16→  ShoppingBag,
+    17→  StickyNote,
+    18→  Trash2,
+    19→  Users,
+    20→  X,
+    21→} from 'lucide-react'
+    22→
+    23→import { Badge } from '@/components/ui/badge'
+    24→import { Button } from '@/components/ui/button'
+    25→import {
+    26→  Dialog,
+    27→  DialogContent,
+    28→  DialogDescription,
+    29→  DialogFooter,
+    30→  DialogHeader,
+    31→  DialogTitle,
+    32→} from '@/components/ui/dialog'
+    33→import { Input } from '@/components/ui/input'
+    34→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    35→import { Skeleton } from '@/components/ui/skeleton'
+    36→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    37→import { Textarea } from '@/components/ui/textarea'
+    38→import { toast } from 'sonner'
+    39→import { apiFetch, fetcher } from '@/lib/api'
+    40→import { COURSES, TAX_RATE } from '@/lib/constants'
+    41→import { formatCurrency, formatQty } from '@/lib/format'
+    42→import { useI18n } from '@/lib/i18n'
+    43→import { cn } from '@/lib/utils'
+    44→import type { Order, OrderItem } from '@/lib/types'
+    45→import { computeCartTotals, round2, type DraftItem } from './pos-utils'
+    46→
+    47→type CartPanelProps = {
+    48→  order: Order | null
+    49→  orderLoading?: boolean
+    50→  draft: DraftItem[]
+    51→  table: { id: number | null; name: string }
+    52→  onDraftChange: (draft: DraftItem[]) => void
+    53→  onSend: () => void
+    54→  onPay: () => void
+    55→  /** Open the pre-payment guest check (pos-view flushes the draft first). */
+    56→  onPrintCheck?: () => void
+    57→  onCancel: () => void
+    58→  canCancel?: boolean
+    59→  sending?: boolean
+    60→  userRole?: string
+    61→}
+    62→
+    63→const STATUS_CHIP: Record<string, string> = {
+    64→  new: 'bg-zinc-100 text-zinc-500',
+    65→  preparing: 'bg-amber-100 text-amber-700 animate-pulse',
+    66→  ready: 'bg-emerald-100 text-emerald-700',
+    67→  served: 'bg-muted text-muted-foreground',
+    68→}
+    69→
+    70→export default function CartPanel({
+    71→  order,
+    72→  orderLoading = false,
+    73→  draft,
+    74→  table,
+    75→  onDraftChange,
+    76→  onSend,
+    77→  onPay,
+    78→  onPrintCheck,
+    79→  onCancel,
+    80→  canCancel = false,
+    81→  sending = false,
+    82→  userRole,
+    83→}: CartPanelProps) {
+    84→  const queryClient = useQueryClient()
+    85→  const { t } = useI18n()
+    86→  const orderId = order?.id ?? null
+    87→
+    88→  const [editing, setEditing] = useState<DraftItem | null>(null)
+    89→  const [editQty, setEditQty] = useState('1')
+    90→  const [editNotes, setEditNotes] = useState('')
+    91→  const [editCourse, setEditCourse] = useState('main')
+    92→
+    93→  const [discountOpen, setDiscountOpen] = useState(false)
+    94→  const [discountTab, setDiscountTab] = useState<'percent' | 'fixed'>('percent')
+    95→  const [percentInput, setPercentInput] = useState('')
+    96→  const [fixedInput, setFixedInput] = useState('')
+    97→
+    98→  // ── Item transfer ("Move items") state ────────────────────────────
+    99→  const [moveMode, setMoveMode] = useState(false)
+   100→  const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+   101→  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+   102→
+   103→  const totals = computeCartTotals(order, draft)
+   104→  const noItems = (order?.items.length ?? 0) + draft.length === 0
+   105→
+   106→  // Open orders (for the move-items target picker) — only fetched while the
+   107→  // picker dialog is open; the query key matches the floor's live query.
+   108→  const { data: openOrdersData, isLoading: openOrdersLoading } = useQuery({
+   109→    queryKey: ['orders', 'open'],
+   110→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   111→    enabled: moveDialogOpen,
+   112→  })
+   113→  const otherOpenOrders = (openOrdersData?.orders ?? []).filter((o) => o.id !== orderId)
+   114→
+   115→  // ── Server mutations (sent items) ─────────────────────────────────
+   116→  const markServed = useMutation({
+   117→    mutationFn: (itemId: number) =>
+   118→      apiFetch<{ item: OrderItem }>(`/api/order-items/${itemId}`, {
+   119→        method: 'PUT',
+   120→        body: { status: 'served' },
+   121→      }),
+   122→    onSuccess: async (data) => {
+   123→      toast.success(t('pos.markedServedToast', { name: data.item.product?.name ?? t('pos.item') }))
+   124→      await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
+   125→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   126→    },
+   127→    onError: (err: Error) => toast.error(err.message),
+   128→  })
+   129→
+   130→  const removeItem = useMutation({
+   131→    mutationFn: (itemId: number) => {
+   132→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   133→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   134→        method: 'PUT',
+   135→        body: { removeItemIds: [itemId] },
+   136→      })
+   137→    },
+   138→    onSuccess: async ({ order: updated }) => {
+   139→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   140→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   141→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   142→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   143→      toast.success(t('pos.itemRemovedToast'))
+   144→    },
+   145→    onError: (err: Error) => toast.error(err.message),
+   146→  })
+   147→
+   148→  const applyDiscount = useMutation({
+   149→    mutationFn: (discountAmount: number) => {
+   150→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   151→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   152→        method: 'PUT',
+   153→        body: { discountAmount },
+   154→      })
+   155→    },
+   156→    onSuccess: async ({ order: updated }) => {
+   157→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   158→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   159→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   160→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   161→      toast.success(t('pos.discountUpdatedToast'))
+   162→      setDiscountOpen(false)
+   163→    },
+   164→    onError: (err: Error) => toast.error(err.message),
+   165→  })
+   166→
+   167→  // ── Item transfer mutation (move sent items to another open order) ──
+   168→  const transferItems = useMutation({
+   169→    mutationFn: (vars: {
+   170→      sourceId: number
+   171→      itemIds: number[]
+   172→      targetOrderId: number
+   173→      targetLabel: string
+   174→    }) =>
+   175→      apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
+   176→        method: 'POST',
+   177→        body: { itemIds: vars.itemIds, targetOrderId: vars.targetOrderId },
+   178→      }),
+   179→    onSuccess: async (_data, vars) => {
+   180→      toast.success(
+   181→        t('pos.itemsMovedToast', { n: vars.itemIds.length, target: vars.targetLabel }),
+   182→      )
+   183→      await Promise.all([
+   184→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   185→        queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   186→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   187→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   188→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.sourceId] }),
+   189→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.targetOrderId] }),
+   190→      ])
+   191→      exitMoveMode()
+   192→    },
+   193→    onError: (err: Error) => toast.error(err.message),
+   194→  })
+   195→
+   196→  // ── Move-items helpers ───────────────────────────────────────────
+   197→  const enterMoveMode = () => {
+   198→    setMoveMode(true)
+   199→    setMoveSelected(new Set())
+   200→  }
+   201→
+   202→  const exitMoveMode = () => {
+   203→    setMoveMode(false)
+   204→    setMoveSelected(new Set())
+   205→    setMoveDialogOpen(false)
+   206→  }
+   207→
+   208→  const toggleMoveItem = (itemId: number) => {
+   209→    setMoveSelected((prev) => {
+   210→      const next = new Set(prev)
+   211→      if (next.has(itemId)) next.delete(itemId)
+   212→      else next.add(itemId)
+   213→      return next
+   214→    })
+   215→  }
+   216→
+   217→  // Only ids that still exist on the (live-polled) order — stale ids are dropped.
+   218→  const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
+   219→  const moveCount = selectedMoveIds.length
+   220→
+   221→  const pickMoveTarget = (target: Order) => {
+   222→    if (orderId == null || moveCount === 0) return
+   223→    transferItems.mutate({
+   224→      sourceId: orderId,
+   225→      itemIds: selectedMoveIds,
+   226→      targetOrderId: target.id,
+   227→      targetLabel: target.table?.name ?? t('common.takeaway'),
+   228→    })
+   229→  }
+   230→
+   231→  // ── Draft helpers ─────────────────────────────────────────────────
+   232→  const updateDraft = (key: string, patch: Partial<DraftItem>) =>
+   233→    onDraftChange(draft.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+   234→
+   235→  const changeQty = (d: DraftItem, delta: number) => {
+   236→    const next = round2(d.quantity + delta)
+   237→    if (next <= 0) onDraftChange(draft.filter((x) => x.key !== d.key))
+   238→    else updateDraft(d.key, { quantity: next })
+   239→  }
+   240→
+   241→  const openEdit = (d: DraftItem) => {
+   242→    setEditing(d)
+   243→    setEditQty(String(d.quantity))
+   244→    setEditNotes(d.notes)
+   245→    setEditCourse(d.course)
+   246→  }
+   247→
+   248→  const saveEdit = () => {
+   249→    if (!editing) return
+   250→    const qty = round2(parseFloat(editQty))
+   251→    if (!Number.isFinite(qty) || qty <= 0) return
+   252→    updateDraft(editing.key, { quantity: qty, notes: editNotes.trim(), course: editCourse })
+   253→    setEditing(null)
+   254→  }
+   255→
+   256→  // Seed discount dialog inputs from the current order discount when opening.
+   257→  const openDiscountDialog = () => {
+   258→    const current = order?.discountAmount ?? 0
+   259→    const subtotal = order?.subtotalAmount ?? 0
+   260→    setPercentInput(current > 0 && subtotal > 0 ? String(round2((current / subtotal) * 100)) : '')
+   261→    setFixedInput(current > 0 ? String(current) : '')
+   262→    setDiscountOpen(true)
+   263→  }
+   264→
+   265→  // Effective discount from the dialog inputs (clamped to [0, order subtotal]).
+   266→  const orderSubtotal = round2(order?.subtotalAmount ?? 0)
+   267→  const previewDiscount = (() => {
+   268→    if (!order) return 0
+   269→    const raw =
+   270→      discountTab === 'percent'
+   271→        ? (orderSubtotal * (parseFloat(percentInput) || 0)) / 100
+   272→        : parseFloat(fixedInput) || 0
+   273→    if (!Number.isFinite(raw) || raw < 0) return 0
+   274→    return round2(Math.min(raw, orderSubtotal))
+   275→  })()
+   276→  const previewBase = round2(orderSubtotal - previewDiscount)
+   277→  const previewTax = round2(previewBase * TAX_RATE)
+   278→
+   279→  return (
+   280→    <div className="flex min-h-0 flex-1 flex-col">
+   281→      {/* Header */}
+   282→      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E2E2E0] px-4 py-3">
+   283→        <div className="min-w-0">
+   284→          <p className="truncate text-base font-bold">{table.name}</p>
+   285→          {(order?.user?.name || userRole) && (
+   286→            <p className="text-[11px] text-muted-foreground">
+   287→              {t('pos.server')}:{' '}
+   288→              {order?.user?.name ?? (userRole ? t(`role.${userRole}`) : '')}
+   289→            </p>
+   290→          )}
+   291→        </div>
+   292→        {order ? (
+   293→          <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
+   294→            {t('common.order')} #{order.id}
+   295→          </Badge>
+   296→        ) : (
+   297→          <Badge variant="secondary" className="shrink-0">
+   298→            {t('pos.notSent')}
+   299→          </Badge>
+   300→        )}
+   301→      </div>
+   302→
+   303→      {/* Body */}
+   304→      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto px-4">
+   305→        {orderLoading && !order && draft.length === 0 ? (
+   306→          <div className="space-y-3 py-4">
+   307→            <Skeleton className="h-14 w-full" />
+   308→            <Skeleton className="h-14 w-full" />
+   309→            <Skeleton className="h-14 w-full" />
+   310→          </div>
+   311→        ) : noItems ? (
+   312→          <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+   313→            <ShoppingBag className="size-10 opacity-30" />
+   314→            <p className="text-sm">{t('pos.tapToAdd')}</p>
+   315→          </div>
+   316→        ) : (
+   317→          <>
+   318→            {/* Sent to kitchen */}
+   319→            {order && order.items.length > 0 && (
+   320→              <section className="py-2">
+   321→                <div className="flex items-center justify-between gap-2">
+   322→                  <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   323→                    {t('pos.sentItems')} ({order.items.length})
+   324→                  </h3>
+   325→                  <div className="flex shrink-0 items-center gap-1">
+   326→                    {!moveMode && (
+   327→                      <Button
+   328→                        variant="outline"
+   329→                        size="sm"
+   330→                        className="h-8 gap-1 px-2 text-xs border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   331→                        title={t('pos.transferItems')}
+   332→                        onClick={enterMoveMode}
+   333→                      >
+   334→                        <ArrowLeftRight className="size-3.5" /> {t('pos.transferItems')}
+   335→                      </Button>
+   336→                    )}
+   337→                    {moveMode ? (
+   338→                      <span className="text-[11px] text-muted-foreground">{t('pos.moveModeHint')}</span>
+   339→                    ) : (
+   340→                      canCancel && (
+   341→                        <Button
+   342→                          variant="ghost"
+   343→                          size="sm"
+   344→                          className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+   345→                          title={t('pos.cancelOrder')}
+   346→                          onClick={onCancel}
+   347→                        >
+   348→                          <Ban className="size-3.5" /> {t('pos.cancelOrder')}
+   349→                        </Button>
+   350→                      )
+   351→                    )}
+   352→                  </div>
+   353→                </div>
+   354→                {order.items.map((item) => (
+   355→                  <SentItemRow
+   356→                    key={item.id}
+   357→                    item={item}
+   358→                    onServed={() => markServed.mutate(item.id)}
+   359→                    onRemove={() => removeItem.mutate(item.id)}
+   360→                    servedPending={markServed.isPending && markServed.variables === item.id}
+   361→                    removePending={removeItem.isPending && removeItem.variables === item.id}
+   362→                    moveMode={moveMode}
+   363→                    moveSelected={moveSelected.has(item.id)}
+   364→                    onToggleMove={() => toggleMoveItem(item.id)}
+   365→                  />
+   366→                ))}
+   367→              </section>
+   368→            )}
+   369→
+   370→            {/* New items (draft) */}
+   371→            {draft.length > 0 && (
+   372→              <section className="py-2">
+   373→                <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   374→                  {t('pos.newItemsNotSent')} ({draft.length})
+   375→                </h3>
+   376→                {draft.map((d) => (
+   377→                  <DraftRow
+   378→                    key={d.key}
+   379→                    item={d}
+   380→                    onQty={(delta) => changeQty(d, delta)}
+   381→                    onEdit={() => openEdit(d)}
+   382→                    onRemove={() => onDraftChange(draft.filter((x) => x.key !== d.key))}
+   383→                  />
+   384→                ))}
+   385→              </section>
+   386→            )}
+   387→          </>
+   388→        )}
+   389→      </div>
+   390→
+   391→      {/* Footer */}
+   392→      <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
+   393→        <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
+   394→        <div className="flex items-center justify-between text-sm">
+   395→          <span className="flex items-center gap-1 text-muted-foreground">
+   396→            {t('money.discount')}
+   397→            <Button
+   398→              variant="ghost"
+   399→              size="icon"
+   400→              className="size-7 text-muted-foreground"
+   401→              disabled={!order}
+   402→              title={order ? t('pos.applyDiscount') : t('pos.sendFirst')}
+   403→              onClick={openDiscountDialog}
+   404→            >
+   405→              <Pencil className="size-3.5" />
+   406→            </Button>
+   407→          </span>
+   408→          <span className="tabular-nums text-muted-foreground">
+   409→            − {formatCurrency(totals.discount)}
+   410→          </span>
+   411→        </div>
+   412→        <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
+   413→        <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
+   414→          <span className="text-sm font-semibold">{t('money.total')}</span>
+   415→          <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
+   416→        </div>
+   417→        {order && order.paidAmount > 0 && (
+   418→          <>
+   419→            <SummaryRow
+   420→              label={t('money.paid')}
+   421→              value={formatCurrency(order.paidAmount)}
+   422→              valueClassName="text-emerald-600"
+   423→            />
+   424→            <SummaryRow
+   425→              label={t('money.remaining')}
+   426→              value={formatCurrency(Math.max(0, order.remainingAmount))}
+   427→              valueClassName="font-bold text-amber-600"
+   428→            />
+   429→          </>
+   430→        )}
+   431→
+   432→        {moveMode ? (
+   433→          /* ── Item-transfer footer ── */
+   434→          <div className="flex gap-2 pt-1">
+   435→            <Button
+   436→              variant="outline"
+   437→              className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   438→              onClick={exitMoveMode}
+   439→              disabled={transferItems.isPending}
+   440→            >
+   441→              {t('common.cancel')}
+   442→            </Button>
+   443→            <Button
+   444→              className="h-14 flex-[1.6] rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+   445→              disabled={moveCount === 0 || transferItems.isPending}
+   446→              onClick={() => setMoveDialogOpen(true)}
+   447→            >
+   448→              {transferItems.isPending ? (
+   449→                <Loader2 className="animate-spin" />
+   450→              ) : (
+   451→                <ArrowLeftRight className="size-5" />
+   452→              )}
+   453→              <span className="truncate">{t('pos.moveNItems', { n: moveCount })}</span>
+   454→            </Button>
+   455→          </div>
+   456→        ) : (
+   457→          /* ── Normal actions ── */
+   458→          <>
+   459→            <Button
+   460→              variant="secondary"
+   461→              className="h-11 w-full rounded-xl"
+   462→              disabled={draft.length === 0 || sending}
+   463→              onClick={onSend}
+   464→            >
+   465→              {sending ? <Loader2 className="animate-spin" /> : <Send />} {t('pos.sendToKitchen')}
+   466→              {draft.length > 0 && (
+   467→                <Badge className="ms-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+   468→                  {draft.reduce((n, d) => n + d.quantity, 0)}
+   469→                </Badge>
+   470→              )}
+   471→            </Button>
+   472→            <div className="flex gap-2">
+   473→              <Button
+   474→                variant="outline"
+   475→                className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   476→                disabled={!order || sending || !onPrintCheck}
+   477→                title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
+   478→                onClick={onPrintCheck}
+   479→              >
+   480→                <Printer />
+   481→                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+   482→              </Button>
+   483→              <Button
+   484→                className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+   485→                disabled={noItems || sending}
+   486→                onClick={onPay}
+   487→              >
+   488→                {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+   489→                <span className="truncate">
+   490→                  {t('pos.payment')} · {formatCurrency(totals.total)}
+   491→                </span>
+   492→              </Button>
+   493→            </div>
+   494→          </>
+   495→        )}
+   496→      </div>
+   497→
+   498→      {/* Move-items target picker dialog */}
+   499→      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+   500→        <DialogContent className="sm:max-w-md">
+   501→          <DialogHeader>
+   502→            <DialogTitle className="flex items-center gap-2">
+   503→              <ArrowLeftRight className="size-5 text-[#714B67]" /> {t('pos.moveItemsTitle')}
+   504→            </DialogTitle>
+   505→            <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
+   506→          </DialogHeader>
+   507→          <div className="rms-scroll max-h-[50dvh] space-y-2 overflow-y-auto">
+   508→            {openOrdersLoading ? (
+   509→              <div className="space-y-2">
+   510→                <Skeleton className="h-16 w-full" />
+   511→                <Skeleton className="h-16 w-full" />
+   512→              </div>
+   513→            ) : otherOpenOrders.length === 0 ? (
+   514→              <p className="py-6 text-center text-sm text-muted-foreground">
+   515→                {t('pos.noOtherOpenOrders')}
+   516→              </p>
+   517→            ) : (
+   518→              otherOpenOrders.map((o) => (
+   519→                <button
+   520→                  key={o.id}
+   521→                  type="button"
+   522→                  disabled={transferItems.isPending}
+   523→                  onClick={() => pickMoveTarget(o)}
+   524→                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+   525→                >
+   526→                  <div className="min-w-0">
+   527→                    <p className="truncate text-sm font-semibold">
+   528→                      {o.table?.name ?? t('common.takeaway')}
+   529→                    </p>
+   530→                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+   531→                      {t('common.order')} #{o.id}
+   532→                      <span className="inline-flex items-center gap-1">
+   533→                        <Users className="size-3.5" aria-hidden /> {o.guests} {t('common.people')}
+   534→                      </span>
+   535→                    </p>
+   536→                  </div>
+   537→                  <span className="shrink-0 text-sm font-bold tabular-nums text-[#714B67]">
+   538→                    {formatCurrency(o.totalAmount)}
+   539→                  </span>
+   540→                </button>
+   541→              ))
+   542→            )}
+   543→          </div>
+   544→          <DialogFooter>
+   545→            <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={transferItems.isPending}>
+   546→              {t('common.cancel')}
+   547→            </Button>
+   548→          </DialogFooter>
+   549→        </DialogContent>
+   550→      </Dialog>
+   551→
+   552→      {/* Draft item edit dialog */}
+   553→      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+   554→        <DialogContent className="sm:max-w-sm">
+   555→          <DialogHeader>
+   556→            <DialogTitle>{editing?.name}</DialogTitle>
+   557→            <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
+   558→          </DialogHeader>
+   559→          <div className="space-y-4">
+   560→            <div className="flex items-center justify-center gap-3">
+   561→              <Button
+   562→                variant="outline"
+   563→                size="icon"
+   564→                className="size-11"
+   565→                onClick={() => setEditQty(String(Math.max(1, round2((parseFloat(editQty) || 1) - 1))))}
+   566→              >
+   567→                <Minus />
+   568→              </Button>
+   569→              <Input
+   570→                type="number"
+   571→                min={1}
+   572→                step={1}
+   573→                value={editQty}
+   574→                onChange={(e) => setEditQty(e.target.value)}
+   575→                className="h-11 w-20 text-center text-lg font-semibold tabular-nums"
+   576→              />
+   577→              <Button
+   578→                variant="outline"
+   579→                size="icon"
+   580→                className="size-11"
+   581→                onClick={() => setEditQty(String(round2((parseFloat(editQty) || 0) + 1)))}
+   582→              >
+   583→                <Plus />
+   584→              </Button>
+   585→            </div>
+   586→            <div className="space-y-1.5">
+   587→              <p className="text-sm font-medium">{t('common.notes')}</p>
+   588→              <Textarea
+   589→                value={editNotes}
+   590→                onChange={(e) => setEditNotes(e.target.value)}
+   591→                placeholder={t('pos.notesPlaceholder')}
+   592→                rows={2}
+   593→              />
+   594→            </div>
+   595→            <div className="space-y-1.5">
+   596→              <p className="text-sm font-medium">{t('pos.course')}</p>
+   597→              <Select value={editCourse} onValueChange={setEditCourse}>
+   598→                <SelectTrigger className="h-11 w-full">
+   599→                  <SelectValue />
+   600→                </SelectTrigger>
+   601→                <SelectContent>
+   602→                  {COURSES.map((c) => (
+   603→                    <SelectItem key={c} value={c}>
+   604→                      {t(`course.${c}`)}
+   605→                    </SelectItem>
+   606→                  ))}
+   607→                </SelectContent>
+   608→              </Select>
+   609→            </div>
+   610→          </div>
+   611→          <DialogFooter>
+   612→            <Button variant="outline" onClick={() => setEditing(null)}>
+   613→              {t('common.cancel')}
+   614→            </Button>
+   615→            <Button onClick={saveEdit} disabled={!(parseFloat(editQty) > 0)}>
+   616→              {t('common.save')}
+   617→            </Button>
+   618→          </DialogFooter>
+   619→        </DialogContent>
+   620→      </Dialog>
+   621→
+   622→      {/* Discount dialog */}
+   623→      <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
+   624→        <DialogContent className="sm:max-w-sm">
+   625→          <DialogHeader>
+   626→            <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
+   627→            <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
+   628→          </DialogHeader>
+   629→          <Tabs value={discountTab} onValueChange={(v) => setDiscountTab(v as 'percent' | 'fixed')}>
+   630→            <TabsList className="grid h-10 w-full grid-cols-2">
+   631→              <TabsTrigger value="percent">{t('pos.percent')}</TabsTrigger>
+   632→              <TabsTrigger value="fixed">{t('pos.fixed')}</TabsTrigger>
+   633→            </TabsList>
+   634→            <TabsContent value="percent" className="pt-3">
+   635→              <div className="flex items-center gap-2">
+   636→                <Input
+   637→                  type="number"
+   638→                  min={0}
+   639→                  max={100}
+   640→                  step={0.5}
+   641→                  value={percentInput}
+   642→                  onChange={(e) => setPercentInput(e.target.value)}
+   643→                  placeholder="0"
+   644→                  className="h-11 text-right text-base tabular-nums"
+   645→                />
+   646→                <span className="text-lg font-semibold text-muted-foreground">%</span>
+   647→              </div>
+   648→            </TabsContent>
+   649→            <TabsContent value="fixed" className="pt-3">
+   650→              <div className="flex items-center gap-2">
+   651→                <Input
+   652→                  type="number"
+   653→                  min={0}
+   654→                  step={0.5}
+   655→                  value={fixedInput}
+   656→                  onChange={(e) => setFixedInput(e.target.value)}
+   657→                  placeholder="0"
+   658→                  className="h-11 text-right text-base tabular-nums"
+   659→                />
+   660→                <span className="text-lg font-semibold text-muted-foreground">
+   661→                  {t('pos.currencySuffix')}
+   662→                </span>
+   663→              </div>
+   664→            </TabsContent>
+   665→          </Tabs>
+   666→          <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
+   667→            <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
+   668→            <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
+   669→            <SummaryRow label={t('money.tax')} value={formatCurrency(previewTax)} />
+   670→            <div className="flex items-center justify-between border-t pt-1.5 font-bold">
+   671→              <span>{t('pos.newTotal')}</span>
+   672→              <span className="tabular-nums">
+   673→                {formatCurrency(round2(previewBase + previewTax))}
+   674→              </span>
+   675→            </div>
+   676→          </div>
+   677→          <DialogFooter>
+   678→            <Button variant="outline" onClick={() => setDiscountOpen(false)}>
+   679→              {t('common.cancel')}
+   680→            </Button>
+   681→            <Button
+   682→              onClick={() => applyDiscount.mutate(previewDiscount)}
+   683→              disabled={applyDiscount.isPending}
+   684→            >
+   685→              {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
+   686→            </Button>
+   687→          </DialogFooter>
+   688→        </DialogContent>
+   689→      </Dialog>
+   690→    </div>
+   691→  )
+   692→}
+   693→
+   694→function SummaryRow({
+   695→  label,
+   696→  value,
+   697→  valueClassName,
+   698→}: {
+   699→  label: string
+   700→  value: string
+   701→  valueClassName?: string
+   702→}) {
+   703→  return (
+   704→    <div className="flex items-center justify-between text-sm">
+   705→      <span className="text-muted-foreground">{label}</span>
+   706→      <span className={cn('tabular-nums', valueClassName)}>{value}</span>
+   707→    </div>
+   708→  )
+   709→}
+   710→
+   711→function SentItemRow({
+   712→  item,
+   713→  onServed,
+   714→  onRemove,
+   715→  servedPending,
+   716→  removePending,
+   717→  moveMode,
+   718→  moveSelected,
+   719→  onToggleMove,
+   720→}: {
+   721→  item: OrderItem
+   722→  onServed: () => void
+   723→  onRemove: () => void
+   724→  servedPending: boolean
+   725→  removePending: boolean
+   726→  moveMode: boolean
+   727→  moveSelected: boolean
+   728→  onToggleMove: () => void
+   729→}) {
+   730→  const { t } = useI18n()
+   731→  const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
+   732→  const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+   733→  return (
+   734→    <div
+   735→      onClick={moveMode ? onToggleMove : undefined}
+   736→      role={moveMode ? 'button' : undefined}
+   737→      aria-pressed={moveMode ? moveSelected : undefined}
+   738→      className={cn(
+   739→        'flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0',
+   740→        moveMode && 'cursor-pointer rounded-lg transition-colors',
+   741→        moveMode && moveSelected && 'bg-[#714B67]/10',
+   742→      )}
+   743→    >
+   744→      {moveMode && (
+   745→        <span
+   746→          className={cn(
+   747→            'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+   748→            moveSelected
+   749→              ? 'border-[#714B67] bg-[#714B67] text-white'
+   750→              : 'border-[#E2E2E0] bg-white',
+   751→          )}
+   752→          aria-hidden
+   753→        >
+   754→          {moveSelected && <Check className="size-3.5" />}
+   755→        </span>
+   756→      )}
+   757→      <span
+   758→        className={cn(
+   759→          'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+   760→          chip,
+   761→        )}
+   762→      >
+   763→        {t(`status.item.${item.status}`)}
+   764→      </span>
+   765→      <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
+   766→        <p className="truncate text-sm font-medium">
+   767→          {formatQty(item.quantity)} × {item.product?.name ?? t('pos.item')}
+   768→        </p>
+   769→        {item.notes && (
+   770→          <p className="flex items-center gap-1 truncate text-xs text-amber-600">
+   771→            <StickyNote className="size-3 shrink-0" />
+   772→            <span className="truncate">{item.notes}</span>
+   773→          </p>
+   774→        )}
+   775→      </div>
+   776→      <div className="flex shrink-0 flex-col items-end gap-1">
+   777→        <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
+   778→        {!moveMode && (
+   779→          <div className="flex gap-1">
+   780→            {item.status === 'ready' && (
+   781→              <Button
+   782→                variant="ghost"
+   783→                size="sm"
+   784→                className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+   785→                disabled={servedPending}
+   786→                onClick={onServed}
+   787→                title={t('pos.markServed')}
+   788→              >
+   789→                {servedPending ? (
+   790→                  <Loader2 className="size-3.5 animate-spin" />
+   791→                ) : (
+   792→                  <Check className="size-3.5" />
+   793→                )}
+   794→                {t('status.item.served')}
+   795→              </Button>
+   796→            )}
+   797→            <Button
+   798→              variant="ghost"
+   799→              size="icon"
+   800→              className="size-8 text-muted-foreground hover:text-destructive"
+   801→              disabled={removePending}
+   802→              onClick={onRemove}
+   803→              title={t('pos.removeItem')}
+   804→            >
+   805→              {removePending ? (
+   806→                <Loader2 className="size-4 animate-spin" />
+   807→              ) : (
+   808→                <Trash2 className="size-4" />
+   809→              )}
+   810→            </Button>
+   811→          </div>
+   812→        )}
+   813→      </div>
+   814→    </div>
+   815→  )
+   816→}
+   817→
+   818→function DraftRow({
+   819→  item,
+   820→  onQty,
+   821→  onEdit,
+   822→  onRemove,
+   823→}: {
+   824→  item: DraftItem
+   825→  onQty: (delta: number) => void
+   826→  onEdit: () => void
+   827→  onRemove: () => void
+   828→}) {
+   829→  const { t } = useI18n()
+   830→  return (
+   831→    <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
+   832→      <div className="flex shrink-0 items-center gap-1">
+   833→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(-1)}>
+   834→          <Minus className="size-3.5" />
+   835→        </Button>
+   836→        <span className="w-8 text-center text-sm font-semibold tabular-nums">
+   837→          {formatQty(item.quantity)}
+   838→        </span>
+   839→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(1)}>
+   840→          <Plus className="size-3.5" />
+   841→        </Button>
+   842→      </div>
+   843→      <button
+   844→        type="button"
+   845→        className="min-w-0 flex-1 text-start"
+   846→        onClick={onEdit}
+   847→        title={t('pos.editItemDesc')}
+   848→      >
+   849→        <p className="flex items-center gap-1 truncate text-sm font-medium">
+   850→          <span className="truncate">{item.name}</span>
+   851→          {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
+   852→        </p>
+   853→        <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+   854→      </button>
+   855→      <span className="shrink-0 text-sm font-semibold tabular-nums">
+   856→        {formatCurrency(round2(item.quantity * item.price))}
+   857→      </span>
+   858→      <Button
+   859→        variant="ghost"
+   860→        size="icon"
+   861→        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+   862→        onClick={onRemove}
+   863→        title={t('pos.removeLine')}
+   864→      >
+   865→        <X className="size-4" />
+   866→      </Button>
+   867→    </div>
+   868→  )
+   869→}
+   870→

@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n, type Lang } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import type { Order } from '@/lib/types'
 import { escapeHtml, round2 } from './pos-utils'
@@ -40,7 +40,7 @@ type ReceiptModel = {
   paid: number
 }
 
-function buildReceiptModel(order: Order, t: TFunc): ReceiptModel {
+function buildReceiptModel(order: Order, t: TFunc, lang: Lang): ReceiptModel {
   return {
     orderId: order.id,
     tableName: order.table?.name ?? t('common.takeaway'),
@@ -48,7 +48,7 @@ function buildReceiptModel(order: Order, t: TFunc): ReceiptModel {
     date: formatDateTime(order.createdAt),
     items: order.items.map((it) => ({
       qty: formatQty(it.quantity),
-      name: it.product?.name ?? t('pos.item'),
+      name: it.product ? localizedName(it.product.name, it.product.nameAr, lang) : t('pos.item'),
       total: round2(it.quantity * it.unitPrice),
       notes: it.notes,
     })),
@@ -101,7 +101,7 @@ function buildReceiptHtml(m: ReceiptModel, t: TFunc, restaurantName: string): st
 export default function ReceiptModal({ order, open, onOpenChange, onClose }: ReceiptModalProps) {
   const { t, lang, isRTL } = useI18n()
   const { restaurantName } = useAppSettings()
-  const model = buildReceiptModel(order, t)
+  const model = buildReceiptModel(order, t, lang)
 
   const handlePrint = () => {
     const html = buildReceiptHtml(model, t, restaurantName)

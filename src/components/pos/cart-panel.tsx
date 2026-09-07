@@ -39,7 +39,7 @@ import { toast } from 'sonner'
 import { apiFetch, fetcher } from '@/lib/api'
 import { COURSES, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { useI18n, localizedName } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Order, OrderItem } from '@/lib/types'
 import { computeCartTotals, round2, type DraftItem } from './pos-utils'
@@ -82,7 +82,7 @@ export default function CartPanel({
   userRole,
 }: CartPanelProps) {
   const queryClient = useQueryClient()
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const orderId = order?.id ?? null
 
   const [editing, setEditing] = useState<DraftItem | null>(null)
@@ -120,7 +120,13 @@ export default function CartPanel({
         body: { status: 'served' },
       }),
     onSuccess: async (data) => {
-      toast.success(t('pos.markedServedToast', { name: data.item.product?.name ?? t('pos.item') }))
+      toast.success(
+        t('pos.markedServedToast', {
+          name: data.item.product
+            ? localizedName(data.item.product.name, data.item.product.nameAr, lang)
+            : t('pos.item'),
+        }),
+      )
       await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
     },
@@ -553,7 +559,9 @@ export default function CartPanel({
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>{editing?.name}</DialogTitle>
+            <DialogTitle>
+              {editing ? localizedName(editing.name, editing.nameAr, lang) : ''}
+            </DialogTitle>
             <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -727,7 +735,7 @@ function SentItemRow({
   moveSelected: boolean
   onToggleMove: () => void
 }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
   const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
   return (
@@ -764,7 +772,10 @@ function SentItemRow({
       </span>
       <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
         <p className="truncate text-sm font-medium">
-          {formatQty(item.quantity)} × {item.product?.name ?? t('pos.item')}
+          {formatQty(item.quantity)} ×{' '}
+          {item.product
+            ? localizedName(item.product.name, item.product.nameAr, lang)
+            : t('pos.item')}
         </p>
         {item.notes && (
           <p className="flex items-center gap-1 truncate text-xs text-amber-600">
@@ -826,7 +837,7 @@ function DraftRow({
   onEdit: () => void
   onRemove: () => void
 }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   return (
     <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
       <div className="flex shrink-0 items-center gap-1">
@@ -847,7 +858,7 @@ function DraftRow({
         title={t('pos.editItemDesc')}
       >
         <p className="flex items-center gap-1 truncate text-sm font-medium">
-          <span className="truncate">{item.name}</span>
+          <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
           {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
         </p>
         <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>

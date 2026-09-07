@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { type Course, type ItemStatus } from '@/lib/constants'
 import { elapsedMinutes, elapsedSince, formatCurrency, formatQty, formatTime } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -61,7 +61,7 @@ export function KitchenOrderCard({
   pendingItemId,
   onUpdateItemStatus,
 }: KitchenOrderCardProps) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const minutes = elapsedMinutes(order.createdAt)
   const items = order.items
   const completed = items.length > 0 && items.every((item) => item.status === 'served')
@@ -119,7 +119,10 @@ export function KitchenOrderCard({
                   {t(STATUS_CHIP_LABEL_KEYS[item.status] ?? 'status.item.served')}
                 </span>
                 <span className="truncate text-sm font-medium text-zinc-100">
-                  {formatQty(item.quantity)} × {item.product?.name ?? t('kds.item')}
+                  {formatQty(item.quantity)} ×{' '}
+                  {item.product
+                    ? localizedName(item.product.name, item.product.nameAr, lang)
+                    : t('kds.item')}
                 </span>
                 {item.notes ? (
                   <span

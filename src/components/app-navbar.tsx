@@ -80,7 +80,7 @@ export default function AppNavbar({
   onNavigate: (view: string) => void
   onLogout: () => void
 }) {
-  const { t, toggleLang } = useI18n()
+  const { t, lang, toggleLang } = useI18n()
   const { restaurantName } = useAppSettings()
 
   const isAdmin = user.role === 'admin'
@@ -159,8 +159,8 @@ export default function AppNavbar({
             variant="ghost"
             size="icon"
             onClick={toggleLang}
-            aria-label={t('lang.arabic')}
-            title={t('lang.arabic')}
+            aria-label={lang === 'en' ? t('lang.arabic') : t('lang.english')}
+            title={lang === 'en' ? t('lang.arabic') : t('lang.english')}
             className="size-11 shrink-0 text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60"
           >
             <Languages className="h-5 w-5" aria-hidden />

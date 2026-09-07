@@ -41,7 +41,7 @@ export function sessionUserId(session: SessionPayload): number {
 // ─── Orders ─────────────────────────────────────────────────────────
 
 export const ORDER_INCLUDE = {
-  items: { include: { product: { select: { id: true, name: true } } } },
+  items: { include: { product: { select: { id: true, name: true, nameAr: true } } } },
   payments: true,
   table: { select: { id: true, name: true } },
   user: { select: { id: true, name: true } },
@@ -50,7 +50,7 @@ export const ORDER_INCLUDE = {
 export type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>
 
 export type OrderItemRow = Prisma.OrderItemGetPayload<{
-  include: { product: { select: { id: true; name: true } } }
+  include: { product: { select: { id: true; name: true; nameAr: true } } }
 }>
 
 /** A plain `payment` row (no relations) as loaded from Prisma. */

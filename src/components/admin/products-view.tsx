@@ -18,7 +18,7 @@ import type { LucideIcon } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
 import { formatCurrency, formatQty } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
 import type { Category, Product } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
@@ -72,6 +72,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 type ProductForm = {
   name: string
+  nameAr: string // '' = no Arabic name (clears it)
   categoryId: string // '' = no category
   price: string
   cost: string
@@ -89,6 +90,7 @@ type ProductFormErrors = Partial<
 
 const EMPTY_PRODUCT_FORM: ProductForm = {
   name: '',
+  nameAr: '',
   categoryId: '',
   price: '',
   cost: '',
@@ -103,6 +105,7 @@ const EMPTY_PRODUCT_FORM: ProductForm = {
 function toProductForm(p: Product): ProductForm {
   return {
     name: p.name,
+    nameAr: p.nameAr ?? '',
     categoryId: p.categoryId === null ? '' : String(p.categoryId),
     price: String(p.price),
     cost: String(p.cost),
@@ -244,6 +247,38 @@ function ActiveBadge({ active, label }: { active: boolean; label: { active: stri
   )
 }
 
+/** Amber outline badge for untranslated items — Arabic mode only. */
+function MissingArBadge({ label }: { label: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className="h-5 shrink-0 border-amber-500/40 px-1.5 text-[10px] font-medium text-amber-700 dark:border-amber-400/40 dark:text-amber-400"
+    >
+      {label}
+    </Badge>
+  )
+}
+
+/** Product display name — Arabic primary when the UI is Arabic (falls back to English). */
+function ProductDisplayName({
+  product,
+  lang,
+  missingArLabel,
+}: {
+  product: Product
+  lang: 'en' | 'ar'
+  missingArLabel: string
+}) {
+  const localized = localizedName(product.name, product.nameAr, lang)
+  const missingAr = lang === 'ar' && !(product.nameAr ?? '').trim()
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="font-medium">{localized}</span>
+      {missingAr && <MissingArBadge label={missingArLabel} />}
+    </div>
+  )
+}
+
 function ProductRowActions({
   product,
   onEdit,
@@ -282,7 +317,7 @@ function ProductRowActions({
 // ─── View ───────────────────────────────────────────────────────────
 
 export default function ProductsView() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
@@ -339,6 +374,7 @@ export default function ProductsView() {
     mutationFn: async () => {
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
+        nameAr: form.nameAr.trim(),
         price: Number(form.price),
         cost: form.cost.trim() === '' ? 0 : Number(form.cost),
         isSellable: form.isSellable,
@@ -522,7 +558,10 @@ export default function ProductsView() {
                     {products.map((p) => (
                       <TableRow key={p.id} className="h-14">
                         <TableCell>
-                          <div className="font-medium">{p.name}</div>
+                          <ProductDisplayName product={p} lang={lang} missingArLabel={t('admin.missingAr')} />
+                          {lang === 'ar' && p.name !== localizedName(p.name, p.nameAr, lang) ? (
+                            <div className="text-muted-foreground text-xs">{p.name}</div>
+                          ) : null}
                           {p.sku ? (
                             <div className="font-mono text-muted-foreground text-xs">{p.sku}</div>
                           ) : null}
@@ -583,7 +622,12 @@ export default function ProductsView() {
                 <div key={p.id} className="flex items-center gap-3 rounded-lg border p-3">
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">{p.name}</span>
+                      <span className="truncate font-medium">
+                        {localizedName(p.name, p.nameAr, lang)}
+                      </span>
+                      {lang === 'ar' && !(p.nameAr ?? '').trim() && (
+                        <MissingArBadge label={t('admin.missingAr')} />
+                      )}
                       {!p.active && (
                         <ActiveBadge
                           active={false}
@@ -591,6 +635,9 @@ export default function ProductsView() {
                         />
                       )}
                     </div>
+                    {lang === 'ar' && p.name !== localizedName(p.name, p.nameAr, lang) ? (
+                      <div className="truncate text-muted-foreground text-xs">{p.name}</div>
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
                       {p.category ? (
                         <Badge variant="outline" className="px-1.5">{p.category.name}</Badge>
@@ -636,19 +683,34 @@ export default function ProductsView() {
           </DialogHeader>
 
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="product-name">
-                {t('common.name')} *
-              </Label>
-              <Input
-                id="product-name"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder={t('admin.productNamePlaceholder')}
-                className="h-11"
-                aria-invalid={errors.name ? true : undefined}
-              />
-              <FieldError message={errors.name} />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="product-name">
+                  {t('common.name')} *
+                </Label>
+                <Input
+                  id="product-name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder={t('admin.productNamePlaceholder')}
+                  className="h-11"
+                  aria-invalid={errors.name ? true : undefined}
+                />
+                <FieldError message={errors.name} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="product-name-ar">{t('admin.nameArLabel')}</Label>
+                <Input
+                  id="product-name-ar"
+                  lang="ar"
+                  dir="rtl"
+                  value={form.nameAr}
+                  onChange={(e) => setForm({ ...form, nameAr: e.target.value })}
+                  placeholder={t('admin.nameArPlaceholder')}
+                  className="h-11"
+                />
+                <p className="text-muted-foreground text-xs">{t('admin.nameArHint')}</p>
+              </div>
             </div>
 
             <div className="grid gap-2">

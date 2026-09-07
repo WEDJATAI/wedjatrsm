@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatCurrency } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Product } from '@/lib/types'
 import { guessCourse, type CourseKey } from './pos-utils'
@@ -28,24 +28,28 @@ type ProductGridProps = {
 }
 
 export default function ProductGrid({ products, onAdd, className }: ProductGridProps) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState<string>('all')
 
   // Unique categories in first-seen order (API sorts by category displayOrder).
+  // Keeps the Arabic name alongside the English one for localized pills.
   const categories = useMemo(() => {
-    const map = new Map<number, string>()
+    const map = new Map<number, { name: string; nameAr: string | null }>()
     for (const p of products) {
-      if (p.category && !map.has(p.category.id)) map.set(p.category.id, p.category.name)
+      if (p.category && !map.has(p.category.id))
+        map.set(p.category.id, { name: p.category.name, nameAr: p.category.nameAr ?? null })
     }
-    return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
+    return Array.from(map.entries()).map(([id, names]) => ({ id, ...names }))
   }, [products])
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const qRaw = search.trim()
+    const q = qRaw.toLowerCase()
     return products.filter((p) => {
       if (activeCategory !== 'all' && (p.categoryId ?? -1) !== Number(activeCategory)) return false
-      if (q && !p.name.toLowerCase().includes(q)) return false
+      // Bilingual match: English (lowercased) + Arabic (case-less script, raw query).
+      if (q && !p.name.toLowerCase().includes(q) && !(p.nameAr ?? '').includes(qRaw)) return false
       return true
     })
   }, [products, search, activeCategory])
@@ -81,7 +85,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
                   value={String(c.id)}
                   className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
                 >
-                  {c.name}
+                  {localizedName(c.name, c.nameAr, lang)}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -118,11 +122,15 @@ function ProductTile({
   onAdd,
   ...rest
 }: { product: Product; onAdd: (p: Product) => void } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const course = guessCourse(product)
   const Icon = COURSE_ICONS[course]
   const soldOut = product.isStockable && product.stock <= 0
   const lowStock = product.isStockable && product.stock > 0 && product.stock <= product.lowStockThreshold
+  const label = localizedName(product.name, product.nameAr, lang)
+  // Arabic mode cross-reference: keep the English name visible as a tiny
+  // secondary line (only when a distinct Arabic name exists).
+  const showEnglishHint = lang === 'ar' && label !== product.name
 
   return (
     <Button
@@ -139,7 +147,14 @@ function ProductTile({
       {...rest}
     >
       <span className="flex w-full items-start justify-between gap-1">
-        <span className="line-clamp-2 text-sm font-medium leading-tight">{product.name}</span>
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 text-sm font-medium leading-tight">{label}</span>
+          {showEnglishHint && (
+            <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400 line-clamp-1">
+              {product.name}
+            </span>
+          )}
+        </span>
         <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground/70" aria-hidden />
       </span>
       <span className="flex w-full items-center justify-between gap-1">

@@ -16,7 +16,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     const item = await db.orderItem.findUnique({
       where: { id: itemId },
-      include: { product: { select: { id: true, name: true } } },
+      include: { product: { select: { id: true, name: true, nameAr: true } } },
     })
     if (!item) throw new ApiError('Order item not found', 404)
 
@@ -46,7 +46,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const updated = await db.orderItem.update({
       where: { id: itemId },
       data,
-      include: { product: { select: { id: true, name: true } } },
+      include: { product: { select: { id: true, name: true, nameAr: true } } },
     })
     return NextResponse.json({ item: serializeOrderItem(updated) })
   } catch (err) {

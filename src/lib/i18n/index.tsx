@@ -30,6 +30,21 @@ import { setFormatLocale, type FormatLang } from '@/lib/format'
 
 export type Lang = 'en' | 'ar'
 
+/**
+ * Pick a bilingual entity's display name for a language: the Arabic name
+ * when the UI is Arabic (falling back to the English name), the English
+ * name otherwise. Used for menu items (Product/Category) so the POS menu,
+ * cart, KDS and printed checks follow the UI language.
+ */
+export function localizedName(
+  name: string,
+  nameAr: string | null | undefined,
+  lang: Lang,
+): string {
+  if (lang === 'ar') return (nameAr && nameAr.trim()) || name
+  return name
+}
+
 const LANG_STORAGE_KEY = 'rms_lang'
 const LANG_EVENT = 'rms-lang-change'
 

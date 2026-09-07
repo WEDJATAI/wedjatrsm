@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
       categories: categories.map((c) => ({
         id: c.id,
         name: c.name,
+        nameAr: c.nameAr,
         displayOrder: c.displayOrder,
         active: c.active,
         productCount: c._count.products,
@@ -48,6 +49,15 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/** Optional Arabic name field → trimmed string | null (empty/null clears) | undefined (absent). */
+function parseNameAr(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw new ApiError('Arabic name must be a string', 400)
+  const s = value.trim()
+  return s === '' ? null : s
+}
+
 export async function POST(req: NextRequest) {
   try {
     await requireAuth(req, ['admin', 'categories'])
@@ -56,9 +66,10 @@ export async function POST(req: NextRequest) {
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!name) throw new ApiError('Name is required', 400)
     const displayOrder = parseDisplayOrder(body.displayOrder)
+    const nameAr = parseNameAr(body.nameAr)
 
     const category = await db.category.create({
-      data: { name, displayOrder },
+      data: { name, displayOrder, nameAr: nameAr ?? null },
     })
     return NextResponse.json({ category: { ...category, productCount: 0 } })
   } catch (err) {

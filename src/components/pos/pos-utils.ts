@@ -8,6 +8,9 @@ export type DraftItem = {
   key: string
   productId: number
   name: string
+  /** optional Arabic display name — mirrors Product.nameAr so unsent cart
+   *  lines can render in the UI language like sent order lines do. */
+  nameAr?: string | null
   price: number
   quantity: number
   notes: string

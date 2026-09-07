@@ -282,6 +282,7 @@ export default function PosView() {
           key: newDraftKey(),
           productId: p.id,
           name: p.name,
+          nameAr: p.nameAr ?? null,
           price: p.price,
           quantity: 1,
           notes: '',

@@ -40,13 +40,15 @@ type SourcePick = { orderId: number }
 
 type TableInteraction = 'normal' | 'eligible' | 'ineligible'
 
-/** Per-shape tile classes — the floor grid keeps its responsive layout, only the
- *  tile silhouette changes (square/round/rectangle/oval). */
+/** Per-shape tile silhouette classes — Odoo 17-style tiles. The floor grid
+ *  keeps its responsive layout (tiles fill the grid cell width); only the
+ *  silhouette changes (square/round/rectangle/oval). The admin floor-plan
+ *  editor mirrors these exact strings. */
 const SHAPE_TILE_CLASSES: Record<string, string> = {
-  square: 'min-h-[110px] rounded-xl',
+  square: 'aspect-square rounded-2xl',
   round: 'aspect-square rounded-full',
-  rectangle: 'h-24 w-32 rounded-xl',
-  oval: 'h-24 w-32 rounded-full',
+  rectangle: 'h-24 rounded-2xl',
+  oval: 'h-24 rounded-full',
 }
 
 function shapeClasses(shape: string): string {
@@ -338,7 +340,7 @@ export default function TableSelect({
           {isLoading ? (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
               {Array.from({ length: 8 }, (_, i) => (
-                <Skeleton key={i} className="h-[110px] rounded-xl" />
+                <Skeleton key={i} className="aspect-square rounded-2xl" />
               ))}
             </div>
           ) : floorPlans.length === 0 ? (
@@ -415,8 +417,45 @@ function TableTile({
   const { t } = useI18n()
   const occupied = table.status === 'occupied' || table.openOrderId != null
   const reserved = table.status === 'reserved' && table.openOrderId == null
-  // Round/oval silhouettes get a ring instead of the side bar.
+  // Round/oval silhouettes get extra horizontal padding so the centered
+  // content stays inside the circle (overflow-hidden + truncation clip it).
   const isRound = table.shape === 'round' || table.shape === 'oval'
+
+  // Odoo duration "heat": occupied tables tint by how long guests are seated.
+  const mins =
+    occupied && table.openOrderSince
+      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+      : 0
+
+  const heat = occupied
+    ? mins < 15
+      ? {
+          tile: 'border-emerald-200 bg-emerald-50',
+          text: 'text-emerald-900',
+          amount: 'text-emerald-700',
+          meta: 'text-emerald-600',
+        }
+      : mins < 45
+        ? {
+            tile: 'border-amber-200 bg-amber-50',
+            text: 'text-amber-900',
+            amount: 'text-amber-700',
+            meta: 'text-amber-600',
+          }
+        : mins < 90
+          ? {
+              tile: 'border-orange-300 bg-orange-100',
+              text: 'text-orange-900',
+              amount: 'text-orange-700',
+              meta: 'text-orange-600',
+            }
+          : {
+              tile: 'border-rose-300 bg-rose-100',
+              text: 'text-rose-900',
+              amount: 'text-rose-700',
+              meta: 'text-rose-600',
+            }
+    : null
 
   return (
     <button
@@ -424,51 +463,61 @@ function TableTile({
       disabled={interaction === 'ineligible'}
       onClick={onClick}
       className={cn(
-        'relative flex min-w-0 flex-col justify-between overflow-hidden border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition active:scale-[0.98]',
+        'relative flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden border p-3 text-center shadow-sm transition hover:shadow-md active:scale-[0.97]',
         shapeClasses(table.shape),
+        isRound && 'px-4',
+        occupied && heat
+          ? cn(heat.tile, heat.text)
+          : reserved
+            ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
+            : 'border-[#E2E2E0] bg-white text-stone-500',
         interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
         interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
-        interaction === 'normal' && reserved && 'ring-1 ring-amber-500',
-        interaction === 'normal' && occupied && isRound && 'ring-2 ring-[#714B67]',
       )}
     >
-      {occupied && !isRound && (
-        <span className="absolute inset-y-0 start-0 w-1.5 rounded-s-xl bg-[#714B67]" aria-hidden />
+      {/* FREE — clean white tile with capacity */}
+      {!occupied && !reserved && (
+        <>
+          <p className="max-w-full truncate text-base font-bold leading-tight text-stone-500">
+            {table.name}
+          </p>
+          <p className="flex items-center gap-1 text-xs text-stone-400">
+            <Users className="size-3.5" aria-hidden />
+            {table.capacity} {t('common.seats')}
+          </p>
+        </>
       )}
 
-      <div className="min-w-0 ps-1.5">
-        <p
-          className={cn(
-            'truncate text-base font-bold leading-tight',
-            !occupied && !reserved && 'text-stone-500',
-          )}
-        >
-          {table.name}
-        </p>
-        <p className="mt-0.5 flex items-center gap-1 text-xs text-stone-500">
-          <Users className="size-3.5" aria-hidden />
-          {occupied && table.openOrderGuests != null
-            ? `${table.openOrderGuests} ${t('common.people')}`
-            : `${table.capacity} ${t('common.seats')}`}
-        </p>
-      </div>
-
+      {/* OCCUPIED — duration "heat" tint, amount + guests + elapsed */}
       {occupied && (
-        <div className="ps-1.5">
-          <p className="text-lg font-bold leading-tight tabular-nums text-[#714B67]">
+        <>
+          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+          <p className={cn('text-lg font-extrabold tabular-nums leading-none', heat?.amount)}>
             {formatCurrency(table.openOrderTotal ?? 0)}
           </p>
-          <p className="text-[11px] text-stone-500">
+          <p className={cn('flex items-center justify-center gap-1.5 text-[11px]', heat?.meta)}>
+            <Users className="size-3.5" aria-hidden />
+            {table.openOrderGuests ?? '—'}
+            <span aria-hidden>·</span>
+            <Clock className="size-3" aria-hidden />
             {table.openOrderSince ? elapsedSince(table.openOrderSince) : t('pos.open')}
           </p>
-        </div>
+        </>
       )}
 
+      {/* RESERVED — amber outline ring + badge */}
       {reserved && (
-        <span className="ms-1.5 inline-flex w-fit items-center gap-1.5 rounded-full border border-amber-500/60 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-600">
-          <Clock className="size-3" aria-hidden />
-          {t('status.table.reserved')}
-        </span>
+        <>
+          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+          <p className="flex items-center gap-1 text-xs text-amber-600">
+            <Users className="size-3.5" aria-hidden />
+            {table.capacity} {t('common.seats')}
+          </p>
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-600">
+            <Clock className="size-3" aria-hidden />
+            {t('status.table.reserved')}
+          </span>
+        </>
       )}
     </button>
   )
