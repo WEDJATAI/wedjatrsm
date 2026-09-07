@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, Ban, Check, ChevronLeft, Loader2, Minus, Plus, Users } from 'lucide-react'
+import { ArrowLeftRight, Ban, Check, ChevronLeft, Combine, Loader2, Minus, Plus, Users } from 'lucide-react'
 
 import {
   AlertDialog,
@@ -40,11 +40,13 @@ import TableSelect from './table-select'
 import { guessCourse, newDraftKey, round2, type DraftItem } from './pos-utils'
 
 /** Who the guests dialog edits: a fresh table draft, the unsent draft guest
- *  count, or the persisted guests value of an existing order. */
+ *  count, the persisted guests value of an existing order, or a Seat Party
+ *  (multi-table seating) about to enter order mode. */
 type GuestsTarget =
   | { kind: 'new-table'; table: RestaurantTable }
   | { kind: 'draft' }
   | { kind: 'order'; orderId: number }
+  | { kind: 'seat-party' }
   | null
 
 const GUEST_QUICK_CHIPS = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -71,6 +73,13 @@ export default function PosView() {
 
   // Order being transferred (passed to TableSelect → starts at destination step).
   const [transferOrderId, setTransferOrderId] = useState<number | null>(null)
+
+  // Round5 Seat Party: the free tables picked on the floor, awaiting the
+  // guests dialog before entering order mode.
+  const [pendingSeatTables, setPendingSeatTables] = useState<RestaurantTable[] | null>(null)
+  // Round5: the full seating list backing this order screen (merged seating
+  // from the beginning). null/[single] = a regular single-table order.
+  const [seatingTables, setSeatingTables] = useState<{ id: number; name: string }[] | null>(null)
 
   const [payOpen, setPayOpen] = useState(false)
   const [payOrder, setPayOrder] = useState<Order | null>(null)
@@ -161,6 +170,8 @@ export default function PosView() {
     setCheckOrder(null)
     setCancelOpen(false)
     setTransferOrderId(null)
+    setPendingSeatTables(null)
+    setSeatingTables(null)
     readyRef.current = null
   }, [])
 
@@ -168,6 +179,7 @@ export default function PosView() {
     async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
         queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
         queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
         queryClient.invalidateQueries({ queryKey: ['pos-products'] }),
@@ -183,6 +195,7 @@ export default function PosView() {
     setDraft([])
     setTransferOrderId(null)
     setGuestsDraft(clampGuests(guests))
+    setSeatingTables([{ id: table.id, name: table.name }])
     readyRef.current = null
     if (table.openOrderId) {
       setActiveOrderId(table.openOrderId)
@@ -211,6 +224,7 @@ export default function PosView() {
     setActiveOrderId(null)
     setTransferOrderId(null)
     setGuestsDraft(1) // takeaway orders default to a single guest — no dialog
+    setSeatingTables(null) // no tables — tableIds stays unset
     readyRef.current = null
   }
 
@@ -220,13 +234,28 @@ export default function PosView() {
     setDraft([])
     setTransferOrderId(null)
     setGuestsDraft(o.guests ?? 1)
+    setSeatingTables(null) // no tables — tableIds stays unset
     readyRef.current = null
     queryClient.setQueryData(['pos-order', o.id], { order: o })
     setActiveOrderId(o.id)
   }
 
+  // ── Seat Party (merged seating from the beginning) ────────────────
+  // TableSelect hands over the selected free tables → ask for the guest
+  // count (seeded to the total capacity), then enter order mode with the
+  // full seating list. The first table is the primary table.
+  const handleSeatParty = (tables: RestaurantTable[]) => {
+    if (tables.length === 0) return
+    setPendingSeatTables(tables)
+    const totalSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+    setGuestsValue(clampGuests(totalSeats))
+    setGuestsTarget({ kind: 'seat-party' })
+    setGuestsDialogOpen(true)
+  }
+
   // ── Guests dialog handlers ───────────────────────────────────────
   const cancelGuestsDialog = () => {
+    if (guestsTarget?.kind === 'seat-party') setPendingSeatTables(null)
     setGuestsDialogOpen(false)
     setGuestsTarget(null)
   }
@@ -258,6 +287,16 @@ export default function PosView() {
     const value = clampGuests(guestsValue)
     if (guestsTarget?.kind === 'new-table') {
       applySelectTable(guestsTarget.table, value)
+    } else if (guestsTarget?.kind === 'seat-party') {
+      const seatTables = pendingSeatTables ?? []
+      const primary = seatTables[0]
+      if (primary) {
+        // Enter order mode on the primary table, then widen the seating list
+        // to the full party selection (batched setStates — last write wins).
+        applySelectTable(primary, value)
+        setSeatingTables(seatTables.map((tb) => ({ id: tb.id, name: tb.name })))
+      }
+      setPendingSeatTables(null)
     } else if (guestsTarget?.kind === 'draft') {
       setGuestsDraft(value)
     } else if (guestsTarget?.kind === 'order' && order) {
@@ -305,7 +344,21 @@ export default function PosView() {
     setSending(true)
     try {
       let result: { order: Order }
-      if (!order) {
+      // Multi-table seating (Seat Party): create the order spanning ALL the
+      // selected tables (tableIds — primary first). Single-table and takeaway
+      // paths keep the classic tableId payload byte-identical.
+      const seatingList = seatingTables ?? null
+      const multiSeating = (seatingList?.length ?? 0) > 1
+      if (!order && multiSeating && seatingList) {
+        result = await apiFetch<{ order: Order }>('/api/orders', {
+          method: 'POST',
+          body: {
+            tableIds: seatingList.map((tb) => tb.id),
+            items: draftToPayload(draft),
+            guests: clampGuests(guestsDraft),
+          },
+        })
+      } else if (!order) {
         result = await apiFetch<{ order: Order }>('/api/orders', {
           method: 'POST',
           body: {
@@ -324,7 +377,11 @@ export default function PosView() {
       queryClient.setQueryData(['pos-order', result.order.id], { order: result.order })
       setActiveOrderId(result.order.id)
       await invalidateShared()
-      toast.success(t('pos.orderSentToast'))
+      toast.success(
+        multiSeating && !order && seatingList
+          ? t('pos.seatedToast', { n: seatingList.length })
+          : t('pos.orderSentToast'),
+      )
       return result.order
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('pos.sendFailedToast'))
@@ -369,12 +426,15 @@ export default function PosView() {
       setActiveOrderId(null)
       setDraft([])
       setGuestsDraft(2)
+      setPendingSeatTables(null)
+      setSeatingTables(null)
       readyRef.current = null
       await invalidateShared()
     } else {
       queryClient.setQueryData(['pos-order', updated.id], { order: updated })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
         queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
       ])
     }
@@ -390,12 +450,30 @@ export default function PosView() {
     setActiveOrderId(null)
     setDraft([])
     setGuestsDraft(2)
+    setPendingSeatTables(null)
+    setSeatingTables(null)
     readyRef.current = null
   }
 
   const handleTransferDone = () => {
     setTransferOrderId(null)
     resetToTables()
+  }
+
+  // ── Deferred checks ─────────────────────────────────────────────
+  // Chip clicked on the floor → settle the outstanding deferred check via
+  // the payment modal (rendered in tables mode too; the modal hides its own
+  // defer button for already-deferred orders).
+  const handleSettleDeferred = (deferredOrder: Order) => {
+    setPayOrder(deferredOrder)
+    setPayOpen(true)
+  }
+
+  // Defer completed inside the payment modal (modal closes itself + fires
+  // the toast) → reset the order screen and refresh everything.
+  const handleOrderDeferred = async (_deferredOrder: Order) => {
+    resetToTables()
+    await invalidateShared()
   }
 
   const cancelMutation = useMutation({
@@ -415,6 +493,12 @@ export default function PosView() {
   const preparingCount = order?.items.filter((i) => i.status === 'preparing').length ?? 0
   const readyCount = order?.items.filter((i) => i.status === 'ready').length ?? 0
 
+  // Merged-seating badge: extra tables joined to this order (live order field
+  // wins once the order exists; draft mode falls back to the seating list).
+  const mergedExtraCount = order
+    ? (order.extraTableIds?.length ?? 0)
+    : Math.max(0, (seatingTables?.length ?? 1) - 1)
+
   // ── Render ───────────────────────────────────────────────────────
   if (mode === 'tables') {
     return (
@@ -425,8 +509,11 @@ export default function PosView() {
           onOpenTakeawayOrder={openTakeawayOrder}
           transferOrderId={transferOrderId}
           onTransferDone={handleTransferDone}
+          onSeatParty={handleSeatParty}
+          onSettleDeferred={handleSettleDeferred}
         />
-        {/* Guests quick dialog — shown BEFORE entering order mode on a free table. */}
+        {/* Guests quick dialog — shown BEFORE entering order mode on a free
+            table (or after a Seat Party selection). */}
         <GuestsDialog
           open={guestsDialogOpen}
           value={guestsValue}
@@ -435,6 +522,20 @@ export default function PosView() {
           onConfirm={confirmGuests}
           onCancel={cancelGuestsDialog}
         />
+        {/* Deferred-check settlement (chips on the floor) — same payment modal
+            as order mode; hides its defer button for already-deferred orders. */}
+        {payOrder && (
+          <PaymentModal
+            order={payOrder}
+            open={payOpen}
+            onOpenChange={(o) => {
+              setPayOpen(o)
+              if (!o) setPayOrder(null)
+            }}
+            onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+            onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
+          />
+        )}
         {/* Receipt after a full payment — the screen resets to the floor while
             the receipt stays on top (independent of the payment modal). */}
         {receiptOrder && (
@@ -466,6 +567,12 @@ export default function PosView() {
         </Button>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="truncate text-xl font-bold">{selectedTable?.name ?? t('pos.order')}</span>
+          {mergedExtraCount > 0 && (
+            <Badge className="gap-1 border-violet-300 bg-violet-100 text-violet-800 hover:bg-violet-100">
+              <Combine className="size-3" aria-hidden />
+              {t('pos.mergedTablesBadge', { n: mergedExtraCount })}
+            </Badge>
+          )}
           {order && (
             <Badge className="bg-[#714B67] text-white hover:bg-[#714B67]">
               {t('common.order')} #{order.id}
@@ -596,6 +703,7 @@ export default function PosView() {
             if (!o) setPayOrder(null)
           }}
           onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+          onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
         />
       )}
 

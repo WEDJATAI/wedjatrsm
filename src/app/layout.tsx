@@ -19,7 +19,7 @@ const cairo = Cairo({
 });
 
 export const metadata: Metadata = {
-  title: "Saffron Table — Restaurant Management System",
+  title: "Lilo Cafe and Restaurant — Restaurant Management System",
   description:
     "Complete restaurant management: POS with split payments, kitchen display system, inventory with recipe-based stock control, and sales analytics.",
   keywords: ["restaurant", "POS", "KDS", "inventory", "RMS", "Next.js"],

@@ -1,6 +1,6 @@
 // ─── POS shared helpers & types (client-side) ────────────────────────
 
-import { TAX_RATE } from '@/lib/constants'
+import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import type { Order, Product } from '@/lib/types'
 
 /** A local, not-yet-sent cart line. */
@@ -26,7 +26,10 @@ export type CartTotals = {
   /** subtotal of sent order lines + draft lines */
   subtotal: number
   discount: number
+  /** 14% VAT on (subtotal − discount) */
   tax: number
+  /** 12% service tax on (subtotal − discount) — in addition to the VAT */
+  serviceTax: number
   total: number
   draftSubtotal: number
 }
@@ -38,6 +41,7 @@ export function computeDraftSubtotal(draft: DraftItem[]): number {
 /**
  * Combined display totals while an order is open:
  * subtotal = order.subtotalAmount + draft lines; discount is order-level.
+ * total = (subtotal − discount) + VAT(14%) + service tax (12%).
  */
 export function computeCartTotals(order: Order | null, draft: DraftItem[]): CartTotals {
   const draftSubtotal = computeDraftSubtotal(draft)
@@ -45,8 +49,9 @@ export function computeCartTotals(order: Order | null, draft: DraftItem[]): Cart
   const discount = Math.max(0, round2(order?.discountAmount ?? 0))
   const base = Math.max(0, round2(subtotal - discount))
   const tax = round2(base * TAX_RATE)
-  const total = round2(base + tax)
-  return { subtotal, discount, tax, total, draftSubtotal }
+  const serviceTax = round2(base * SERVICE_TAX_RATE)
+  const total = round2(base + tax + serviceTax)
+  return { subtotal, discount, tax, serviceTax, total, draftSubtotal }
 }
 
 /** Unique key for a new draft line. */

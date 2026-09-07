@@ -2,7 +2,19 @@
 
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Armchair, Clock, Loader2, Map, MapPin, Plus, Trash2, Users } from 'lucide-react'
+import {
+  Armchair,
+  BadgeCheck,
+  Clock,
+  DoorOpen,
+  Hourglass,
+  Loader2,
+  Map,
+  MapPin,
+  Plus,
+  Trash2,
+  Users,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -81,7 +93,8 @@ function occupiedHeatClasses(mins: number): { surface: string; amount: string } 
   return { surface: 'bg-rose-100 border-rose-300 text-rose-900', amount: 'text-rose-700' }
 }
 
-/** Tile surface per live status: free = white, reserved = amber ring, occupied = duration heat. */
+/** Tile surface per live status: free = white, reserved = amber ring, occupied = duration heat,
+ *  paid = settled (emerald), deferred = client left with an open check (violet). */
 function tableSurfaceClasses(
   table: RestaurantTable,
   mins: number,
@@ -93,6 +106,13 @@ function tableSurfaceClasses(
   if (table.status === 'reserved')
     return { surface: 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400', amount: null }
   if (table.status === 'free') return { surface: 'bg-white border-[#E2E2E0] shadow-sm', amount: null }
+  if (table.status === 'paid')
+    return { surface: 'bg-emerald-600 border-emerald-600 text-white shadow-sm', amount: null }
+  if (table.status === 'deferred')
+    return {
+      surface: 'bg-violet-100 border-violet-400 ring-1 ring-violet-400 text-violet-900',
+      amount: null,
+    }
   // unknown status — neutral stone fallback (keeps tiles readable)
   return { surface: 'border-stone-300 bg-stone-50 text-stone-700', amount: null }
 }
@@ -156,6 +176,12 @@ export default function FloorPlansView() {
   const activeTables = selectedPlan
     ? selectedPlan.tables.filter((table) => table.active)
     : []
+  // Hall stats for the canvas header strip: free = status 'free' exactly
+  // (paid/deferred tables are NOT free — they await cleanup).
+  const hallStats = {
+    free: activeTables.filter((table) => table.status === 'free').length,
+    occupied: activeTables.filter((table) => table.status === 'occupied').length,
+  }
 
   // ── Mutations ────────────────────────────────────────────────────────
 
@@ -614,100 +640,141 @@ export default function FloorPlansView() {
                 </Dialog>
               </div>
 
-              <div
-                ref={canvasRef}
-                className="relative h-[460px] w-full touch-none overflow-hidden rounded-xl border-2 border-dashed border-border bg-[radial-gradient(circle,#e7e2d8_1px,transparent_1px)] [background-size:22px_22px]"
-              >
-                {activeTables.length === 0 ? (
-                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
-                    <Armchair className="size-12 text-muted-foreground/40" />
-                    <p className="text-sm font-medium text-muted-foreground">
-                      {t('admin.addTablesEmpty')}
-                    </p>
-                  </div>
-                ) : (
-                  activeTables.map((table) => {
-                    const isDragging = drag !== null && drag.table.id === table.id
-                    const x = isDragging ? drag.x : table.positionX
-                    const y = isDragging ? drag.y : table.positionY
-                    // Minutes since the open order started (duration heat driver).
-                    const mins = table.openOrderSince
-                      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
-                      : 0
-                    const { surface, amount: amountClass } = tableSurfaceClasses(table, mins)
-                    const isOccupied = table.status === 'occupied'
-                    const shape = table.shape ?? 'square'
-                    const statusLabel = t(`status.table.${table.status}`)
-                    return (
-                      <div
-                        key={table.id}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`${table.name}, ${statusLabel}`}
-                        style={{ left: `${x}%`, top: `${y}%` }}
-                        onPointerDown={(event) => beginDrag(event, table)}
-                        onPointerMove={moveDrag}
-                        onPointerUp={(event) => endDrag(event, true)}
-                        onPointerCancel={(event) => endDrag(event, false)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            openTableDialog(table)
-                          }
-                        }}
-                        className={cn(
-                          'absolute w-28 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none',
-                          isDragging && 'z-30 cursor-grabbing',
-                        )}
-                      >
+              <div className="relative">
+                <div
+                  ref={canvasRef}
+                  className="relative h-[460px] w-full touch-none overflow-hidden rounded-2xl border-2 border-[#D6D0C4] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] shadow-inner"
+                >
+                  {activeTables.length === 0 ? (
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
+                      <Armchair className="size-12 text-muted-foreground/40" />
+                      <p className="text-sm font-medium text-muted-foreground">
+                        {t('admin.addTablesEmpty')}
+                      </p>
+                    </div>
+                  ) : (
+                    activeTables.map((table) => {
+                      const isDragging = drag !== null && drag.table.id === table.id
+                      const x = isDragging ? drag.x : table.positionX
+                      const y = isDragging ? drag.y : table.positionY
+                      // Minutes since the open order started (duration heat driver).
+                      const mins = table.openOrderSince
+                        ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+                        : 0
+                      const { surface, amount: amountClass } = tableSurfaceClasses(table, mins)
+                      const isOccupied = table.status === 'occupied'
+                      const isPaid = table.status === 'paid'
+                      const isDeferred = table.status === 'deferred'
+                      const shape = table.shape ?? 'square'
+                      const statusLabel = t(`status.table.${table.status}`)
+                      return (
                         <div
+                          key={table.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`${table.name}, ${statusLabel}`}
+                          style={{ left: `${x}%`, top: `${y}%` }}
+                          onPointerDown={(event) => beginDrag(event, table)}
+                          onPointerMove={moveDrag}
+                          onPointerUp={(event) => endDrag(event, true)}
+                          onPointerCancel={(event) => endDrag(event, false)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              openTableDialog(table)
+                            }
+                          }}
                           className={cn(
-                            'flex w-full flex-col items-center justify-center gap-1 border-2 p-3 text-center shadow-sm transition hover:shadow-md',
-                            shapeTileClasses(shape),
-                            (shape === 'round' || shape === 'oval') && 'px-4',
-                            surface,
-                            isDragging && 'scale-105 shadow-lg ring-2 ring-ring/60',
+                            'absolute w-28 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none',
+                            isDragging && 'z-30 cursor-grabbing',
                           )}
                         >
-                          <span
+                          <div
                             className={cn(
-                              'max-w-full truncate px-1 leading-tight',
-                              isOccupied
-                                ? 'text-base font-bold'
-                                : 'text-sm font-bold text-stone-500',
+                              'flex w-full flex-col items-center justify-center gap-1 border-2 p-3 text-center shadow-sm transition hover:shadow-md',
+                              shapeTileClasses(shape),
+                              (shape === 'round' || shape === 'oval') && 'px-4',
+                              surface,
+                              isDragging && 'scale-105 shadow-lg ring-2 ring-ring/60',
                             )}
                           >
-                            {table.name}
-                          </span>
-                          {isOccupied ? (
-                            <>
-                              <span
-                                className={cn(
-                                  'text-lg font-extrabold tabular-nums',
-                                  amountClass,
-                                )}
-                              >
-                                {formatCurrency(table.openOrderTotal ?? 0)}
-                              </span>
-                              <span className="flex items-center gap-1 text-[11px] font-medium">
-                                <Users className="size-3 shrink-0" aria-hidden />
-                                {table.openOrderGuests ?? table.capacity}
-                                <span aria-hidden>·</span>
-                                <Clock className="size-3 shrink-0" aria-hidden />
-                                {elapsedSince(table.openOrderSince ?? new Date())}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="flex items-center gap-1 text-xs text-stone-400">
-                              <Users className="size-3 shrink-0" aria-hidden />
-                              {table.capacity} {t('common.seats')}
+                            <span
+                              className={cn(
+                                'max-w-full truncate px-1 leading-tight',
+                                isOccupied || isPaid || isDeferred
+                                  ? 'text-base font-bold'
+                                  : 'text-sm font-bold text-stone-500',
+                              )}
+                            >
+                              {table.name}
                             </span>
-                          )}
+                            {isOccupied ? (
+                              <>
+                                <span
+                                  className={cn(
+                                    'text-lg font-extrabold tabular-nums',
+                                    amountClass,
+                                  )}
+                                >
+                                  {formatCurrency(table.openOrderTotal ?? 0)}
+                                </span>
+                                <span className="flex items-center gap-1 text-[11px] font-medium">
+                                  <Users className="size-3 shrink-0" aria-hidden />
+                                  {table.openOrderGuests ?? table.capacity}
+                                  <span aria-hidden>·</span>
+                                  <Clock className="size-3 shrink-0" aria-hidden />
+                                  {elapsedSince(table.openOrderSince ?? new Date())}
+                                </span>
+                              </>
+                            ) : isPaid ? (
+                              <span className="flex items-center gap-1 px-1 text-[11px] font-medium leading-tight">
+                                <BadgeCheck className="size-4 shrink-0" aria-hidden />
+                                {t('status.table.paid')}
+                              </span>
+                            ) : isDeferred ? (
+                              <>
+                                <span className="flex items-center gap-1 px-1 text-[11px] font-medium leading-tight">
+                                  <Hourglass className="size-4 shrink-0" aria-hidden />
+                                  {t('status.table.deferred')}
+                                </span>
+                                {table.deferredClientName ? (
+                                  <span
+                                    dir="auto"
+                                    className="max-w-full truncate px-1 text-sm font-semibold leading-tight"
+                                  >
+                                    {table.deferredClientName}
+                                  </span>
+                                ) : null}
+                              </>
+                            ) : (
+                              <span className="flex items-center gap-1 text-xs text-stone-400">
+                                <Users className="size-3 shrink-0" aria-hidden />
+                                {table.capacity} {t('common.seats')}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )
-                  })
-                )}
+                      )
+                    })
+                  )}
+
+                  {/* Hall stats — pinned inside the top of the canvas (never blocks dragging) */}
+                  <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-stone-500 backdrop-blur-sm">
+                    <span>{t('admin.hallStatsTables', { n: activeTables.length })}</span>
+                    <span className="text-emerald-700">
+                      {t('admin.hallStatsFree', { n: hallStats.free })}
+                    </span>
+                    <span className="text-amber-700">
+                      {t('admin.hallStatsOccupied', { n: hallStats.occupied })}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Entrance marker — sits on the bottom border, mostly outside the canvas */}
+                <div className="pointer-events-none absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 text-[11px] font-medium text-stone-500 shadow-sm">
+                  <DoorOpen className="size-3.5 shrink-0" aria-hidden />
+                  {t('admin.hallEntrance')}
+                </div>
               </div>
             </Card>
           )}
@@ -777,6 +844,13 @@ export default function FloorPlansView() {
                   <SelectItem value="reserved">{t('status.table.reserved')}</SelectItem>
                   <SelectItem value="occupied" disabled>
                     {t('admin.occupiedAuto')}
+                  </SelectItem>
+                  {/* paid / deferred are system-managed (cleared from the POS floor) — visible but not settable */}
+                  <SelectItem value="paid" disabled>
+                    {t('status.table.paid')}
+                  </SelectItem>
+                  <SelectItem value="deferred" disabled>
+                    {t('status.table.deferred')}
                   </SelectItem>
                 </SelectContent>
               </Select>

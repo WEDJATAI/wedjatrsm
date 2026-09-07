@@ -13,6 +13,7 @@ import {
   Plus,
   Printer,
   Send,
+  ShieldAlert,
   ShoppingBag,
   StickyNote,
   Trash2,
@@ -37,7 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
 import { apiFetch, fetcher } from '@/lib/api'
-import { COURSES, TAX_RATE } from '@/lib/constants'
+import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { useI18n, localizedName } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -95,6 +96,13 @@ export default function CartPanel({
   const [percentInput, setPercentInput] = useState('')
   const [fixedInput, setFixedInput] = useState('')
 
+  // ── PIN-gated item deletion state ─────────────────────────────────
+  // Sent items may only be removed with the admin's 6-digit PIN; the
+  // dialog stays open on a wrong PIN so the user can retry.
+  const [pinDialogItem, setPinDialogItem] = useState<OrderItem | null>(null)
+  const [pinInput, setPinInput] = useState('')
+  const [pinWrong, setPinWrong] = useState(false)
+
   // ── Item transfer ("Move items") state ────────────────────────────
   const [moveMode, setMoveMode] = useState(false)
   const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
@@ -133,12 +141,15 @@ export default function CartPanel({
     onError: (err: Error) => toast.error(err.message),
   })
 
+  // Item removal is PIN-gated (PUT /api/orders/[id] { removeItemIds, removePin }):
+  // the dialog collects the 6-digit PIN and the API verifies it server-side
+  // (403 with a descriptive message on a wrong or missing PIN).
   const removeItem = useMutation({
-    mutationFn: (itemId: number) => {
+    mutationFn: ({ itemId, pin }: { itemId: number; pin: string }) => {
       if (orderId == null) throw new Error(t('pos.noActiveOrder'))
       return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
         method: 'PUT',
-        body: { removeItemIds: [itemId] },
+        body: { removeItemIds: [itemId], removePin: pin },
       })
     },
     onSuccess: async ({ order: updated }) => {
@@ -147,9 +158,33 @@ export default function CartPanel({
       await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
       toast.success(t('pos.itemRemovedToast'))
+      closePinDialog()
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: Error) => {
+      // The API message is descriptive (403 wrong/missing PIN); the dialog
+      // stays open with the inline wrong-PIN hint so the user can retry.
+      toast.error(err.message)
+      setPinWrong(true)
+    },
   })
+
+  // ── PIN dialog helpers ────────────────────────────────────────────
+  const openPinDialog = (item: OrderItem) => {
+    setPinDialogItem(item)
+    setPinInput('')
+    setPinWrong(false)
+  }
+
+  const closePinDialog = () => {
+    setPinDialogItem(null)
+    setPinInput('')
+    setPinWrong(false)
+  }
+
+  const confirmPin = () => {
+    if (!pinDialogItem || pinInput.length < DELETE_PIN_LENGTH || removeItem.isPending) return
+    removeItem.mutate({ itemId: pinDialogItem.id, pin: pinInput })
+  }
 
   const applyDiscount = useMutation({
     mutationFn: (discountAmount: number) => {
@@ -280,7 +315,8 @@ export default function CartPanel({
     return round2(Math.min(raw, orderSubtotal))
   })()
   const previewBase = round2(orderSubtotal - previewDiscount)
-  const previewTax = round2(previewBase * TAX_RATE)
+  const previewVat = round2(previewBase * TAX_RATE)
+  const previewServiceTax = round2(previewBase * SERVICE_TAX_RATE)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -362,9 +398,9 @@ export default function CartPanel({
                     key={item.id}
                     item={item}
                     onServed={() => markServed.mutate(item.id)}
-                    onRemove={() => removeItem.mutate(item.id)}
+                    onRemove={() => openPinDialog(item)}
                     servedPending={markServed.isPending && markServed.variables === item.id}
-                    removePending={removeItem.isPending && removeItem.variables === item.id}
+                    removePending={removeItem.isPending && removeItem.variables?.itemId === item.id}
                     moveMode={moveMode}
                     moveSelected={moveSelected.has(item.id)}
                     onToggleMove={() => toggleMoveItem(item.id)}
@@ -416,6 +452,7 @@ export default function CartPanel({
           </span>
         </div>
         <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
+        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(totals.serviceTax)} />
         <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
           <span className="text-sm font-semibold">{t('money.total')}</span>
           <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
@@ -674,11 +711,12 @@ export default function CartPanel({
           <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
             <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
             <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
-            <SummaryRow label={t('money.tax')} value={formatCurrency(previewTax)} />
+            <SummaryRow label={t('money.tax')} value={formatCurrency(previewVat)} />
+            <SummaryRow label={t('money.serviceTax')} value={formatCurrency(previewServiceTax)} />
             <div className="flex items-center justify-between border-t pt-1.5 font-bold">
               <span>{t('pos.newTotal')}</span>
               <span className="tabular-nums">
-                {formatCurrency(round2(previewBase + previewTax))}
+                {formatCurrency(round2(previewBase + previewVat + previewServiceTax))}
               </span>
             </div>
           </div>
@@ -691,6 +729,75 @@ export default function CartPanel({
               disabled={applyDiscount.isPending}
             >
               {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PIN-gated item deletion dialog — sent items only (draft rows keep
+          their instant remove; they were never sent to the kitchen). */}
+      <Dialog open={!!pinDialogItem} onOpenChange={(o) => !o && closePinDialog()}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="size-5 text-destructive" /> {t('pos.pinTitle')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('pos.pinDesc', {
+                name: pinDialogItem
+                  ? pinDialogItem.product
+                    ? localizedName(pinDialogItem.product.name, pinDialogItem.product.nameAr, lang)
+                    : t('pos.item')
+                  : '',
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Input
+              type="password"
+              inputMode="numeric"
+              autoFocus
+              maxLength={DELETE_PIN_LENGTH}
+              value={pinInput}
+              onChange={(e) => {
+                // digits only — a PIN is numeric by definition
+                setPinInput(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+                if (pinWrong) setPinWrong(false)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  confirmPin()
+                }
+              }}
+              placeholder={t('pos.pinPlaceholder')}
+              aria-invalid={pinWrong || undefined}
+              className={cn(
+                'h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums',
+                pinWrong && 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+              )}
+            />
+            {pinWrong && (
+              <p className="text-xs font-medium text-destructive" role="alert">
+                {t('pos.pinWrong')}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closePinDialog} disabled={removeItem.isPending}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmPin}
+              disabled={removeItem.isPending || pinInput.length < DELETE_PIN_LENGTH}
+            >
+              {removeItem.isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}{' '}
+              {t('pos.pinConfirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

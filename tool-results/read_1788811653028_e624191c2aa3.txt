@@ -1,0 +1,781 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useMemo, useState } from 'react'
+     4→import type { LucideIcon } from 'lucide-react'
+     5→import {
+     6→  AlertCircle,
+     7→  Banknote,
+     8→  Check,
+     9→  CreditCard,
+    10→  Hourglass,
+    11→  Loader2,
+    12→  MoreHorizontal,
+    13→  Plus,
+    14→  Printer,
+    15→  Users,
+    16→  X,
+    17→} from 'lucide-react'
+    18→
+    19→import { Button } from '@/components/ui/button'
+    20→import {
+    21→  Dialog,
+    22→  DialogContent,
+    23→  DialogDescription,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→} from '@/components/ui/dialog'
+    27→import { Input } from '@/components/ui/input'
+    28→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    29→import { toast } from 'sonner'
+    30→import { apiFetch } from '@/lib/api'
+    31→import { PAYMENT_METHODS } from '@/lib/constants'
+    32→import { formatCurrency, formatQty } from '@/lib/format'
+    33→import { localizedName, useI18n } from '@/lib/i18n'
+    34→import { cn } from '@/lib/utils'
+    35→import type { Order } from '@/lib/types'
+    36→import CheckModal, { type CheckSplitRow } from './check-modal'
+    37→import { newDraftKey, parseAmount, round2 } from './pos-utils'
+    38→
+    39→type PaymentModalProps = {
+    40→  order: Order
+    41→  open: boolean
+    42→  onOpenChange: (open: boolean) => void
+    43→  onSuccess: (order: Order, closed: boolean) => void
+    44→  /** Called after the check is deferred (pay later, client name recorded).
+    45→   *  The modal closes itself; the parent resets its order screen state. */
+    46→  onDeferred?: (order: Order) => void
+    47→}
+    48→
+    49→type PaymentResult = {
+    50→  order: Order
+    51→  paidAmount: number
+    52→  remaining: number
+    53→  closed: boolean
+    54→}
+    55→
+    56→type EditableRow = {
+    57→  id: string
+    58→  method: string
+    59→  amount: string
+    60→  reference: string
+    61→}
+    62→
+    63→type SubmitRow = { method: string; amount: number; reference?: string }
+    64→
+    65→type SplitTab = 'single' | 'equal' | 'items' | 'custom'
+    66→
+    67→const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
+    68→  cash: { labelKey: 'status.payment.cash', icon: Banknote },
+    69→  card: { labelKey: 'status.payment.card', icon: CreditCard },
+    70→  other: { labelKey: 'status.payment.other', icon: MoreHorizontal },
+    71→}
+    72→
+    73→export default function PaymentModal({ order, open, onOpenChange, onSuccess, onDeferred }: PaymentModalProps) {
+    74→  const { t, lang } = useI18n()
+    75→  const [tab, setTab] = useState<SplitTab>('single')
+    76→  const [submitting, setSubmitting] = useState(false)
+    77→  const [checkOpen, setCheckOpen] = useState(false)
+    78→
+    79→  // Defer-payment state (check stays open under the client's name)
+    80→  const [deferOpen, setDeferOpen] = useState(false)
+    81→  const [deferName, setDeferName] = useState('')
+    82→  const [deferSubmitting, setDeferSubmitting] = useState(false)
+    83→
+    84→  // Which payment row the method tiles currently target.
+    85→  const [activeIdx, setActiveIdx] = useState(0)
+    86→
+    87→  const [singleRow, setSingleRow] = useState<EditableRow>({ id: 'single', method: 'cash', amount: '', reference: '' })
+    88→  const [customRows, setCustomRows] = useState<EditableRow[]>([])
+    89→
+    90→  const [eqPayers, setEqPayers] = useState(2)
+    91→  const [eqMethods, setEqMethods] = useState<Record<number, string>>({})
+    92→
+    93→  const [itPayers, setItPayers] = useState(2)
+    94→  const [itMethods, setItMethods] = useState<Record<number, string>>({})
+    95→  const [assignments, setAssignments] = useState<Record<number, number>>({})
+    96→
+    97→  const remaining = round2(Math.max(0, order.remainingAmount))
+    98→
+    99→  // Reset state whenever the modal opens for (a new) order.
+   100→  useEffect(() => {
+   101→    if (!open) return
+   102→    const rem = round2(Math.max(0, order.remainingAmount))
+   103→    setTab('single')
+   104→    setSingleRow({ id: 'single', method: 'cash', amount: String(rem), reference: '' })
+   105→    setCustomRows([{ id: newDraftKey(), method: 'cash', amount: String(rem), reference: '' }])
+   106→    setEqPayers(2)
+   107→    setEqMethods({})
+   108→    setItPayers(2)
+   109→    setItMethods({})
+   110→    setAssignments({})
+   111→    setSubmitting(false)
+   112→    setActiveIdx(0)
+   113→    setCheckOpen(false)
+   114→    setDeferOpen(false)
+   115→    setDeferName('')
+   116→    setDeferSubmitting(false)
+   117→  }, [open, order.id, order.remainingAmount])
+   118→
+   119→  // ── Derived payment rows per tab ──────────────────────────────────
+   120→  const eqAmounts = useMemo(() => {
+   121→    const part = round2(remaining / eqPayers)
+   122→    const amounts = Array.from({ length: eqPayers }, () => part)
+   123→    const others = round2(part * (eqPayers - 1))
+   124→    amounts[eqPayers - 1] = round2(Math.max(0, remaining - others))
+   125→    return amounts
+   126→  }, [remaining, eqPayers])
+   127→
+   128→  const itemLines = useMemo(
+   129→    () =>
+   130→      order.items.map((it) => ({
+   131→        id: it.id,
+   132→        label: `${formatQty(it.quantity)} × ${
+   133→          it.product ? localizedName(it.product.name, it.product.nameAr, lang) : t('pos.item')
+   134→        }`,
+   135→        total: round2(it.quantity * it.unitPrice),
+   136→      })),
+   137→    [order.items, t, lang],
+   138→  )
+   139→
+   140→  const itAmounts = useMemo(() => {
+   141→    const subtotal = round2(order.subtotalAmount)
+   142→    const rawTotals = new Array<number>(itPayers).fill(0)
+   143→    for (const line of itemLines) {
+   144→      const payer = assignments[line.id] ?? 0
+   145→      if (payer < itPayers) rawTotals[payer] = round2(rawTotals[payer] + line.total)
+   146→    }
+   147→    const amounts: number[] = []
+   148→    let allocated = 0
+   149→    for (let i = 0; i < itPayers; i++) {
+   150→      if (i === itPayers - 1) {
+   151→        amounts.push(round2(Math.max(0, remaining - allocated)))
+   152→      } else {
+   153→        const share = subtotal > 0 ? round2((rawTotals[i] / subtotal) * remaining) : 0
+   154→        amounts.push(share)
+   155→        allocated = round2(allocated + share)
+   156→      }
+   157→    }
+   158→    return amounts
+   159→  }, [itemLines, assignments, itPayers, remaining, order.subtotalAmount])
+   160→
+   161→  const submitRows: SubmitRow[] = useMemo(() => {
+   162→    if (tab === 'single') {
+   163→      return [toSubmitRow(singleRow)]
+   164→    }
+   165→    if (tab === 'equal') {
+   166→      return eqAmounts.map((amount, i) => ({
+   167→        method: eqMethods[i] ?? 'cash',
+   168→        amount,
+   169→      }))
+   170→    }
+   171→    if (tab === 'items') {
+   172→      return itAmounts.map((amount, i) => ({
+   173→        method: itMethods[i] ?? 'cash',
+   174→        amount,
+   175→      }))
+   176→    }
+   177→    return customRows.map(toSubmitRow)
+   178→  }, [tab, singleRow, customRows, eqAmounts, eqMethods, itAmounts, itMethods])
+   179→
+   180→  const sum = round2(submitRows.reduce((s, r) => s + r.amount, 0))
+   181→  const diff = round2(sum - remaining)
+   182→  const exceeds = diff > 0.01
+   183→  const exact = Math.abs(diff) <= 0.01
+   184→  const canSubmit = !submitting && remaining > 0 && sum > 0 && !exceeds
+   185→
+   186→  // ── Active row / method tiles ─────────────────────────────────────
+   187→  const rowCount =
+   188→    tab === 'single' ? 1 : tab === 'equal' ? eqPayers : tab === 'items' ? itPayers : customRows.length
+   189→  const safeActiveIdx = Math.min(activeIdx, Math.max(0, rowCount - 1))
+   190→
+   191→  const activeRowLabel =
+   192→    tab === 'single'
+   193→      ? t('pos.payment')
+   194→      : tab === 'equal' || tab === 'items'
+   195→        ? t('pos.payer', { n: safeActiveIdx + 1 })
+   196→        : t('pos.paymentN', { n: safeActiveIdx + 1 })
+   197→
+   198→  const currentMethodAt = (index: number): string => {
+   199→    if (tab === 'single') return singleRow.method
+   200→    if (tab === 'equal') return eqMethods[index] ?? 'cash'
+   201→    if (tab === 'items') return itMethods[index] ?? 'cash'
+   202→    return customRows[index]?.method ?? 'cash'
+   203→  }
+   204→
+   205→  const setMethodAt = (index: number, m: string) => {
+   206→    if (tab === 'single') {
+   207→      setSingleRow((r) => ({ ...r, method: m }))
+   208→    } else if (tab === 'equal') {
+   209→      setEqMethods((prev) => ({ ...prev, [index]: m }))
+   210→    } else if (tab === 'items') {
+   211→      setItMethods((prev) => ({ ...prev, [index]: m }))
+   212→    } else {
+   213→      setCustomRows((rows) => rows.map((r, i) => (i === index ? { ...r, method: m } : r)))
+   214→    }
+   215→  }
+   216→
+   217→  const handleTabChange = (v: string) => {
+   218→    setTab(v as SplitTab)
+   219→    setActiveIdx(0)
+   220→  }
+   221→
+   222→  // ── Guest check rows mirroring the current split configuration ────
+   223→  const checkRows: CheckSplitRow[] = useMemo(() => {
+   224→    if (tab === 'single') {
+   225→      const amount = parseAmount(singleRow.amount) || remaining
+   226→      return [{ label: t('pos.fullBill'), amount, method: singleRow.method }]
+   227→    }
+   228→    if (tab === 'equal') {
+   229→      return eqAmounts.map((amount, i) => ({
+   230→        label: t('pos.partOf', { i: i + 1, n: eqPayers }),
+   231→        amount,
+   232→        method: eqMethods[i] ?? 'cash',
+   233→      }))
+   234→    }
+   235→    if (tab === 'items') {
+   236→      return itAmounts.map((amount, i) => ({
+   237→        label: t('pos.payer', { n: i + 1 }),
+   238→        amount,
+   239→        method: itMethods[i] ?? 'cash',
+   240→      }))
+   241→    }
+   242→    return customRows.map((r, i) => ({
+   243→      label: t('pos.paymentN', { n: i + 1 }),
+   244→      amount: parseAmount(r.amount),
+   245→      method: r.method,
+   246→    }))
+   247→  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, t])
+   248→
+   249→  // ── Handlers ──────────────────────────────────────────────────────
+   250→  const clampPayers = (raw: number, min: number, max: number) => {
+   251→    const n = Math.round(Number.isFinite(raw) ? raw : min)
+   252→    return Math.min(max, Math.max(min, n))
+   253→  }
+   254→
+   255→  const setAssignment = (itemId: number, payer: number) =>
+   256→    setAssignments((prev) => ({ ...prev, [itemId]: payer }))
+   257→
+   258→  const addCustomRow = () => {
+   259→    const current = round2(customRows.reduce((s, r) => s + parseAmount(r.amount), 0))
+   260→    const next = round2(Math.max(0, remaining - current))
+   261→    setCustomRows((rows) => [...rows, { id: newDraftKey(), method: 'cash', amount: String(next), reference: '' }])
+   262→  }
+   263→
+   264→  const handleSubmit = async () => {
+   265→    const payments = submitRows
+   266→      .map((r) => ({ ...r, amount: round2(r.amount) }))
+   267→      .filter((r) => r.amount > 0)
+   268→      .map((r) => ({
+   269→        method: r.method,
+   270→        amount: r.amount,
+   271→        ...(r.method === 'card' && r.reference?.trim() ? { reference: r.reference.trim() } : {}),
+   272→      }))
+   273→    if (payments.length === 0) return
+   274→    setSubmitting(true)
+   275→    try {
+   276→      const result = await apiFetch<PaymentResult>(`/api/orders/${order.id}/payments`, {
+   277→        method: 'POST',
+   278→        body: { payments },
+   279→      })
+   280→      if (result.closed) {
+   281→        toast.success(t('pos.paidClosedToast'))
+   282→        onSuccess(result.order, true)
+   283→        onOpenChange(false)
+   284→      } else {
+   285→        toast.success(t('pos.paymentRecordedToast', { amount: formatCurrency(result.remaining) }))
+   286→        onSuccess(result.order, false)
+   287→        onOpenChange(false)
+   288→      }
+   289→    } catch (err) {
+   290→      toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
+   291→    } finally {
+   292→      setSubmitting(false)
+   293→    }
+   294→  }
+   295→
+   296→  // ── Defer payment (client pays later, check tracked by name) ──────
+   297→  const canDefer = order.status === 'open' && remaining > 0
+   298→
+   299→  const handleDefer = async () => {
+   300→    const clientName = deferName.trim()
+   301→    if (!clientName) {
+   302→      toast.error(t('pos.deferredNameRequired'))
+   303→      return
+   304→    }
+   305→    if (deferSubmitting) return
+   306→    setDeferSubmitting(true)
+   307→    try {
+   308→      const result = await apiFetch<{ order: Order }>(`/api/orders/${order.id}/defer`, {
+   309→        method: 'POST',
+   310→        body: { clientName },
+   311→      })
+   312→      toast.success(t('pos.deferredToast', { order: order.id, client: clientName }))
+   313→      setDeferOpen(false)
+   314→      onDeferred?.(result.order)
+   315→      onOpenChange(false)
+   316→    } catch (err) {
+   317→      toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
+   318→    } finally {
+   319→      setDeferSubmitting(false)
+   320→    }
+   321→  }
+   322→
+   323→  const singleExceeds = tab === 'single' && parseAmount(singleRow.amount) > round2(remaining + 0.01)
+   324→
+   325→  return (
+   326→    <>
+   327→      <Dialog open={open} onOpenChange={onOpenChange}>
+   328→        <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
+   329→          <DialogHeader>
+   330→            <DialogTitle>
+   331→              {t('pos.payment')} · {order.table?.name ?? t('common.takeaway')} ·{' '}
+   332→              {t('common.order')} #{order.id}
+   333→            </DialogTitle>
+   334→            <DialogDescription>{t('pos.paymentDesc')}</DialogDescription>
+   335→          </DialogHeader>
+   336→
+   337→          {/* Summary */}
+   338→          <div className="grid grid-cols-3 gap-2 rounded-xl border border-[#E2E2E0] bg-white p-3 text-center shadow-sm">
+   339→            <div>
+   340→              <p className="text-xs text-muted-foreground">{t('money.total')}</p>
+   341→              <p className="text-sm font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</p>
+   342→            </div>
+   343→            <div>
+   344→              <p className="text-xs text-muted-foreground">{t('money.paid')}</p>
+   345→              <p className="text-sm font-semibold tabular-nums text-emerald-600">
+   346→                {formatCurrency(order.paidAmount)}
+   347→              </p>
+   348→            </div>
+   349→            <div>
+   350→              <p className="text-xs text-muted-foreground">{t('money.remaining')}</p>
+   351→              <p className="text-primary text-2xl font-bold tabular-nums">
+   352→                {formatCurrency(remaining)}
+   353→              </p>
+   354→            </div>
+   355→          </div>
+   356→
+   357→          {/* Method tiles — apply to the active row below */}
+   358→          <div className="space-y-1.5">
+   359→            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   360→              {t('pos.methodAppliesTo')} <span className="text-[#714B67]">{activeRowLabel}</span>
+   361→            </p>
+   362→            <div className="grid grid-cols-3 gap-2">
+   363→              {PAYMENT_METHODS.map((m) => {
+   364→                const meta = METHOD_META[m] ?? { labelKey: `status.payment.${m}`, icon: MoreHorizontal }
+   365→                const Icon = meta.icon
+   366→                const active = currentMethodAt(safeActiveIdx) === m
+   367→                return (
+   368→                  <button
+   369→                    key={m}
+   370→                    type="button"
+   371→                    onClick={() => setMethodAt(safeActiveIdx, m)}
+   372→                    aria-pressed={active}
+   373→                    className={cn(
+   374→                      'flex h-16 flex-col items-center justify-center gap-1 rounded-xl border-2 text-sm font-semibold transition active:scale-95',
+   375→                      active
+   376→                        ? 'border-[#714B67] bg-[#714B67]/10 text-[#714B67]'
+   377→                        : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+   378→                    )}
+   379→                  >
+   380→                    <Icon className="size-6" aria-hidden />
+   381→                    {t(meta.labelKey)}
+   382→                  </button>
+   383→                )
+   384→              })}
+   385→            </div>
+   386→          </div>
+   387→
+   388→          <Tabs value={tab} onValueChange={handleTabChange}>
+   389→            <TabsList className="grid h-10 w-full grid-cols-4">
+   390→              <TabsTrigger value="single" className="text-xs sm:text-sm">
+   391→                {t('pos.tabSingle')}
+   392→              </TabsTrigger>
+   393→              <TabsTrigger value="equal" className="text-xs sm:text-sm">
+   394→                {t('pos.tabEqual')}
+   395→              </TabsTrigger>
+   396→              <TabsTrigger value="items" className="text-xs sm:text-sm">
+   397→                {t('pos.tabItems')}
+   398→              </TabsTrigger>
+   399→              <TabsTrigger value="custom" className="text-xs sm:text-sm">
+   400→                {t('pos.tabCustom')}
+   401→              </TabsTrigger>
+   402→            </TabsList>
+   403→
+   404→            {/* ── Single ── */}
+   405→            <TabsContent value="single" className="space-y-2 pt-3">
+   406→              <PayRow
+   407→                label={t('pos.payment')}
+   408→                method={singleRow.method}
+   409→                active
+   410→                amountStr={singleRow.amount}
+   411→                onAmountChange={(v) => setSingleRow((r) => ({ ...r, amount: v }))}
+   412→                reference={singleRow.reference}
+   413→                onReferenceChange={(v) => setSingleRow((r) => ({ ...r, reference: v }))}
+   414→                editable
+   415→                error={
+   416→                  singleExceeds
+   417→                    ? t('pos.exceedsBy', {
+   418→                        amount: formatCurrency(round2(parseAmount(singleRow.amount) - remaining)),
+   419→                      })
+   420→                    : undefined
+   421→                }
+   422→              />
+   423→            </TabsContent>
+   424→
+   425→            {/* ── Equal Split ── */}
+   426→            <TabsContent value="equal" className="space-y-3 pt-3">
+   427→              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+   428→                <Users className="size-4 text-muted-foreground" />
+   429→                <span className="flex-1 text-sm font-medium">{t('pos.splitBetween')}</span>
+   430→                <Input
+   431→                  type="number"
+   432→                  min={2}
+   433→                  max={12}
+   434→                  value={eqPayers}
+   435→                  onChange={(e) => setEqPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 12))}
+   436→                  className="h-10 w-16 text-center tabular-nums"
+   437→                />
+   438→                <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>
+   439→              </div>
+   440→              {eqAmounts.map((amount, i) => (
+   441→                <PayRow
+   442→                  key={i}
+   443→                  label={t('pos.payer', { n: i + 1 })}
+   444→                  method={eqMethods[i] ?? 'cash'}
+   445→                  active={safeActiveIdx === i}
+   446→                  onActivate={() => setActiveIdx(i)}
+   447→                  amount={amount}
+   448→                />
+   449→              ))}
+   450→              <p className="text-center text-xs text-muted-foreground">
+   451→                {t('pos.partsTotal')}{' '}
+   452→                <span className="font-semibold tabular-nums">{formatCurrency(sum)}</span>
+   453→              </p>
+   454→            </TabsContent>
+   455→
+   456→            {/* ── By Items ── */}
+   457→            <TabsContent value="items" className="space-y-3 pt-3">
+   458→              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+   459→                <Users className="size-4 text-muted-foreground" />
+   460→                <span className="flex-1 text-sm font-medium">{t('pos.assignItemsTo')}</span>
+   461→                <Input
+   462→                  type="number"
+   463→                  min={2}
+   464→                  max={6}
+   465→                  value={itPayers}
+   466→                  onChange={(e) => setItPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 6))}
+   467→                  className="h-10 w-16 text-center tabular-nums"
+   468→                />
+   469→                <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>
+   470→              </div>
+   471→
+   472→              <div className="space-y-1.5">
+   473→                {itemLines.map((line) => {
+   474→                  const active = Math.min(assignments[line.id] ?? 0, itPayers - 1)
+   475→                  return (
+   476→                    <div
+   477→                      key={line.id}
+   478→                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E2E2E0] bg-white p-2.5"
+   479→                    >
+   480→                      <div className="min-w-0">
+   481→                        <p className="truncate text-sm font-medium">{line.label}</p>
+   482→                        <p className="text-xs text-muted-foreground tabular-nums">
+   483→                          {formatCurrency(line.total)}
+   484→                        </p>
+   485→                      </div>
+   486→                      <div className="flex flex-wrap gap-1">
+   487→                        {Array.from({ length: itPayers }, (_, p) => (
+   488→                          <button
+   489→                            key={p}
+   490→                            type="button"
+   491→                            onClick={() => setAssignment(line.id, p)}
+   492→                            className={cn(
+   493→                              'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
+   494→                              p === active
+   495→                                ? 'border-[#714B67] bg-[#714B67] text-white'
+   496→                                : 'border-border bg-muted/50 text-muted-foreground hover:border-[#714B67]/40',
+   497→                            )}
+   498→                            aria-pressed={p === active}
+   499→                          >
+   500→                            P{p + 1}
+   501→                          </button>
+   502→                        ))}
+   503→                      </div>
+   504→                    </div>
+   505→                  )
+   506→                })}
+   507→              </div>
+   508→
+   509→              <div className="space-y-2">
+   510→                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   511→                  {t('pos.eachPayerPays')}
+   512→                </p>
+   513→                {itAmounts.map((amount, i) => (
+   514→                  <PayRow
+   515→                    key={i}
+   516→                    label={t('pos.payer', { n: i + 1 })}
+   517→                    method={itMethods[i] ?? 'cash'}
+   518→                    active={safeActiveIdx === i}
+   519→                    onActivate={() => setActiveIdx(i)}
+   520→                    amount={amount}
+   521→                  />
+   522→                ))}
+   523→              </div>
+   524→            </TabsContent>
+   525→
+   526→            {/* ── Custom ── */}
+   527→            <TabsContent value="custom" className="space-y-2 pt-3">
+   528→              {customRows.map((row, i) => (
+   529→                <PayRow
+   530→                  key={row.id}
+   531→                  label={t('pos.paymentN', { n: i + 1 })}
+   532→                  method={row.method}
+   533→                  active={safeActiveIdx === i}
+   534→                  onActivate={() => setActiveIdx(i)}
+   535→                  amountStr={row.amount}
+   536→                  onAmountChange={(v) =>
+   537→                    setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, amount: v } : r)))
+   538→                  }
+   539→                  reference={row.reference}
+   540→                  onReferenceChange={(v) =>
+   541→                    setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, reference: v } : r)))
+   542→                  }
+   543→                  onRemove={
+   544→                    customRows.length > 1
+   545→                      ? () => setCustomRows((rows) => rows.filter((r) => r.id !== row.id))
+   546→                      : undefined
+   547→                  }
+   548→                  editable
+   549→                />
+   550→              ))}
+   551→              <Button variant="outline" className="h-11 w-full rounded-xl border-dashed" onClick={addCustomRow}>
+   552→                <Plus /> {t('pos.addPayment')}
+   553→              </Button>
+   554→            </TabsContent>
+   555→          </Tabs>
+   556→
+   557→          {/* Live total + submit */}
+   558→          <div className="space-y-2 border-t border-[#E2E2E0] pt-3">
+   559→            <div
+   560→              className={cn(
+   561→                'flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium',
+   562→                exceeds
+   563→                  ? 'bg-rose-50 text-rose-700'
+   564→                  : exact
+   565→                    ? 'bg-emerald-50 text-emerald-700'
+   566→                    : 'bg-amber-50 text-amber-700',
+   567→              )}
+   568→            >
+   569→              {exceeds ? (
+   570→                <>
+   571→                  <AlertCircle className="size-4" /> {t('pos.exceedsBy', { amount: formatCurrency(Math.abs(diff)) })}
+   572→                </>
+   573→              ) : exact ? (
+   574→                <>
+   575→                  <Check className="size-4" /> {t('pos.exact')}
+   576→                </>
+   577→              ) : (
+   578→                <>
+   579→                  {t('pos.remainingAfter', { amount: formatCurrency(round2(remaining - sum)) })}
+   580→                </>
+   581→              )}
+   582→            </div>
+   583→            <div className="flex gap-2">
+   584→              <Button
+   585→                               variant="outline"
+   586→                className="h-12 rounded-xl border-[#E2E2E0]"
+   587→                onClick={() => setCheckOpen(true)}
+   588→                title={t('pos.printCheckPaymentHint')}
+   589→              >
+   590→                <Printer />
+   591→                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+   592→              </Button>
+   593→              {canDefer && (
+   594→                <Button
+   595→                  variant="outline"
+   596→                  className="h-12 rounded-xl border-violet-400 text-violet-700 hover:bg-violet-50 hover:text-violet-800"
+   597→                  onClick={() => setDeferOpen(true)}
+   598→                  title={t('pos.deferredDesc')}
+   599→                >
+   600→                  <Hourglass />
+   601→                  <span className="hidden lg:inline">{t('pos.deferredButton')}</span>
+   602→                </Button>
+   603→              )}
+   604→              <Button
+   605→                className="h-12 flex-[1.8] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+   606→                disabled={!canSubmit}
+   607→                onClick={handleSubmit}
+   608→              >
+   609→                {submitting ? <Loader2 className="animate-spin" /> : <CreditCard />}
+   610→                {t('pos.charge')} {formatCurrency(sum)}
+   611→              </Button>
+   612→            </div>
+   613→          </div>
+   614→
+   615→          {/* Receipt is rendered by the parent (pos-view) after full payment */}
+   616→        </DialogContent>
+   617→      </Dialog>
+   618→
+   619→      {/* Guest check for the CURRENT split configuration — printing does NOT
+   620→          record payments; the payment modal stays open behind it. */}
+   621→      <CheckModal order={order} open={checkOpen} onOpenChange={setCheckOpen} rows={checkRows} />
+   622→
+   623→      {/* Defer-payment dialog — client name is required; the check stays
+   624→          open as a receivable and the table is released for cleanup. */}
+   625→      <Dialog open={deferOpen} onOpenChange={setDeferOpen}>
+   626→        <DialogContent className="sm:max-w-sm">
+   627→          <DialogHeader>
+   628→            <DialogTitle className="flex items-center gap-2">
+   629→              <Hourglass className="size-5 text-violet-600" /> {t('pos.deferredTitle')}
+   630→            </DialogTitle>
+   631→            <DialogDescription>{t('pos.deferredDesc')}</DialogDescription>
+   632→          </DialogHeader>
+   633→          <div className="space-y-1.5">
+   634→            <label className="text-sm font-medium" htmlFor="defer-client-name">
+   635→              {t('pos.deferredNameLabel')} *
+   636→            </label>
+   637→            <input
+   638→              id="defer-client-name"
+   639→              value={deferName}
+   640→              onChange={(e) => setDeferName(e.target.value)}
+   641→              placeholder={t('pos.deferredNamePlaceholder')}
+   642→              maxLength={60}
+   643→              autoFocus
+   644→              className="h-11 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+   645→              onKeyDown={(e) => {
+   646→                if (e.key === 'Enter') {
+   647→                  e.preventDefault()
+   648→                  void handleDefer()
+   649→                }
+   650→              }}
+   651→            />
+   652→          </div>
+   653→          <div className="flex justify-end gap-2">
+   654→            <Button variant="outline" className="h-11" onClick={() => setDeferOpen(false)} disabled={deferSubmitting}>
+   655→              {t('common.cancel')}
+   656→            </Button>
+   657→            <Button
+   658→              className="h-11 bg-violet-600 text-white hover:bg-violet-700"
+   659→              onClick={() => void handleDefer()}
+   660→              disabled={deferSubmitting || deferName.trim().length === 0}
+   661→            >
+   662→              {deferSubmitting ? <Loader2 className="animate-spin" /> : <Hourglass />}
+   663→              {t('pos.deferredButton')}
+   664→            </Button>
+   665→          </div>
+   666→        </DialogContent>
+   667→      </Dialog>
+   668→    </>
+   669→  )
+   670→}
+   671→
+   672→function toSubmitRow(r: EditableRow): SubmitRow {
+   673→  return {
+   674→    method: r.method,
+   675→    amount: parseAmount(r.amount),
+   676→    ...(r.method === 'card' && r.reference.trim() ? { reference: r.reference.trim() } : {}),
+   677→  }
+   678→}
+   679→
+   680→function PayRow({
+   681→  label,
+   682→  method,
+   683→  active = false,
+   684→  onActivate,
+   685→  amount,
+   686→  amountStr,
+   687→  onAmountChange,
+   688→  reference,
+   689→  onReferenceChange,
+   690→  onRemove,
+   691→  editable,
+   692→  error,
+   693→}: {
+   694→  label: string
+   695→  method: string
+   696→  /** Whether the method tiles currently target this row. */
+   697→  active?: boolean
+   698→  onActivate?: () => void
+   699→  amount?: number
+   700→  amountStr?: string
+   701→  onAmountChange?: (v: string) => void
+   702→  reference?: string
+   703→  onReferenceChange?: (v: string) => void
+   704→  onRemove?: () => void
+   705→  editable?: boolean
+   706→  error?: string
+   707→}) {
+   708→  const { t } = useI18n()
+   709→  const meta = METHOD_META[method] ?? { labelKey: `status.payment.${method}`, icon: MoreHorizontal }
+   710→  const Icon = meta.icon
+   711→
+   712→  return (
+   713→    <div
+   714→      className={cn(
+   715→        'cursor-pointer rounded-xl border p-2.5 transition-colors',
+   716→        active ? 'border-[#714B67] ring-1 ring-[#714B67]' : 'border-[#E2E2E0] bg-white',
+   717→      )}
+   718→      onClick={() => onActivate?.()}
+   719→      title={onActivate ? t('pos.selectRowHint') : undefined}
+   720→    >
+   721→      <div className="flex items-center justify-between gap-2">
+   722→        <span className="flex min-w-0 items-center gap-2">
+   723→          <span className="text-sm font-medium">{label}</span>
+   724→          <span
+   725→            className={cn(
+   726→              'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+   727→              active ? 'bg-[#714B67] text-white' : 'bg-[#714B67]/10 text-[#714B67]',
+   728→            )}
+   729→          >
+   730→            <Icon className="size-3" aria-hidden /> {t(meta.labelKey)}
+   731→          </span>
+   732→        </span>
+   733→        {onRemove && (
+   734→          <Button
+   735→            variant="ghost"
+   736→            size="icon"
+   737→            className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+   738→            onClick={(e) => {
+   739→              e.stopPropagation()
+   740→              onRemove()
+   741→            }}
+   742→            title={t('pos.removePayment')}
+   743→          >
+   744→            <X className="size-4" />
+   745→          </Button>
+   746→        )}
+   747→      </div>
+   748→      <div className="mt-1.5 flex gap-2">
+   749→        {editable ? (
+   750→          <Input
+   751→            type="number"
+   752→            min={0}
+   753→            step={0.01}
+   754→            inputMode="decimal"
+   755→            value={amountStr}
+   756→            onChange={(e) => onAmountChange?.(e.target.value)}
+   757→            className="h-10 w-28 text-right text-sm font-semibold tabular-nums"
+   758→            aria-label={t('pos.amountAria', { label })}
+   759→          />
+   760→        ) : (
+   761→          <div
+   762→            className="flex h-10 w-28 items-center justify-center rounded-md border bg-muted/40 text-sm font-semibold tabular-nums"
+   763→            aria-label={t('pos.amountAria', { label })}
+   764→          >
+   765→            {formatCurrency(amount ?? 0)}
+   766→          </div>
+   767→        )}
+   768→      </div>
+   769→      {method === 'card' && onReferenceChange && (
+   770→        <Input
+   771→          value={reference ?? ''}
+   772→          onChange={(e) => onReferenceChange(e.target.value)}
+   773→          placeholder={t('pos.refOptional')}
+   774→          className="mt-1.5 h-10"
+   775→        />
+   776→      )}
+   777→      {error && <p className="mt-1.5 text-xs font-medium text-destructive">{error}</p>}
+   778→    </div>
+   779→  )
+   780→}
+   781→

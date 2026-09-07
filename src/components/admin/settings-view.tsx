@@ -12,11 +12,12 @@ import {
   Pencil,
   Plus,
   Save,
+  ShieldAlert,
   TriangleAlert,
 } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
-import type { Shift } from '@/lib/types'
+import type { AppSettings, Shift } from '@/lib/types'
 import { useAppSettings, updateAppSettings } from '@/lib/use-settings'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -53,7 +54,7 @@ function isOvernight(shift: Pick<Shift, 'startTime' | 'endTime'>): boolean {
 
 export default function SettingsView() {
   const { t } = useI18n()
-  const { query: settingsQuery, settings, restaurantName } = useAppSettings()
+  const { query: settingsQuery, settings, restaurantName, restaurantNameAr } = useAppSettings()
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
@@ -93,15 +94,19 @@ export default function SettingsView() {
           </Button>
         </Card>
       ) : (
-        // Keyed by the loaded name: the form (re)mounts with the fresh value
+        // Keyed by the loaded names: the form (re)mounts with the fresh values
         // after the query loads or after a successful save invalidation.
         <ProfileForm
-          key={settings?.restaurantName ?? restaurantName}
+          key={`${settings?.restaurantName ?? restaurantName}|${settings?.restaurantNameAr ?? restaurantNameAr}`}
           initialName={settings?.restaurantName ?? restaurantName}
+          initialNameAr={settings?.restaurantNameAr ?? restaurantNameAr}
         />
       )}
 
-      {/* Card 2 — shifts */}
+      {/* Card 2 — security (item-deletion PIN) */}
+      <SecurityCard />
+
+      {/* Card 3 — shifts */}
       <ShiftsCard />
     </div>
   )
@@ -109,19 +114,23 @@ export default function SettingsView() {
 
 // ─── Restaurant profile form ────────────────────────────────────────
 
-function ProfileForm({ initialName }: { initialName: string }) {
+function ProfileForm({ initialName, initialNameAr }: { initialName: string; initialNameAr: string }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [name, setName] = useState(initialName)
+  const [nameAr, setNameAr] = useState(initialNameAr)
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      updateAppSettings(queryClient, { restaurantName: name.trim() || initialName }),
+      updateAppSettings(queryClient, {
+        restaurantName: name.trim() || initialName,
+        restaurantNameAr: nameAr,
+      }),
     onSuccess: () => toast.success(t('settings.saved')),
     onError: (err: Error) => toast.error(err.message),
   })
 
-  const dirty = name.trim() !== initialName.trim()
+  const dirty = name.trim() !== initialName.trim() || nameAr.trim() !== initialNameAr.trim()
 
   return (
     <Card>
@@ -141,10 +150,102 @@ function ProfileForm({ initialName }: { initialName: string }) {
             placeholder="Saffron Table"
           />
         </div>
+        <div className="grid gap-2">
+          <Label htmlFor="restaurant-name-ar">{t('settings.restaurantNameAr')}</Label>
+          <Input
+            id="restaurant-name-ar"
+            lang="ar"
+            dir="rtl"
+            value={nameAr}
+            onChange={(e) => setNameAr(e.target.value)}
+            className="h-11"
+            maxLength={60}
+            placeholder="ليلو كافيه ومطعم"
+          />
+          <p className="text-xs text-muted-foreground">{t('settings.restaurantNameArHint')}</p>
+        </div>
         <div className="flex items-center justify-end gap-2">
           <Button
             className="h-11"
             disabled={saveMutation.isPending || !dirty}
+            onClick={() => saveMutation.mutate()}
+          >
+            {saveMutation.isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            {t('common.save')}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Security card (item-deletion PIN) ───────────────────────────────
+
+/** Digit-only filter for the PIN input (paste-safe). */
+const DIGITS_ONLY = /\D/g
+
+function SecurityCard() {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  // The PIN is write-only (GET /api/settings never returns it), so the input
+  // starts EMPTY: saving requires typing all 6 digits; leaving it blank keeps
+  // the current PIN (no request is sent).
+  const [pin, setPin] = useState('')
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateAppSettings(queryClient, { deleteItemPin: pin } as Partial<AppSettings>),
+    onSuccess: () => {
+      toast.success(t('settings.deletePinSaved'))
+      setPin('')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const pinInvalid = pin !== '' && !/^\d{6}$/.test(pin)
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldAlert className="size-5 text-primary" aria-hidden />
+          {t('settings.security')}
+        </CardTitle>
+        <CardDescription>{t('settings.deletePinHint')}</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="delete-item-pin">{t('settings.deletePin')}</Label>
+          <Input
+            id="delete-item-pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(DIGITS_ONLY, '').slice(0, 6))}
+            className="h-11"
+            maxLength={6}
+            placeholder="••••••"
+            aria-invalid={pinInvalid || undefined}
+          />
+          {pinInvalid ? (
+            <p className="text-destructive text-xs" role="alert">
+              {t('settings.deletePinInvalid')}
+            </p>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              {t('auth.pinStatus', { n: pin.length, total: 6 })}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            className="h-11"
+            disabled={saveMutation.isPending || pin === '' || pinInvalid}
             onClick={() => saveMutation.mutate()}
           >
             {saveMutation.isPending ? (

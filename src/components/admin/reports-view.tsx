@@ -8,6 +8,8 @@ import {
   BarChart3,
   Boxes,
   CalendarRange,
+  Hourglass,
+  Info,
   Receipt,
   TrendingUp,
   Users,
@@ -275,9 +277,9 @@ export default function ReportsView() {
       </Card>
 
       {/* KPI row */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {salesQuery.isLoading ? (
-          Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)
+          Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)
         ) : (
           <>
             <Card className="gap-2 p-4">
@@ -315,6 +317,23 @@ export default function ReportsView() {
               </p>
               <p className="text-xs text-muted-foreground">
                 {t('admin.guestsSub', { count: report?.totalGuests ?? 0 })}
+              </p>
+            </Card>
+            {/* Deferred (pay-later) checks outstanding — not revenue until settled */}
+            <Card className="gap-2 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-muted-foreground">{t('reports.deferredOutstanding')}</p>
+                <Hourglass className="size-5 text-violet-600" aria-hidden />
+              </div>
+              <p className="text-2xl font-bold">
+                {formatCurrency(report?.deferredOutstanding ?? 0)}
+              </p>
+              <p
+                className="flex items-center gap-1 text-xs text-muted-foreground"
+                title={t('reports.deferredHint')}
+              >
+                <Info className="size-3.5 shrink-0" aria-hidden />
+                {t('reports.deferredCount', { n: report?.deferredCount ?? 0 })}
               </p>
             </Card>
           </>
