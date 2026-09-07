@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users (admin / waiter / kitchen) ───────────────────────────────
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  name         String
+  role         String    @default("waiter") // 'admin' | 'waiter' | 'kitchen'
+  pin          String? // optional quick-login PIN
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  orders       Order[]
+
+  @@map("users")
+}
+
+// ─── Categories ─────────────────────────────────────────────────────
+model Category {
+  id           Int       @id @default(autoincrement())
+  name         String
+  displayOrder Int       @default(0) @map("display_order")
+  active       Boolean   @default(true)
+  products     Product[]
+
+  @@map("categories")
+}
+
+// ─── Products (dishes + ingredients) ────────────────────────────────
+model Product {
+  id                Int      @id @default(autoincrement())
+  name              String
+  categoryId        Int?     @map("category_id")
+  category          Category? @relation(fields: [categoryId], references: [id])
+  price             Float    @default(0)
+  cost              Float    @default(0)
+  isStockable       Boolean  @default(false) @map("is_stockable")
+  isSellable        Boolean  @default(true) @map("is_sellable")
+  sku               String?
+  imageUrl          String?  @map("image_url")
+  active            Boolean  @default(true)
+  lowStockThreshold Float    @default(0) @map("low_stock_threshold")
+  stock             Float    @default(0) // materialized current stock for stockable products
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  orderItems               OrderItem[]
+  recipeFor                RecipeComponent[] @relation("DishRecipe")
+  recipeIngredients        RecipeComponent[] @relation("IngredientRecipe")
+  inventoryTransactions    InventoryTransaction[]
+
+  @@index([categoryId])
+  @@index([isSellable, active])
+  @@index([isStockable])
+  @@map("products")
+}
+
+// ─── Floor plans ────────────────────────────────────────────────────
+model FloorPlan {
+  id              Int      @id @default(autoincrement())
+  name            String
+  backgroundImage String?  @map("background_image")
+  active          Boolean  @default(true)
+  tables          RestaurantTable[]
+
+  @@map("floor_plans")
+}
+
+// ─── Tables ─────────────────────────────────────────────────────────
+model RestaurantTable {
+  id         Int        @id @default(autoincrement())
+  floorPlanId Int?      @map("floor_plan_id")
+  floorPlan  FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  name       String
+  capacity   Int        @default(2)
+  positionX  Float      @default(50) @map("position_x") // percentage 0-100
+  positionY  Float      @default(50) @map("position_y") // percentage 0-100
+  status     String     @default("free") // 'free' | 'occupied' | 'reserved'
+  active     Boolean    @default(true)
+  orders     Order[]
+
+  @@index([floorPlanId])
+  @@map("tables")
+}
+
+// ─── Orders ─────────────────────────────────────────────────────────
+model Order {
+  id             Int                @id @default(autoincrement())
+  tableId        Int?               @map("table_id")
+  table          RestaurantTable?   @relation(fields: [tableId], references: [id])
+  userId         Int?               @map("user_id")
+  user           User?              @relation(fields: [userId], references: [id])
+  status         String             @default("open") // 'open' | 'paid' | 'cancelled'
+  subtotalAmount Float              @default(0) @map("subtotal_amount")
+  totalAmount    Float              @default(0) @map("total_amount")
+  discountAmount Float              @default(0) @map("discount_amount")
+  taxAmount      Float              @default(0) @map("tax_amount")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  closedAt       DateTime?          @map("closed_at")
+  items          OrderItem[]
+  payments       Payment[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@index([status])
+  @@index([tableId])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+// ─── Order items ────────────────────────────────────────────────────
+model OrderItem {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId Int?     @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+  quantity  Float    @default(1)
+  unitPrice Float    @default(0) @map("unit_price")
+  notes     String?
+  course    String   @default("main") // 'starter' | 'main' | 'dessert' | 'drink'
+  status    String   @default("new") // 'new' | 'preparing' | 'ready' | 'served'
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([status])
+  @@map("order_items")
+}
+
+// ─── Payments (split payment support) ───────────────────────────────
+model Payment {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method    String // 'cash' | 'card' | 'other'
+  amount    Float
+  reference String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+// ─── Recipes (bill of materials) ────────────────────────────────────
+model RecipeComponent {
+  id           Int     @id @default(autoincrement())
+  productId    Int     @map("product_id") // finished dish
+  product      Product @relation("DishRecipe", fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId Int     @map("ingredient_id")
+  ingredient   Product @relation("IngredientRecipe", fields: [ingredientId], references: [id])
+  quantity     Float // ingredient qty per 1 unit of dish
+
+  @@unique([productId, ingredientId])
+  @@map("recipe_components")
+}
+
+// ─── Inventory transactions (audit log) ─────────────────────────────
+model InventoryTransaction {
+  id             Int      @id @default(autoincrement())
+  productId      Int      @map("product_id")
+  product        Product  @relation(fields: [productId], references: [id])
+  quantityChange Float    @map("quantity_change") // + purchase / - deduction
+  reason         String? // 'sale' | 'purchase' | 'adjustment' | 'waste'
+  orderId        Int?     @map("order_id")
+  order          Order?   @relation(fields: [orderId], references: [id])
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([orderId])
+  @@map("inventory_transactions")
+}

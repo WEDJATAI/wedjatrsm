@@ -1,0 +1,109 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
+import { db } from '@/lib/db'
+import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+
+async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
+  try {
+    const parsed: unknown = await req.json()
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // fall through — invalid/empty JSON is treated as an empty body
+  }
+  return {}
+}
+
+function parseIdParam(id: string): number {
+  const n = Number(id)
+  if (!Number.isInteger(n)) throw new ApiError('Invalid category id', 400)
+  return n
+}
+
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    await requireAuth(req, ['admin'])
+    const { id } = await params
+    const categoryId = parseIdParam(id)
+
+    const existing = await db.category.findUnique({
+      where: { id: categoryId },
+      select: { id: true },
+    })
+    if (!existing) throw new ApiError('Category not found', 404)
+
+    const body = await readBody(req)
+    const data: Prisma.CategoryUpdateInput = {}
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string' || !body.name.trim()) {
+        throw new ApiError('Name cannot be empty', 400)
+      }
+      data.name = body.name.trim()
+    }
+
+    if (body.displayOrder !== undefined) {
+      const n = Number(body.displayOrder)
+      if (!Number.isInteger(n) || n < 0) {
+        throw new ApiError('Display order must be an integer ≥ 0', 400)
+      }
+      data.displayOrder = n
+    }
+
+    if (body.active !== undefined) {
+      if (typeof body.active !== 'boolean') {
+        throw new ApiError('Active must be true or false', 400)
+      }
+      data.active = body.active
+    }
+
+    const updated = await db.category.update({
+      where: { id: categoryId },
+      data,
+      include: {
+        _count: { select: { products: { where: { active: true } } } },
+      },
+    })
+    return NextResponse.json({
+      category: {
+        id: updated.id,
+        name: updated.name,
+        displayOrder: updated.displayOrder,
+        active: updated.active,
+        productCount: updated._count.products,
+      },
+    })
+  } catch (err) {
+    return errorResponse(err)
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    await requireAuth(req, ['admin'])
+    const { id } = await params
+    const categoryId = parseIdParam(id)
+
+    const existing = await db.category.findUnique({
+      where: { id: categoryId },
+      select: { id: true },
+    })
+    if (!existing) throw new ApiError('Category not found', 404)
+
+    // Soft delete — keep products/history intact.
+    await db.category.update({
+      where: { id: categoryId },
+      data: { active: false },
+    })
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    return errorResponse(err)
+  }
+}
