@@ -14,12 +14,12 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { fetcher } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
 import type {
   InventoryItem,
   InventoryTransaction,
   InventoryValueReport,
 } from '@/lib/types'
-import { INVENTORY_REASON_LABELS } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,6 +47,7 @@ import {
 } from './inventory-adjust-dialog'
 
 export default function InventoryView() {
+  const { t } = useI18n()
   const [search, setSearch] = useState('')
   const [adjustTarget, setAdjustTarget] = useState<InventoryAdjustTarget | null>(null)
 
@@ -96,14 +97,12 @@ export default function InventoryView() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Inventory</h1>
-          <p className="text-sm text-muted-foreground">
-            Stock levels, movements and valuation
-          </p>
+          <h1 className="text-2xl font-bold">{t('nav.inventory')}</h1>
+          <p className="text-sm text-muted-foreground">{t('admin.inventorySubtitle')}</p>
         </div>
         <Button variant="outline" onClick={refreshAll} disabled={refreshing}>
           <RefreshCw className={cn(refreshing && 'animate-spin')} />
-          Refresh
+          {t('common.refresh')}
         </Button>
       </div>
 
@@ -117,13 +116,13 @@ export default function InventoryView() {
           </>
         ) : valueQuery.isError ? (
           <div className="sm:col-span-3 rounded-xl border border-rose-200 bg-rose-50/60 p-4 text-sm text-rose-700">
-            {(valueQuery.error as Error | null)?.message ?? 'Failed to load inventory value'}
+            {(valueQuery.error as Error | null)?.message ?? t('admin.loadInventoryValueFailed')}
           </div>
         ) : (
           <>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Total inventory value</p>
+                <p className="text-sm text-muted-foreground">{t('admin.totalInventoryValue')}</p>
                 <Boxes className="size-5 text-emerald-600" />
               </div>
               <p className="text-2xl font-bold">
@@ -132,7 +131,7 @@ export default function InventoryView() {
             </Card>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Tracked items</p>
+                <p className="text-sm text-muted-foreground">{t('admin.trackedItems')}</p>
                 <Package className="size-5 text-muted-foreground" />
               </div>
               <p className="text-2xl font-bold">
@@ -141,7 +140,7 @@ export default function InventoryView() {
             </Card>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Low stock alerts</p>
+                <p className="text-sm text-muted-foreground">{t('admin.lowStockAlerts')}</p>
                 <AlertTriangle
                   className={cn(
                     'size-5',
@@ -168,12 +167,9 @@ export default function InventoryView() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertTriangle className="size-4 text-amber-600" />
-              Low stock ({lowItems.length})
+              {t('admin.lowStockBanner', { count: lowItems.length })}
             </CardTitle>
-            <CardDescription>
-              Items at or below their reorder threshold — restock to keep the menu
-              available.
-            </CardDescription>
+            <CardDescription>{t('admin.lowStockDesc')}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             {lowItems.map((item) => (
@@ -184,8 +180,10 @@ export default function InventoryView() {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{item.name}</p>
                   <p className="text-sm text-muted-foreground">
-                    stock {formatQty(item.stock)} · threshold{' '}
-                    {formatQty(item.lowStockThreshold)}
+                    {t('admin.stockThreshold', {
+                      stock: formatQty(item.stock),
+                      threshold: formatQty(item.lowStockThreshold),
+                    })}
                   </p>
                 </div>
                 <Button
@@ -193,7 +191,7 @@ export default function InventoryView() {
                   onClick={() => setAdjustTarget({ item, preset: 10 })}
                 >
                   <Plus />
-                  Restock
+                  {t('admin.restock')}
                 </Button>
               </div>
             ))}
@@ -204,19 +202,19 @@ export default function InventoryView() {
       {/* Stock table */}
       <Card>
         <CardHeader>
-          <CardTitle>Stock</CardTitle>
+          <CardTitle>{t('admin.colStock')}</CardTitle>
           <CardDescription>
-            {filteredItems.length} item{filteredItems.length === 1 ? '' : 's'}
-            {search.trim() ? ` matching “${search.trim()}”` : ''}
+            {t('admin.itemCount', { count: filteredItems.length })}
+            {search.trim() ? ` ${t('admin.matching', { q: search.trim() })}` : ''}
           </CardDescription>
           <CardAction>
             <div className="relative w-44 sm:w-64">
-              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name or SKU…"
-                className="pl-8"
+                placeholder={t('admin.searchProduct')}
+                className="ps-8"
               />
             </div>
           </CardAction>
@@ -232,30 +230,26 @@ export default function InventoryView() {
             <EmptyState
               icon={AlertTriangle}
               message={
-                (inventoryQuery.error as Error | null)?.message ??
-                'Failed to load inventory'
+                (inventoryQuery.error as Error | null)?.message ?? t('admin.loadInventoryFailed')
               }
             />
           ) : items.length === 0 ? (
-            <EmptyState
-              icon={Package}
-              message="No stock items yet — create stockable products first."
-            />
+            <EmptyState icon={Package} message={t('admin.noStockItems')} />
           ) : filteredItems.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No items match “{search.trim()}”.
+              {t('admin.noItemsMatch', { q: search.trim() })}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Product</TableHead>
-                  <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Unit cost</TableHead>
-                  <TableHead className="text-right">Value</TableHead>
-                  <TableHead className="text-right">Threshold</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t('admin.product')}</TableHead>
+                  <TableHead className="text-end">{t('admin.colStock')}</TableHead>
+                  <TableHead className="text-end">{t('admin.unitCost')}</TableHead>
+                  <TableHead className="text-end">{t('admin.value')}</TableHead>
+                  <TableHead className="text-end">{t('admin.threshold')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
+                  <TableHead className="text-end">{t('common.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -267,7 +261,7 @@ export default function InventoryView() {
                         <p className="text-xs text-muted-foreground">{item.sku}</p>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-end">
                       <span
                         className={cn(
                           'font-mono',
@@ -281,34 +275,34 @@ export default function InventoryView() {
                         {formatQty(item.stock)}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
+                    <TableCell className="text-end text-muted-foreground">
                       {formatCurrency(item.cost)}
                     </TableCell>
-                    <TableCell className="text-right font-medium">
+                    <TableCell className="text-end font-medium">
                       {formatCurrency(item.value)}
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
+                    <TableCell className="text-end text-muted-foreground">
                       {formatQty(item.lowStockThreshold)}
                     </TableCell>
                     <TableCell>
                       {item.isLow ? (
                         <Badge className="border-transparent bg-rose-100 text-rose-700">
-                          Low
+                          {t('admin.low')}
                         </Badge>
                       ) : (
                         <Badge className="border-transparent bg-emerald-100 text-emerald-700">
-                          OK
+                          {t('admin.ok')}
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-end">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setAdjustTarget({ item })}
                       >
                         <SlidersHorizontal />
-                        Adjust
+                        {t('admin.adjust')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -322,8 +316,8 @@ export default function InventoryView() {
       {/* Recent movements */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent movements</CardTitle>
-          <CardDescription>Last 100 inventory transactions</CardDescription>
+          <CardTitle>{t('admin.recentMovements')}</CardTitle>
+          <CardDescription>{t('admin.last100')}</CardDescription>
         </CardHeader>
         <CardContent>
           {transactionsQuery.isLoading ? (
@@ -336,12 +330,11 @@ export default function InventoryView() {
             <EmptyState
               icon={AlertTriangle}
               message={
-                (transactionsQuery.error as Error | null)?.message ??
-                'Failed to load movements'
+                (transactionsQuery.error as Error | null)?.message ?? t('admin.loadMovementsFailed')
               }
             />
           ) : transactions.length === 0 ? (
-            <EmptyState icon={Package} message="No stock movements yet." />
+            <EmptyState icon={Package} message={t('admin.noMovements')} />
           ) : (
             <div className="max-h-96 divide-y overflow-y-auto rms-scroll">
               {transactions.map((tx) => {
@@ -353,7 +346,7 @@ export default function InventoryView() {
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">
-                        {tx.product?.name ?? `Product #${tx.productId}`}
+                        {tx.product?.name ?? t('admin.productN', { id: tx.productId })}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {formatDateTime(tx.createdAt)}
@@ -365,9 +358,9 @@ export default function InventoryView() {
                         <Badge
                           variant="outline"
                           className="font-mono"
-                          title="Deducted from an order"
+                          title={t('admin.deductedFromOrder')}
                         >
-                          #order {tx.orderId}
+                          {t('admin.orderBadge', { id: tx.orderId })}
                         </Badge>
                       ) : null}
                       <span
@@ -397,7 +390,13 @@ export default function InventoryView() {
 }
 
 function ReasonBadge({ reason }: { reason: string | null }) {
-  const label = reason ? (INVENTORY_REASON_LABELS[reason] ?? reason) : 'Unknown'
+  const { t } = useI18n()
+  // server stores notes inline, e.g. "purchase (supplier invoice #4)"
+  const base = reason?.split(' (')[0] ?? ''
+  const noteMatch = reason?.match(/\((.+)\)$/)
+  const label = base
+    ? `${t(`reason.${base}`)}${noteMatch ? ` (${noteMatch[1]})` : ''}`
+    : t('admin.reasonUnknown')
   const className =
     reason === 'purchase'
       ? 'border-transparent bg-emerald-100 text-emerald-800'

@@ -6,9 +6,10 @@ import { toast } from 'sonner'
 import { Eye, EyeOff, MoreHorizontal, Pencil, Plus, TriangleAlert, UsersRound } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
-import { ROLE_LABELS, ROLES } from '@/lib/constants'
+import { ROLES } from '@/lib/constants'
 import { formatDate } from '@/lib/format'
-import type { SessionUser } from '@/lib/types'
+import type { CustomRole, SessionUser } from '@/lib/types'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -56,6 +57,8 @@ type AdminUser = {
   email: string
   name: string
   role: string
+  roleId: number | null
+  roleName: string | null
   pin: string | null
   active: boolean
   createdAt: string
@@ -66,35 +69,24 @@ type UserForm = {
   email: string
   password: string
   role: string
+  roleId: string // '' = none (only meaningful when role === 'custom')
   pin: string
 }
 
 type UserFormErrors = Partial<Record<'name' | 'email' | 'password' | 'role' | 'pin', string>>
 
+const BUILTIN_ROLES = ROLES.filter((role) => role !== 'custom')
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const PIN_RE = /^\d{4}$/
+const PIN_RE = /^\d{6}$/ // PINs are exactly 6 digits (round 3 contract)
 
 const EMPTY_USER_FORM: UserForm = {
   name: '',
   email: '',
   password: '',
   role: 'waiter',
+  roleId: '',
   pin: '',
-}
-
-function validateUserForm(form: UserForm, isCreate: boolean): UserFormErrors {
-  const errors: UserFormErrors = {}
-  if (form.name.trim() === '') errors.name = 'Name is required'
-  if (isCreate) {
-    if (form.email.trim() === '') errors.email = 'Email is required'
-    else if (!EMAIL_RE.test(form.email.trim())) errors.email = 'Enter a valid email address'
-    if (form.password.length < 4) errors.password = 'Password must be at least 4 characters'
-  }
-  if (!ROLES.includes(form.role as (typeof ROLES)[number])) errors.role = 'Choose a role'
-  if (form.pin.trim() !== '' && !PIN_RE.test(form.pin.trim())) {
-    errors.pin = 'PIN must be exactly 4 digits'
-  }
-  return errors
 }
 
 function initials(name: string): string {
@@ -105,18 +97,25 @@ function initials(name: string): string {
 }
 
 const ROLE_BADGE_CLASS: Record<string, string> = {
-  admin:
-    'border-amber-600/40 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400',
+  admin: 'border-primary/40 bg-primary/10 text-primary',
   waiter:
     'border-emerald-600/40 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-400',
   kitchen:
     'border-rose-600/40 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-400',
+  custom:
+    'border-amber-600/40 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400',
 }
 
 const ROLE_AVATAR_CLASS: Record<string, string> = {
-  admin: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-400',
+  admin: 'bg-primary/15 text-primary',
   waiter: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400',
   kitchen: 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400',
+  custom: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-400',
+}
+
+/** Encoded Select value: 'custom:<roleId>' for custom roles, else the role name. */
+function roleValue(role: string, roleId: string): string {
+  return role === 'custom' ? `custom:${roleId}` : role
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -127,6 +126,7 @@ function FieldError({ message }: { message?: string }) {
 // ─── View ───────────────────────────────────────────────────────────
 
 export default function UsersView() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -137,6 +137,13 @@ export default function UsersView() {
   const usersQuery = useQuery({
     queryKey: ['users'],
     queryFn: () => fetcher<{ users: AdminUser[] }>('/api/users'),
+  })
+
+  // Custom roles for the role Select (active only; the editing user's own
+  // role is always offered as a fallback even when inactive).
+  const rolesQuery = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => fetcher<{ roles: CustomRole[] }>('/api/roles'),
   })
 
   // Used to guard self-deactivation in the UI (server enforces it too).
@@ -153,28 +160,54 @@ export default function UsersView() {
     [usersQuery.data],
   )
 
+  const customRoles = useMemo(() => {
+    const active = (rolesQuery.data?.roles ?? []).filter((r) => r.active)
+    const ids = new Set(active.map((r) => r.id))
+    // keep the currently-edited user's role selectable even if inactive
+    if (editing?.roleId != null && !ids.has(editing.roleId)) {
+      const stale = (rolesQuery.data?.roles ?? []).find((r) => r.id === editing.roleId)
+      if (stale) return [...active, stale]
+    }
+    return active
+  }, [rolesQuery.data, editing])
+
   const isCreate = editing === null
-  const errors = validateUserForm(form, isCreate)
+
+  function validateForm(): UserFormErrors {
+    const errors: UserFormErrors = {}
+    if (form.name.trim() === '') errors.name = t('admin.nameRequired')
+    if (isCreate) {
+      if (form.email.trim() === '') errors.email = t('admin.emailRequired')
+      else if (!EMAIL_RE.test(form.email.trim())) errors.email = t('admin.emailInvalid')
+      if (form.password.length < 4) errors.password = t('admin.passwordMin')
+    }
+    if (!ROLES.includes(form.role as (typeof ROLES)[number])) errors.role = t('admin.chooseRole')
+    if (form.role === 'custom' && form.roleId === '') errors.role = t('admin.chooseRole')
+    if (form.pin.trim() !== '' && !PIN_RE.test(form.pin.trim())) {
+      errors.pin = t('admin.pinDigits')
+    }
+    return errors
+  }
+
+  const errors = validateForm()
   const hasErrors = Object.values(errors).some(Boolean)
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (editing === null) {
-        const payload: Record<string, unknown> = {
-          name: form.name.trim(),
-          email: form.email.trim(),
-          password: form.password,
-          role: form.role,
-        }
-        if (form.pin.trim() !== '') payload.pin = form.pin.trim()
-        return apiFetch<{ user: SessionUser }>('/api/users', { method: 'POST', body: payload })
-      }
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
         role: form.role,
       }
+      // roleId is ONLY accepted alongside role 'custom' (400 otherwise).
+      if (form.role === 'custom' && form.roleId !== '') {
+        payload.roleId = Number(form.roleId)
+      }
       if (form.pin.trim() !== '') payload.pin = form.pin.trim()
-      if (form.password !== '') payload.password = form.password
+      if (editing === null) {
+        return apiFetch<{ user: SessionUser }>('/api/users', { method: 'POST', body: payload })
+      }
       return apiFetch<{ user: SessionUser }>(`/api/users/${editing.id}`, {
         method: 'PUT',
         body: payload,
@@ -182,7 +215,7 @@ export default function UsersView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['users'] })
-      toast.success(editing === null ? 'User created' : 'User updated')
+      toast.success(editing === null ? t('admin.userCreated') : t('admin.userUpdated'))
       setFormOpen(false)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -202,7 +235,7 @@ export default function UsersView() {
       return { prev }
     },
     onSuccess: (_data, vars) => {
-      toast.success(vars.active ? 'User activated' : 'User deactivated')
+      toast.success(vars.active ? t('admin.userActivated') : t('admin.userDeactivated'))
     },
     onError: (err: Error, _vars, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(['users'], ctx.prev)
@@ -226,6 +259,7 @@ export default function UsersView() {
       email: user.email,
       password: '',
       role: user.role,
+      roleId: user.roleId != null ? String(user.roleId) : '',
       pin: user.pin ?? '',
     })
     setFormOpen(true)
@@ -235,16 +269,18 @@ export default function UsersView() {
     setShowPinId((prev) => (prev === id ? null : id))
   }
 
+  const roleHeaders = { User: t('admin.user'), Role: t('common.role') }
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold">Users</h1>
-          <p className="text-muted-foreground text-sm">Staff accounts and roles</p>
+          <h1 className="text-2xl font-bold">{t('nav.users')}</h1>
+          <p className="text-muted-foreground text-sm">{t('admin.usersSubtitle')}</p>
         </div>
         <Button className="h-11" onClick={openCreate}>
-          <Plus /> New User
+          <Plus /> {t('admin.newUser')}
         </Button>
       </div>
 
@@ -255,13 +291,13 @@ export default function UsersView() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="hidden md:table-cell">PIN</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">Created</TableHead>
-                  <TableHead className="w-12 text-right">
-                    <span className="sr-only">Actions</span>
+                  <TableHead>{roleHeaders.User}</TableHead>
+                  <TableHead>{roleHeaders.Role}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t('admin.pinLabel')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t('admin.created')}</TableHead>
+                  <TableHead className="w-12 text-end">
+                    <span className="sr-only">{t('common.actions')}</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -280,26 +316,24 @@ export default function UsersView() {
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <TriangleAlert className="size-10 text-destructive" aria-hidden />
             <div>
-              <p className="font-medium">Failed to load users</p>
+              <p className="font-medium">{t('admin.loadUsersFailed')}</p>
               <p className="text-muted-foreground text-sm">
-                {usersQuery.error?.message ?? 'Please try again.'}
+                {usersQuery.error?.message ?? t('common.error')}
               </p>
             </div>
             <Button variant="outline" className="h-11" onClick={() => void usersQuery.refetch()}>
-              Retry
+              {t('common.retry')}
             </Button>
           </div>
         ) : users.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <UsersRound className="size-10 text-muted-foreground/50" aria-hidden />
             <div>
-              <p className="font-medium">No users yet</p>
-              <p className="text-muted-foreground text-sm">
-                Create staff accounts so your team can log in.
-              </p>
+              <p className="font-medium">{t('admin.noUsers')}</p>
+              <p className="text-muted-foreground text-sm">{t('admin.noUsersHint')}</p>
             </div>
             <Button className="h-11" onClick={openCreate}>
-              <Plus /> New User
+              <Plus /> {t('admin.newUser')}
             </Button>
           </div>
         ) : (
@@ -307,26 +341,31 @@ export default function UsersView() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="hidden md:table-cell">PIN</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">Created</TableHead>
-                  <TableHead className="w-12 text-right">
-                    <span className="sr-only">Actions</span>
+                  <TableHead>{roleHeaders.User}</TableHead>
+                  <TableHead>{roleHeaders.Role}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t('admin.pinLabel')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t('admin.created')}</TableHead>
+                  <TableHead className="w-12 text-end">
+                    <span className="sr-only">{t('common.actions')}</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {users.map((u) => {
                   const isSelf = currentUserId === u.id
+                  const roleLabel =
+                    u.role === 'custom' ? (u.roleName ?? t('role.custom')) : t(`role.${u.role}`)
                   return (
                     <TableRow key={u.id} className="h-16">
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="size-9">
                             <AvatarFallback
-                              className={cn('text-xs font-semibold', ROLE_AVATAR_CLASS[u.role])}
+                              className={cn(
+                                'text-xs font-semibold',
+                                ROLE_AVATAR_CLASS[u.role] ?? ROLE_AVATAR_CLASS.custom,
+                              )}
                             >
                               {initials(u.name)}
                             </AvatarFallback>
@@ -334,7 +373,9 @@ export default function UsersView() {
                           <div className="min-w-0">
                             <div className="font-medium">
                               {u.name}
-                              {isSelf ? <span className="text-muted-foreground text-xs"> (you)</span> : null}
+                              {isSelf ? (
+                                <span className="text-muted-foreground text-xs"> {t('admin.youTag')}</span>
+                              ) : null}
                             </div>
                             <div className="text-muted-foreground text-xs">{u.email}</div>
                           </div>
@@ -345,21 +386,25 @@ export default function UsersView() {
                           variant="outline"
                           className={cn(ROLE_BADGE_CLASS[u.role] ?? undefined)}
                         >
-                          {ROLE_LABELS[u.role] ?? u.role}
+                          {roleLabel}
                         </Badge>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
                         {u.pin ? (
                           <div className="flex items-center gap-1">
                             <span className="font-mono text-sm tracking-widest">
-                              {showPinId === u.id ? u.pin : '••••'}
+                              {showPinId === u.id ? u.pin : '••••••'}
                             </span>
                             <Button
                               variant="ghost"
                               size="icon"
                               className="size-11 text-muted-foreground"
                               onClick={() => togglePin(u.id)}
-                              aria-label={showPinId === u.id ? `Hide PIN of ${u.name}` : `Show PIN of ${u.name}`}
+                              aria-label={
+                                showPinId === u.id
+                                  ? t('admin.hidePinAria', { name: u.name })
+                                  : t('admin.showPinAria', { name: u.name })
+                              }
                             >
                               {showPinId === u.id ? <EyeOff /> : <Eye />}
                             </Button>
@@ -376,11 +421,11 @@ export default function UsersView() {
                                 <Switch
                                   checked={u.active}
                                   disabled
-                                  aria-label="You cannot deactivate your own account"
+                                  aria-label={t('admin.selfDeactivateAria')}
                                 />
                               </span>
                             </TooltipTrigger>
-                            <TooltipContent>You can&apos;t deactivate your own account</TooltipContent>
+                            <TooltipContent>{t('admin.selfDeactivateHint')}</TooltipContent>
                           </Tooltip>
                         ) : (
                           <Switch
@@ -389,28 +434,32 @@ export default function UsersView() {
                             onCheckedChange={(checked) =>
                               toggleMutation.mutate({ id: u.id, active: checked })
                             }
-                            aria-label={`${u.active ? 'Deactivate' : 'Activate'} ${u.name}`}
+                            aria-label={
+                              u.active
+                                ? t('admin.deactivate') + ' ' + u.name
+                                : t('admin.activate') + ' ' + u.name
+                            }
                           />
                         )}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground md:table-cell">
                         {formatDate(u.createdAt)}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-end">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
                               variant="ghost"
                               size="icon"
                               className="size-11 text-muted-foreground"
-                              aria-label={`Actions for ${u.name}`}
+                              aria-label={t('admin.actionsFor', { name: u.name })}
                             >
                               <MoreHorizontal />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openEdit(u)}>
-                              <Pencil /> Edit
+                              <Pencil /> {t('common.edit')}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -428,22 +477,24 @@ export default function UsersView() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{isCreate ? 'New User' : 'Edit User'}</DialogTitle>
+            <DialogTitle>{isCreate ? t('admin.newUser') : t('admin.editUser')}</DialogTitle>
             <DialogDescription>
               {isCreate
-                ? 'Create a staff account with a role and optional PIN.'
-                : `Update ${editing?.name ?? 'user'} details.`}
+                ? t('admin.userDialogCreateDesc')
+                : t('admin.userDialogEditDesc', { name: editing?.name ?? '' })}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="user-name">Name *</Label>
+              <Label htmlFor="user-name">
+                {t('common.name')} *
+              </Label>
               <Input
                 id="user-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Ahmed Hassan"
+                placeholder={t('admin.namePlaceholder')}
                 className="h-11"
                 aria-invalid={errors.name ? true : undefined}
               />
@@ -451,7 +502,7 @@ export default function UsersView() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="user-email">Email</Label>
+              <Label htmlFor="user-email">{t('common.email')}</Label>
               <Input
                 id="user-email"
                 type="email"
@@ -464,39 +515,59 @@ export default function UsersView() {
                 aria-invalid={errors.email ? true : undefined}
               />
               {!isCreate && (
-                <p className="text-muted-foreground text-xs">Email cannot be changed.</p>
+                <p className="text-muted-foreground text-xs">{t('admin.emailImmutable')}</p>
               )}
               <FieldError message={errors.email} />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="user-password">{isCreate ? 'Password *' : 'Password'}</Label>
+              <Label htmlFor="user-password">
+                {t('common.password')}
+                {isCreate ? ' *' : ''}
+              </Label>
               <Input
                 id="user-password"
                 type="password"
                 autoComplete="new-password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder={isCreate ? 'Min. 4 characters' : '••••'}
+                placeholder={isCreate ? t('admin.passwordPlaceholder') : '••••'}
                 className="h-11"
                 aria-invalid={errors.password ? true : undefined}
               />
               <p className="text-muted-foreground text-xs">
-                {isCreate ? 'Used with email to log in.' : 'Leave blank to keep the current password.'}
+                {isCreate ? t('admin.passwordCreateHint') : t('admin.passwordEditHint')}
               </p>
               <FieldError message={errors.password} />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="user-role">Role *</Label>
-              <Select value={form.role} onValueChange={(role) => setForm({ ...form, role })}>
+              <Label htmlFor="user-role">
+                {t('common.role')} *
+              </Label>
+              <Select
+                value={roleValue(form.role, form.roleId)}
+                onValueChange={(value) => {
+                  if (value.startsWith('custom:')) {
+                    setForm({ ...form, role: 'custom', roleId: value.slice('custom:'.length) })
+                  } else {
+                    setForm({ ...form, role: value, roleId: '' })
+                  }
+                }}
+              >
                 <SelectTrigger id="user-role" className="h-11 w-full">
-                  <SelectValue placeholder="Choose a role" />
+                  <SelectValue placeholder={t('admin.chooseRole')} />
                 </SelectTrigger>
                 <SelectContent>
-                  {ROLES.map((role) => (
+                  {BUILTIN_ROLES.map((role) => (
                     <SelectItem key={role} value={role}>
-                      {ROLE_LABELS[role]}
+                      {t(`role.${role}`)}
+                    </SelectItem>
+                  ))}
+                  {customRoles.map((r) => (
+                    <SelectItem key={`custom-${r.id}`} value={`custom:${r.id}`}>
+                      {r.name}
+                      {!r.active ? ` ${t('admin.inactiveSuffix')}` : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -505,18 +576,18 @@ export default function UsersView() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="user-pin">PIN</Label>
+              <Label htmlFor="user-pin">{t('admin.pinLabel')}</Label>
               <Input
                 id="user-pin"
                 inputMode="numeric"
-                maxLength={4}
+                maxLength={6}
                 value={form.pin}
-                onChange={(e) => setForm({ ...form, pin: e.target.value })}
-                placeholder="1234"
+                onChange={(e) => setForm({ ...form, pin: e.target.value.replace(/[^\d]/g, '') })}
+                placeholder="123456"
                 className="h-11 font-mono tracking-widest"
                 aria-invalid={errors.pin ? true : undefined}
               />
-              <p className="text-muted-foreground text-xs">4-digit quick login</p>
+              <p className="text-muted-foreground text-xs">{t('admin.pinHint')}</p>
               <FieldError message={errors.pin} />
             </div>
           </div>
@@ -528,14 +599,14 @@ export default function UsersView() {
               onClick={() => setFormOpen(false)}
               disabled={saveMutation.isPending}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               className="h-11"
               disabled={saveMutation.isPending || hasErrors}
               onClick={() => saveMutation.mutate()}
             >
-              {saveMutation.isPending ? 'Saving…' : isCreate ? 'Create User' : 'Save Changes'}
+              {saveMutation.isPending ? t('admin.saving') : isCreate ? t('admin.createUser') : t('admin.saveChanges')}
             </Button>
           </DialogFooter>
         </DialogContent>

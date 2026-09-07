@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { apiFetch, fetcher } from '@/lib/api'
 import { elapsedSince, formatCurrency } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { FloorPlan, Order, RestaurantTable } from '@/lib/types'
 
@@ -39,6 +40,19 @@ type SourcePick = { orderId: number }
 
 type TableInteraction = 'normal' | 'eligible' | 'ineligible'
 
+/** Per-shape tile classes — the floor grid keeps its responsive layout, only the
+ *  tile silhouette changes (square/round/rectangle/oval). */
+const SHAPE_TILE_CLASSES: Record<string, string> = {
+  square: 'min-h-[110px] rounded-xl',
+  round: 'aspect-square rounded-full',
+  rectangle: 'h-24 w-32 rounded-xl',
+  oval: 'h-24 w-32 rounded-full',
+}
+
+function shapeClasses(shape: string): string {
+  return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+}
+
 export default function TableSelect({
   onSelectTable,
   onTakeaway,
@@ -47,6 +61,7 @@ export default function TableSelect({
   onTransferDone,
 }: TableSelectProps) {
   const queryClient = useQueryClient()
+  const { t } = useI18n()
 
   const [floorIdx, setFloorIdx] = useState(0)
   // When pos-view passes transferOrderId (Transfer clicked on the order
@@ -81,7 +96,7 @@ export default function TableSelect({
   const plan = floorPlans[idx] ?? null
 
   const sourceOrder = source ? openOrders.find((o) => o.id === source.orderId) ?? null : null
-  const sourceLabel = source ? sourceOrder?.table?.name ?? 'Takeaway' : null
+  const sourceLabel = source ? sourceOrder?.table?.name ?? t('common.takeaway') : null
 
   // ── Transfer & merge mutations ───────────────────────────────────
   const invalidateAfterMove = async (...orderIds: number[]) => {
@@ -101,7 +116,7 @@ export default function TableSelect({
         body: { tableId: vars.tableId },
       }),
     onSuccess: async (_data, vars) => {
-      toast.success(`Order #${vars.orderId} transferred to ${vars.tableName}`)
+      toast.success(t('pos.transferToast', { order: vars.orderId, table: vars.tableName }))
       await invalidateAfterMove(vars.orderId)
       exitTool()
       onTransferDone?.()
@@ -116,7 +131,7 @@ export default function TableSelect({
         body: { sourceOrderId: vars.sourceId },
       }),
     onSuccess: async (_data, vars) => {
-      toast.success(`Orders merged into ${vars.targetLabel}`)
+      toast.success(t('pos.mergeToast', { table: vars.targetLabel }))
       await invalidateAfterMove(vars.sourceId, vars.targetId)
       exitTool()
     },
@@ -141,16 +156,16 @@ export default function TableSelect({
     setSource(null)
   }
 
-  const tableInteraction = (t: RestaurantTable): TableInteraction => {
+  const tableInteraction = (t2: RestaurantTable): TableInteraction => {
     if (!tool || busy) return busy ? 'ineligible' : 'normal'
     if (tool === 'transfer') {
-      if (source == null) return t.openOrderId != null ? 'eligible' : 'ineligible'
+      if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
       // Destination: free/reserved tables with no open order.
-      return t.openOrderId == null && t.status !== 'occupied' ? 'eligible' : 'ineligible'
+      return t2.openOrderId == null && t2.status !== 'occupied' ? 'eligible' : 'ineligible'
     }
     // Merge: source = any occupied table; target = another open order's table.
-    if (source == null) return t.openOrderId != null ? 'eligible' : 'ineligible'
-    return t.openOrderId != null && t.openOrderId !== source.orderId ? 'eligible' : 'ineligible'
+    if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+    return t2.openOrderId != null && t2.openOrderId !== source.orderId ? 'eligible' : 'ineligible'
   }
 
   const takeawayInteraction = (o: Order): TableInteraction => {
@@ -163,29 +178,29 @@ export default function TableSelect({
     return o.id !== source.orderId ? 'eligible' : 'ineligible'
   }
 
-  const handleTableClick = (t: RestaurantTable) => {
+  const handleTableClick = (t2: RestaurantTable) => {
     if (busy) return
     if (tool === 'transfer') {
       if (source == null) {
-        if (t.openOrderId == null) return
-        setSource({ orderId: t.openOrderId })
+        if (t2.openOrderId == null) return
+        setSource({ orderId: t2.openOrderId })
         return
       }
-      if (t.openOrderId != null || t.status === 'occupied') return
-      transferMutation.mutate({ orderId: source.orderId, tableId: t.id, tableName: t.name })
+      if (t2.openOrderId != null || t2.status === 'occupied') return
+      transferMutation.mutate({ orderId: source.orderId, tableId: t2.id, tableName: t2.name })
       return
     }
     if (tool === 'merge') {
       if (source == null) {
-        if (t.openOrderId == null) return
-        setSource({ orderId: t.openOrderId })
+        if (t2.openOrderId == null) return
+        setSource({ orderId: t2.openOrderId })
         return
       }
-      if (t.openOrderId == null || t.openOrderId === source.orderId) return
-      mergeMutation.mutate({ sourceId: source.orderId, targetId: t.openOrderId, targetLabel: t.name })
+      if (t2.openOrderId == null || t2.openOrderId === source.orderId) return
+      mergeMutation.mutate({ sourceId: source.orderId, targetId: t2.openOrderId, targetLabel: t2.name })
       return
     }
-    onSelectTable(t)
+    onSelectTable(t2)
   }
 
   const handleTakeawayClick = (o: Order) => {
@@ -198,7 +213,11 @@ export default function TableSelect({
       if (source == null) {
         setSource({ orderId: o.id })
       } else if (o.id !== source.orderId) {
-        mergeMutation.mutate({ sourceId: source.orderId, targetId: o.id, targetLabel: 'Takeaway' })
+        mergeMutation.mutate({
+          sourceId: source.orderId,
+          targetId: o.id,
+          targetLabel: t('common.takeaway'),
+        })
       }
       return
     }
@@ -208,15 +227,19 @@ export default function TableSelect({
   // ── Banner text ──────────────────────────────────────────────────
   const bannerText = busy
     ? tool === 'transfer'
-      ? 'Transferring…'
-      : 'Merging…'
+      ? t('pos.transferring')
+      : t('pos.merging')
     : tool === 'transfer'
       ? source
-        ? `Select the destination table for order #${source.orderId}${sourceLabel ? ` (${sourceLabel})` : ''}`
-        : 'Transfer — select the order to move'
+        ? sourceLabel
+          ? t('pos.transferDest', { order: source.orderId, label: sourceLabel })
+          : t('pos.transferDestNoLabel', { order: source.orderId })
+        : t('pos.transferPick')
       : source
-        ? `Now select the table to merge INTO (from ${sourceLabel ?? `order #${source.orderId}`})`
-        : 'Merge — select the source table'
+        ? t('pos.mergeTarget', {
+            source: sourceLabel ?? `#${source.orderId}`,
+          })
+        : t('pos.mergePick')
 
   const tables = plan?.tables ?? []
 
@@ -233,12 +256,12 @@ export default function TableSelect({
               className="h-11 w-11 rounded-xl"
               disabled={idx <= 0}
               onClick={() => setFloorIdx(idx - 1)}
-              aria-label="Previous floor"
+              aria-label={t('pos.prevFloor')}
             >
-              <ChevronLeft className="size-5" />
+              <ChevronLeft className="size-5 rtl:rotate-180" />
             </Button>
             <span className="min-w-[110px] text-center text-lg font-bold">
-              {plan?.name ?? 'Floors'}
+              {plan?.name ?? t('pos.floors')}
             </span>
             <Button
               variant="outline"
@@ -246,9 +269,9 @@ export default function TableSelect({
               className="h-11 w-11 rounded-xl"
               disabled={idx >= floorPlans.length - 1}
               onClick={() => setFloorIdx(idx + 1)}
-              aria-label="Next floor"
+              aria-label={t('pos.nextFloor')}
             >
-              <ChevronRight className="size-5" />
+              <ChevronRight className="size-5 rtl:rotate-180" />
             </Button>
           </div>
 
@@ -261,7 +284,7 @@ export default function TableSelect({
               onClick={startTransferTool}
             >
               <ArrowLeftRight className="text-[#714B67]" />
-              <span className="hidden sm:inline">Transfer</span>
+              <span className="hidden sm:inline">{t('pos.transfer')}</span>
             </Button>
             <Button
               variant="outline"
@@ -270,14 +293,14 @@ export default function TableSelect({
               onClick={startMergeTool}
             >
               <Combine className="text-[#714B67]" />
-              <span className="hidden sm:inline">Merge</span>
+              <span className="hidden sm:inline">{t('pos.merge')}</span>
             </Button>
             <Button
               className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
               disabled={!!tool}
               onClick={onTakeaway}
             >
-              <Plus /> New Takeaway Order
+              <Plus /> {t('pos.newTakeaway')}
             </Button>
           </div>
         </div>
@@ -302,8 +325,8 @@ export default function TableSelect({
               className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
               onClick={exitTool}
               disabled={busy}
-              aria-label="Cancel transfer/merge"
-              title="Cancel"
+              aria-label={t('pos.cancelTool')}
+              title={t('common.cancel')}
             >
               <X className="size-5" />
             </Button>
@@ -321,21 +344,21 @@ export default function TableSelect({
           ) : floorPlans.length === 0 ? (
             <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
               <MapPin className="size-8 opacity-40" />
-              <p className="text-sm">No tables yet — add some in Admin → Floor Plans.</p>
+              <p className="text-sm">{t('pos.noTables')}</p>
             </div>
           ) : tables.length === 0 ? (
             <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
               <MapPin className="size-8 opacity-40" />
-              <p className="text-sm">No tables on this floor yet — add some in Admin → Floor Plans.</p>
+              <p className="text-sm">{t('pos.noTablesFloor')}</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-              {tables.map((t) => (
+              {tables.map((t2) => (
                 <TableTile
-                  key={t.id}
-                  table={t}
-                  interaction={tableInteraction(t)}
-                  onClick={() => handleTableClick(t)}
+                  key={t2.id}
+                  table={t2}
+                  interaction={tableInteraction(t2)}
+                  onClick={() => handleTableClick(t2)}
                 />
               ))}
             </div>
@@ -345,7 +368,7 @@ export default function TableSelect({
           {takeawayOrders.length > 0 && (
             <section className="mt-6">
               <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-stone-500">
-                <ShoppingBag className="size-4" /> Open takeaway orders
+                <ShoppingBag className="size-4" /> {t('pos.openTakeaways')}
               </h3>
               <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
                 {takeawayOrders.map((o) => {
@@ -389,8 +412,11 @@ function TableTile({
   interaction: TableInteraction
   onClick: () => void
 }) {
+  const { t } = useI18n()
   const occupied = table.status === 'occupied' || table.openOrderId != null
   const reserved = table.status === 'reserved' && table.openOrderId == null
+  // Round/oval silhouettes get a ring instead of the side bar.
+  const isRound = table.shape === 'round' || table.shape === 'oval'
 
   return (
     <button
@@ -398,17 +424,19 @@ function TableTile({
       disabled={interaction === 'ineligible'}
       onClick={onClick}
       className={cn(
-        'relative flex min-h-[110px] min-w-0 flex-col justify-between overflow-hidden rounded-xl border border-[#E2E2E0] bg-white p-3 text-left shadow-sm transition active:scale-[0.98]',
+        'relative flex min-w-0 flex-col justify-between overflow-hidden border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition active:scale-[0.98]',
+        shapeClasses(table.shape),
         interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
         interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
         interaction === 'normal' && reserved && 'ring-1 ring-amber-500',
+        interaction === 'normal' && occupied && isRound && 'ring-2 ring-[#714B67]',
       )}
     >
-      {occupied && (
-        <span className="absolute inset-y-0 left-0 w-1.5 rounded-l-xl bg-[#714B67]" aria-hidden />
+      {occupied && !isRound && (
+        <span className="absolute inset-y-0 start-0 w-1.5 rounded-s-xl bg-[#714B67]" aria-hidden />
       )}
 
-      <div className="min-w-0 pl-1.5">
+      <div className="min-w-0 ps-1.5">
         <p
           className={cn(
             'truncate text-base font-bold leading-tight',
@@ -419,25 +447,27 @@ function TableTile({
         </p>
         <p className="mt-0.5 flex items-center gap-1 text-xs text-stone-500">
           <Users className="size-3.5" aria-hidden />
-          {table.capacity} seats
+          {occupied && table.openOrderGuests != null
+            ? `${table.openOrderGuests} ${t('common.people')}`
+            : `${table.capacity} ${t('common.seats')}`}
         </p>
       </div>
 
       {occupied && (
-        <div className="pl-1.5">
+        <div className="ps-1.5">
           <p className="text-lg font-bold leading-tight tabular-nums text-[#714B67]">
             {formatCurrency(table.openOrderTotal ?? 0)}
           </p>
           <p className="text-[11px] text-stone-500">
-            {table.openOrderSince ? elapsedSince(table.openOrderSince) : 'open'}
+            {table.openOrderSince ? elapsedSince(table.openOrderSince) : t('pos.open')}
           </p>
         </div>
       )}
 
       {reserved && (
-        <span className="ml-1.5 inline-flex w-fit items-center gap-1.5 rounded-full border border-amber-500/60 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-600">
+        <span className="ms-1.5 inline-flex w-fit items-center gap-1.5 rounded-full border border-amber-500/60 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-600">
           <Clock className="size-3" aria-hidden />
-          Reserved
+          {t('status.table.reserved')}
         </span>
       )}
     </button>

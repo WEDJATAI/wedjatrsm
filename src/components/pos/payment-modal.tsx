@@ -27,8 +27,9 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
-import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from '@/lib/constants'
+import { PAYMENT_METHODS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import CheckModal, { type CheckSplitRow } from './check-modal'
@@ -59,13 +60,14 @@ type SubmitRow = { method: string; amount: number; reference?: string }
 
 type SplitTab = 'single' | 'equal' | 'items' | 'custom'
 
-const METHOD_META: Record<string, { label: string; icon: LucideIcon }> = {
-  cash: { label: 'Cash', icon: Banknote },
-  card: { label: 'Card', icon: CreditCard },
-  other: { label: 'Other', icon: MoreHorizontal },
+const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
+  cash: { labelKey: 'status.payment.cash', icon: Banknote },
+  card: { labelKey: 'status.payment.card', icon: CreditCard },
+  other: { labelKey: 'status.payment.other', icon: MoreHorizontal },
 }
 
 export default function PaymentModal({ order, open, onOpenChange, onSuccess }: PaymentModalProps) {
+  const { t } = useI18n()
   const [tab, setTab] = useState<SplitTab>('single')
   const [submitting, setSubmitting] = useState(false)
   const [checkOpen, setCheckOpen] = useState(false)
@@ -115,10 +117,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
     () =>
       order.items.map((it) => ({
         id: it.id,
-        label: `${formatQty(it.quantity)} × ${it.product?.name ?? 'Item'}`,
+        label: `${formatQty(it.quantity)} × ${it.product?.name ?? t('pos.item')}`,
         total: round2(it.quantity * it.unitPrice),
       })),
-    [order.items],
+    [order.items, t],
   )
 
   const itAmounts = useMemo(() => {
@@ -174,10 +176,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
 
   const activeRowLabel =
     tab === 'single'
-      ? 'Payment'
+      ? t('pos.payment')
       : tab === 'equal' || tab === 'items'
-        ? `Payer ${safeActiveIdx + 1}`
-        : `Payment ${safeActiveIdx + 1}`
+        ? t('pos.payer', { n: safeActiveIdx + 1 })
+        : t('pos.paymentN', { n: safeActiveIdx + 1 })
 
   const currentMethodAt = (index: number): string => {
     if (tab === 'single') return singleRow.method
@@ -207,28 +209,28 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
   const checkRows: CheckSplitRow[] = useMemo(() => {
     if (tab === 'single') {
       const amount = parseAmount(singleRow.amount) || remaining
-      return [{ label: 'Full bill', amount, method: singleRow.method }]
+      return [{ label: t('pos.fullBill'), amount, method: singleRow.method }]
     }
     if (tab === 'equal') {
       return eqAmounts.map((amount, i) => ({
-        label: `Part ${i + 1} of ${eqPayers}`,
+        label: t('pos.partOf', { i: i + 1, n: eqPayers }),
         amount,
         method: eqMethods[i] ?? 'cash',
       }))
     }
     if (tab === 'items') {
       return itAmounts.map((amount, i) => ({
-        label: `Payer ${i + 1}`,
+        label: t('pos.payer', { n: i + 1 }),
         amount,
         method: itMethods[i] ?? 'cash',
       }))
     }
     return customRows.map((r, i) => ({
-      label: `Payment ${i + 1}`,
+      label: t('pos.paymentN', { n: i + 1 }),
       amount: parseAmount(r.amount),
       method: r.method,
     }))
-  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining])
+  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, t])
 
   // ── Handlers ──────────────────────────────────────────────────────
   const clampPayers = (raw: number, min: number, max: number) => {
@@ -262,16 +264,16 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
         body: { payments },
       })
       if (result.closed) {
-        toast.success('Order paid & closed ✓')
+        toast.success(t('pos.paidClosedToast'))
         onSuccess(result.order, true)
         onOpenChange(false)
       } else {
-        toast.success(`Payment recorded — remaining ${formatCurrency(result.remaining)}`)
+        toast.success(t('pos.paymentRecordedToast', { amount: formatCurrency(result.remaining) }))
         onSuccess(result.order, false)
         onOpenChange(false)
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Payment failed')
+      toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
     } finally {
       setSubmitting(false)
     }
@@ -285,28 +287,26 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
         <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              Payment · {order.table?.name ?? 'Takeaway'} · Order #{order.id}
+              {t('pos.payment')} · {order.table?.name ?? t('common.takeaway')} ·{' '}
+              {t('common.order')} #{order.id}
             </DialogTitle>
-            <DialogDescription>
-              Split the bill or charge in one go. Print a check first if the customer wants to see
-              it — printing never records a payment.
-            </DialogDescription>
+            <DialogDescription>{t('pos.paymentDesc')}</DialogDescription>
           </DialogHeader>
 
           {/* Summary */}
           <div className="grid grid-cols-3 gap-2 rounded-xl border border-[#E2E2E0] bg-white p-3 text-center shadow-sm">
             <div>
-              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="text-xs text-muted-foreground">{t('money.total')}</p>
               <p className="text-sm font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Paid</p>
+              <p className="text-xs text-muted-foreground">{t('money.paid')}</p>
               <p className="text-sm font-semibold tabular-nums text-emerald-600">
                 {formatCurrency(order.paidAmount)}
               </p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Remaining</p>
+              <p className="text-xs text-muted-foreground">{t('money.remaining')}</p>
               <p className="text-primary text-2xl font-bold tabular-nums">
                 {formatCurrency(remaining)}
               </p>
@@ -316,11 +316,11 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
           {/* Method tiles — apply to the active row below */}
           <div className="space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Method — applies to <span className="text-[#714B67]">{activeRowLabel}</span>
+              {t('pos.methodAppliesTo')} <span className="text-[#714B67]">{activeRowLabel}</span>
             </p>
             <div className="grid grid-cols-3 gap-2">
               {PAYMENT_METHODS.map((m) => {
-                const meta = METHOD_META[m] ?? { label: PAYMENT_METHOD_LABELS[m] ?? m, icon: MoreHorizontal }
+                const meta = METHOD_META[m] ?? { labelKey: `status.payment.${m}`, icon: MoreHorizontal }
                 const Icon = meta.icon
                 const active = currentMethodAt(safeActiveIdx) === m
                 return (
@@ -337,7 +337,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                     )}
                   >
                     <Icon className="size-6" aria-hidden />
-                    {meta.label}
+                    {t(meta.labelKey)}
                   </button>
                 )
               })}
@@ -346,16 +346,24 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
 
           <Tabs value={tab} onValueChange={handleTabChange}>
             <TabsList className="grid h-10 w-full grid-cols-4">
-              <TabsTrigger value="single" className="text-xs sm:text-sm">Single</TabsTrigger>
-              <TabsTrigger value="equal" className="text-xs sm:text-sm">Equal Split</TabsTrigger>
-              <TabsTrigger value="items" className="text-xs sm:text-sm">By Items</TabsTrigger>
-              <TabsTrigger value="custom" className="text-xs sm:text-sm">Custom</TabsTrigger>
+              <TabsTrigger value="single" className="text-xs sm:text-sm">
+                {t('pos.tabSingle')}
+              </TabsTrigger>
+              <TabsTrigger value="equal" className="text-xs sm:text-sm">
+                {t('pos.tabEqual')}
+              </TabsTrigger>
+              <TabsTrigger value="items" className="text-xs sm:text-sm">
+                {t('pos.tabItems')}
+              </TabsTrigger>
+              <TabsTrigger value="custom" className="text-xs sm:text-sm">
+                {t('pos.tabCustom')}
+              </TabsTrigger>
             </TabsList>
 
             {/* ── Single ── */}
             <TabsContent value="single" className="space-y-2 pt-3">
               <PayRow
-                label="Payment"
+                label={t('pos.payment')}
                 method={singleRow.method}
                 active
                 amountStr={singleRow.amount}
@@ -365,7 +373,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                 editable
                 error={
                   singleExceeds
-                    ? `Exceeds remaining by ${formatCurrency(round2(parseAmount(singleRow.amount) - remaining))}`
+                    ? t('pos.exceedsBy', {
+                        amount: formatCurrency(round2(parseAmount(singleRow.amount) - remaining)),
+                      })
                     : undefined
                 }
               />
@@ -375,7 +385,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
             <TabsContent value="equal" className="space-y-3 pt-3">
               <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
                 <Users className="size-4 text-muted-foreground" />
-                <span className="flex-1 text-sm font-medium">Split between</span>
+                <span className="flex-1 text-sm font-medium">{t('pos.splitBetween')}</span>
                 <Input
                   type="number"
                   min={2}
@@ -384,12 +394,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                   onChange={(e) => setEqPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 12))}
                   className="h-10 w-16 text-center tabular-nums"
                 />
-                <span className="text-sm text-muted-foreground">payers</span>
+                <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>
               </div>
               {eqAmounts.map((amount, i) => (
                 <PayRow
                   key={i}
-                  label={`Payer ${i + 1}`}
+                  label={t('pos.payer', { n: i + 1 })}
                   method={eqMethods[i] ?? 'cash'}
                   active={safeActiveIdx === i}
                   onActivate={() => setActiveIdx(i)}
@@ -397,7 +407,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                 />
               ))}
               <p className="text-center text-xs text-muted-foreground">
-                Parts total: <span className="font-semibold tabular-nums">{formatCurrency(sum)}</span>
+                {t('pos.partsTotal')}{' '}
+                <span className="font-semibold tabular-nums">{formatCurrency(sum)}</span>
               </p>
             </TabsContent>
 
@@ -405,7 +416,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
             <TabsContent value="items" className="space-y-3 pt-3">
               <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
                 <Users className="size-4 text-muted-foreground" />
-                <span className="flex-1 text-sm font-medium">Assign items to</span>
+                <span className="flex-1 text-sm font-medium">{t('pos.assignItemsTo')}</span>
                 <Input
                   type="number"
                   min={2}
@@ -414,7 +425,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                   onChange={(e) => setItPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 6))}
                   className="h-10 w-16 text-center tabular-nums"
                 />
-                <span className="text-sm text-muted-foreground">payers</span>
+                <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>
               </div>
 
               <div className="space-y-1.5">
@@ -456,12 +467,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
 
               <div className="space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Each payer pays
+                  {t('pos.eachPayerPays')}
                 </p>
                 {itAmounts.map((amount, i) => (
                   <PayRow
                     key={i}
-                    label={`Payer ${i + 1}`}
+                    label={t('pos.payer', { n: i + 1 })}
                     method={itMethods[i] ?? 'cash'}
                     active={safeActiveIdx === i}
                     onActivate={() => setActiveIdx(i)}
@@ -476,7 +487,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
               {customRows.map((row, i) => (
                 <PayRow
                   key={row.id}
-                  label={`Payment ${i + 1}`}
+                  label={t('pos.paymentN', { n: i + 1 })}
                   method={row.method}
                   active={safeActiveIdx === i}
                   onActivate={() => setActiveIdx(i)}
@@ -497,7 +508,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                 />
               ))}
               <Button variant="outline" className="h-11 w-full rounded-xl border-dashed" onClick={addCustomRow}>
-                <Plus /> Add payment
+                <Plus /> {t('pos.addPayment')}
               </Button>
             </TabsContent>
           </Tabs>
@@ -516,15 +527,16 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
             >
               {exceeds ? (
                 <>
-                  <AlertCircle className="size-4" /> Exceeds remaining by{' '}
-                  {formatCurrency(Math.abs(diff))}
+                  <AlertCircle className="size-4" /> {t('pos.exceedsBy', { amount: formatCurrency(Math.abs(diff)) })}
                 </>
               ) : exact ? (
                 <>
-                  <Check className="size-4" /> Exact
+                  <Check className="size-4" /> {t('pos.exact')}
                 </>
               ) : (
-                <>Remaining after: {formatCurrency(round2(remaining - sum))}</>
+                <>
+                  {t('pos.remainingAfter', { amount: formatCurrency(round2(remaining - sum)) })}
+                </>
               )}
             </div>
             <div className="flex gap-2">
@@ -532,10 +544,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                 variant="outline"
                 className="h-12 flex-1 rounded-xl border-[#E2E2E0]"
                 onClick={() => setCheckOpen(true)}
-                title="Print a guest check for the current split — no payment is recorded"
+                title={t('pos.printCheckPaymentHint')}
               >
                 <Printer />
-                <span className="hidden sm:inline">Print Check</span>
+                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
               </Button>
               <Button
                 className="h-12 flex-[1.8] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
@@ -543,7 +555,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
                 onClick={handleSubmit}
               >
                 {submitting ? <Loader2 className="animate-spin" /> : <CreditCard />}
-                Charge {formatCurrency(sum)}
+                {t('pos.charge')} {formatCurrency(sum)}
               </Button>
             </div>
           </div>
@@ -595,7 +607,8 @@ function PayRow({
   editable?: boolean
   error?: string
 }) {
-  const meta = METHOD_META[method] ?? { label: PAYMENT_METHOD_LABELS[method] ?? method, icon: MoreHorizontal }
+  const { t } = useI18n()
+  const meta = METHOD_META[method] ?? { labelKey: `status.payment.${method}`, icon: MoreHorizontal }
   const Icon = meta.icon
 
   return (
@@ -605,7 +618,7 @@ function PayRow({
         active ? 'border-[#714B67] ring-1 ring-[#714B67]' : 'border-[#E2E2E0] bg-white',
       )}
       onClick={() => onActivate?.()}
-      title={onActivate ? 'Select this row, then tap a payment method above' : undefined}
+      title={onActivate ? t('pos.selectRowHint') : undefined}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
@@ -616,7 +629,7 @@ function PayRow({
               active ? 'bg-[#714B67] text-white' : 'bg-[#714B67]/10 text-[#714B67]',
             )}
           >
-            <Icon className="size-3" aria-hidden /> {meta.label}
+            <Icon className="size-3" aria-hidden /> {t(meta.labelKey)}
           </span>
         </span>
         {onRemove && (
@@ -628,7 +641,7 @@ function PayRow({
               e.stopPropagation()
               onRemove()
             }}
-            title="Remove payment"
+            title={t('pos.removePayment')}
           >
             <X className="size-4" />
           </Button>
@@ -644,12 +657,12 @@ function PayRow({
             value={amountStr}
             onChange={(e) => onAmountChange?.(e.target.value)}
             className="h-10 w-28 text-right text-sm font-semibold tabular-nums"
-            aria-label={`${label} amount`}
+            aria-label={t('pos.amountAria', { label })}
           />
         ) : (
           <div
             className="flex h-10 w-28 items-center justify-center rounded-md border bg-muted/40 text-sm font-semibold tabular-nums"
-            aria-label={`${label} amount`}
+            aria-label={t('pos.amountAria', { label })}
           >
             {formatCurrency(amount ?? 0)}
           </div>
@@ -659,7 +672,7 @@ function PayRow({
         <Input
           value={reference ?? ''}
           onChange={(e) => onReferenceChange(e.target.value)}
-          placeholder="Ref # (optional)"
+          placeholder={t('pos.refOptional')}
           className="mt-1.5 h-10"
         />
       )}

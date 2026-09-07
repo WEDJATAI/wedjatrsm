@@ -12,6 +12,7 @@ import {
   LogOut,
   Map,
   Package,
+  Settings,
   Settings2,
   ShieldCheck,
   Tags,
@@ -57,6 +58,7 @@ const ADMIN_MENU: NavItem[] = [
   { view: 'users', permission: 'users', icon: Users },
   { view: 'roles', permission: 'roles', icon: ShieldCheck },
   { view: 'attendance', permission: 'attendance', icon: CalendarCheck },
+  { view: 'settings', permission: 'settings', icon: Settings },
 ]
 
 /* Soft role tints tuned for the dark Odoo navbar bar (#24232D) */

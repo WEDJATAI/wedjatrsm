@@ -15,8 +15,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { PAYMENT_METHOD_LABELS, RESTAURANT_NAME, TAX_RATE } from '@/lib/constants'
+import { TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
+import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import { escapeHtml, round2 } from './pos-utils'
@@ -32,10 +34,17 @@ type CheckModalProps = {
   rows?: CheckSplitRow[]
 }
 
-const CHECK_TITLES = ['Guest Check', 'Bill', 'Invoice'] as const
-type CheckTitle = (typeof CHECK_TITLES)[number]
+type CheckTitleKey = 'guestCheck' | 'bill' | 'invoice'
+const CHECK_TITLE_KEYS: CheckTitleKey[] = ['guestCheck', 'bill', 'invoice']
+const CHECK_TITLE_LABEL_KEYS: Record<CheckTitleKey, string> = {
+  guestCheck: 'pos.titleGuestCheck',
+  bill: 'pos.titleBill',
+  invoice: 'pos.titleInvoice',
+}
 
 type SplitKind = 'rows' | 'equal' | 'items'
+
+type TFunc = (key: string, vars?: Record<string, string | number>) => string
 
 type CheckModel = {
   title: string
@@ -68,18 +77,19 @@ function buildCheckModel(
     eqPayers: number
     selectedIds: Set<number>
   },
+  t: TFunc,
 ): CheckModel {
   const base = {
     title: opts.title,
     customer: opts.customer.trim(),
     orderId: order.id,
-    tableName: order.table?.name ?? 'Takeaway',
+    tableName: order.table?.name ?? t('common.takeaway'),
     waiter: order.user?.name ?? '—',
     date: formatDateTime(order.createdAt),
   }
   const allItems = order.items.map((it) => ({
     qty: formatQty(it.quantity),
-    name: it.product?.name ?? 'Item',
+    name: it.product?.name ?? t('pos.item'),
     total: round2(it.quantity * it.unitPrice),
     notes: it.notes,
   }))
@@ -88,7 +98,7 @@ function buildCheckModel(
   const orderTotal = round2(order.totalAmount)
   const paid = round2(order.paidAmount)
   const remaining = round2(Math.max(0, order.remainingAmount))
-  const taxLabel = `VAT ${Math.round(TAX_RATE * 100)}%`
+  const taxLabel = t('money.tax')
   const isSplit = opts.mode === 'split'
 
   // ── By items: the check covers ONLY the selected items ──
@@ -112,8 +122,8 @@ function buildCheckModel(
       split: null,
       splitTotal: null,
       reference: [
-        { label: 'Full bill total', amount: orderTotal },
-        { label: 'Remaining on bill', amount: remaining },
+        { label: t('pos.fullBillTotal'), amount: orderTotal },
+        { label: t('pos.remainingOnBill'), amount: remaining },
       ],
     }
   }
@@ -126,7 +136,10 @@ function buildCheckModel(
     const part = round2(remaining / opts.eqPayers)
     const amounts = Array.from({ length: opts.eqPayers }, () => part)
     amounts[opts.eqPayers - 1] = round2(Math.max(0, remaining - round2(part * (opts.eqPayers - 1))))
-    split = amounts.map((amount, i) => ({ label: `Part ${i + 1} of ${opts.eqPayers}`, amount }))
+    split = amounts.map((amount, i) => ({
+      label: t('pos.partOf', { i: i + 1, n: opts.eqPayers }),
+      amount,
+    }))
   }
 
   return {
@@ -145,54 +158,58 @@ function buildCheckModel(
   }
 }
 
-function buildCheckHtml(m: CheckModel): string {
+function buildCheckHtml(m: CheckModel, t: TFunc, restaurantName: string): string {
   const row = (l: string, r: string, cls = '') =>
     `<div class="r ${cls}"><span>${escapeHtml(l)}</span><span>${escapeHtml(r)}</span></div>`
   const dashed = '<div class="dashed"></div>'
   const center = (text: string, cls = '') => `<p class="${cls}">${escapeHtml(text)}</p>`
   const lines: string[] = []
-  lines.push(`<h3>${escapeHtml(RESTAURANT_NAME)}</h3>`)
+  lines.push(`<h3>${escapeHtml(restaurantName)}</h3>`)
   lines.push(center(m.title.toUpperCase()))
-  if (m.customer) lines.push(`<p class="cust">Customer: ${escapeHtml(m.customer)}</p>`)
+  if (m.customer)
+    lines.push(`<p class="cust">${escapeHtml(t('pos.customer'))}: ${escapeHtml(m.customer)}</p>`)
   lines.push(dashed)
-  lines.push(row(`Order #${m.orderId}`, m.tableName))
-  lines.push(row('Waiter', m.waiter))
-  lines.push(row('Date', m.date))
+  lines.push(row(`${t('common.order')} #${m.orderId}`, m.tableName))
+  lines.push(row(t('pos.waiter'), m.waiter))
+  lines.push(row(t('common.date'), m.date))
   lines.push(dashed)
   for (const it of m.items) {
     lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
     if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
   }
   lines.push(dashed)
-  lines.push(row('Subtotal', formatCurrency(m.subtotal)))
-  if (m.discount > 0) lines.push(row('Discount', `-${formatCurrency(m.discount)}`))
+  lines.push(row(t('money.subtotal'), formatCurrency(m.subtotal)))
+  if (m.discount > 0) lines.push(row(t('money.discount'), `-${formatCurrency(m.discount)}`))
   lines.push(row(m.taxLabel, formatCurrency(m.tax)))
-  lines.push(row('TOTAL', formatCurrency(m.total), 'bold'))
-  if (m.paid > 0) lines.push(row('Paid', formatCurrency(m.paid)))
+  lines.push(row(t('money.total'), formatCurrency(m.total), 'bold'))
+  if (m.paid > 0) lines.push(row(t('money.paid'), formatCurrency(m.paid)))
   if (m.split && m.split.length > 0) {
     lines.push(dashed)
-    lines.push(center('SPLIT BILL', 'bold'))
+    lines.push(center(t('pos.splitBill').toUpperCase(), 'bold'))
     m.split.forEach((p) => {
-      const method = p.method ? ` (${PAYMENT_METHOD_LABELS[p.method] ?? p.method})` : ''
+      const method = p.method ? ` (${t(`status.payment.${p.method}`)})` : ''
       lines.push(row(`${p.label}${method}`, formatCurrency(p.amount)))
     })
-    if (m.splitTotal != null) lines.push(row('Split total', formatCurrency(m.splitTotal), 'bold'))
-    lines.push(row('Remaining total', formatCurrency(m.remaining)))
+    if (m.splitTotal != null)
+      lines.push(row(t('pos.splitTotal'), formatCurrency(m.splitTotal), 'bold'))
+    lines.push(row(t('pos.remainingTotal'), formatCurrency(m.remaining)))
   }
   for (const ref of m.reference) lines.push(row(ref.label, formatCurrency(ref.amount)))
   lines.push(dashed)
-  lines.push(center('Thank you — this is not a paid receipt'))
+  lines.push(center(t('pos.checkFooter')))
   return lines.join('\n')
 }
 
 export default function CheckModal({ order, open, onOpenChange, rows }: CheckModalProps) {
+  const { t, lang, isRTL } = useI18n()
+  const { restaurantName } = useAppSettings()
   // Initial state is derived from the props at mount time — parents mount this
   // modal fresh whenever a new check flow starts (pos-view keys it by order,
   // the payment modal keeps it mounted for one payment session). The `rows`
   // prop itself is read LIVE so a check opened from the payment screen always
   // mirrors its CURRENT split configuration.
   const [customerName, setCustomerName] = useState('')
-  const [title, setTitle] = useState<CheckTitle>('Guest Check')
+  const [title, setTitle] = useState<CheckTitleKey>('guestCheck')
   const [mode, setMode] = useState<'full' | 'split'>(() => ((rows?.length ?? 0) > 0 ? 'split' : 'full'))
   const [splitKind, setSplitKind] = useState<SplitKind>(() => ((rows?.length ?? 0) > 0 ? 'rows' : 'equal'))
   const [eqPayers, setEqPayers] = useState(2)
@@ -202,16 +219,17 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
 
   const hasRows = (rows?.length ?? 0) > 0
   const effSplitKind: SplitKind = hasRows ? splitKind : splitKind === 'rows' ? 'equal' : splitKind
+  const titleLabel = t(CHECK_TITLE_LABEL_KEYS[title])
 
   const model = buildCheckModel(order, {
-    title,
+    title: titleLabel,
     customer: customerName,
     mode,
     splitKind: effSplitKind,
     rows,
     eqPayers,
     selectedIds,
-  })
+  }, t)
 
   const clampPayers = (raw: number) => {
     const n = Math.round(Number.isFinite(raw) ? raw : 2)
@@ -235,14 +253,17 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
   )
 
   const handlePrint = () => {
-    const html = buildCheckHtml(model)
+    const html = buildCheckHtml(model, t, restaurantName)
     const w = window.open('', '_blank', 'width=380,height=640')
     if (!w) {
-      window.alert('Please allow pop-ups to print the check.')
+      window.alert(t('pos.popupBlocked'))
       return
     }
+    const noteAlign = isRTL ? 'right' : 'left'
     w.document.write(
-      `<html><head><title>${escapeHtml(model.title)}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:left;margin:0} .bold{font-weight:bold}</style></head><body>${html}</body></html>`,
+      `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><title>${escapeHtml(
+        model.title,
+      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold}</style></head><body>${html}</body></html>`,
     )
     w.document.close()
     w.focus()
@@ -254,38 +275,37 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ReceiptText className="size-5 text-[#714B67]" /> Print check — Order #{order.id}
+            <ReceiptText className="size-5 text-[#714B67]" /> {t('pos.printCheck')} —{' '}
+            {t('common.order')} #{order.id}
           </DialogTitle>
-          <DialogDescription>
-            Pre-payment guest check — informational only, no payment is recorded.
-          </DialogDescription>
+          <DialogDescription>{t('pos.checkDesc')}</DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_320px] md:items-start">
           {/* ── Controls ── */}
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="check-customer">Customer name (printed on check)</Label>
+              <Label htmlFor="check-customer">{t('pos.customerNameHint')}</Label>
               <Input
                 id="check-customer"
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Mr. Ahmed"
+                placeholder={t('pos.customerPlaceholder')}
                 maxLength={60}
                 className="h-11 rounded-xl"
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label>Check title</Label>
-              <Select value={title} onValueChange={(v) => setTitle(v as CheckTitle)}>
+              <Label>{t('pos.checkTitleLabel')}</Label>
+              <Select value={title} onValueChange={(v) => setTitle(v as CheckTitleKey)}>
                 <SelectTrigger className="h-11 w-full rounded-xl">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {CHECK_TITLES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
+                  {CHECK_TITLE_KEYS.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      {t(CHECK_TITLE_LABEL_KEYS[k])}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -293,14 +313,14 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
             </div>
 
             <div className="space-y-1.5">
-              <Label>Mode</Label>
+              <Label>{t('pos.mode')}</Label>
               <Tabs value={mode} onValueChange={(v) => setMode(v as 'full' | 'split')}>
                 <TabsList className="grid h-11 w-full grid-cols-2 rounded-xl">
                   <TabsTrigger value="full" className="rounded-lg text-sm">
-                    Full bill
+                    {t('pos.fullBill')}
                   </TabsTrigger>
                   <TabsTrigger value="split" className="rounded-lg text-sm">
-                    Split
+                    {t('pos.split')}
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -311,14 +331,14 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                 <div className="flex flex-wrap gap-2">
                   {hasRows && (
                     <SplitPill active={splitKind === 'rows'} onClick={() => setSplitKind('rows')}>
-                      Payment plan
+                      {t('pos.paymentPlan')}
                     </SplitPill>
                   )}
                   <SplitPill active={splitKind === 'equal'} onClick={() => setSplitKind('equal')}>
-                    Equal split
+                    {t('pos.equalSplit')}
                   </SplitPill>
                   <SplitPill active={splitKind === 'items'} onClick={() => setSplitKind('items')}>
-                    By items
+                    {t('pos.byItems')}
                   </SplitPill>
                 </div>
 
@@ -332,8 +352,8 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                         <span className="min-w-0 truncate">
                           {r.label}
                           {r.method && (
-                            <span className="ml-1.5 text-xs text-muted-foreground">
-                              ({PAYMENT_METHOD_LABELS[r.method] ?? r.method})
+                            <span className="ms-1.5 text-xs text-muted-foreground">
+                              ({t(`status.payment.${r.method}`)})
                             </span>
                           )}
                         </span>
@@ -342,16 +362,14 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                         </span>
                       </div>
                     ))}
-                    <p className="text-xs text-muted-foreground">
-                      Mirrors the current payment screen configuration.
-                    </p>
+                    <p className="text-xs text-muted-foreground">{t('pos.mirrorHint')}</p>
                   </div>
                 )}
 
                 {effSplitKind === 'equal' && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium">Split between</span>
+                      <span className="text-sm font-medium">{t('pos.splitBetween')}</span>
                       <div className="flex items-center gap-1">
                         <Button
                           variant="outline"
@@ -359,7 +377,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                           className="size-11 rounded-lg"
                           disabled={eqPayers <= 2}
                           onClick={() => setEqPayers(clampPayers(eqPayers - 1))}
-                          aria-label="Fewer payers"
+                          aria-label={t('pos.fewerPayers')}
                         >
                           <Minus />
                         </Button>
@@ -372,15 +390,13 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                           className="size-11 rounded-lg"
                           disabled={eqPayers >= 12}
                           onClick={() => setEqPayers(clampPayers(eqPayers + 1))}
-                          aria-label="More payers"
+                          aria-label={t('pos.morePayers')}
                         >
                           <Plus />
                         </Button>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Prints “Part i of N” with each share of the remaining bill.
-                    </p>
+                    <p className="text-xs text-muted-foreground">{t('pos.equalHint')}</p>
                   </div>
                 )}
 
@@ -396,14 +412,14 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                             onClick={() => toggleItem(it.id)}
                             aria-pressed={active}
                             className={cn(
-                              'flex h-11 w-full items-center justify-between gap-2 rounded-lg border px-3 text-left text-sm transition-colors',
+                              'flex h-11 w-full items-center justify-between gap-2 rounded-lg border px-3 text-start text-sm transition-colors',
                               active
                                 ? 'border-[#714B67] bg-[#714B67]/10 font-semibold text-[#714B67]'
                                 : 'border-[#E2E2E0] bg-white text-muted-foreground',
                             )}
                           >
                             <span className="min-w-0 truncate">
-                              {formatQty(it.quantity)} × {it.product?.name ?? 'Item'}
+                              {formatQty(it.quantity)} × {it.product?.name ?? t('pos.item')}
                             </span>
                             <span className="shrink-0 tabular-nums">
                               {formatCurrency(round2(it.quantity * it.unitPrice))}
@@ -413,8 +429,11 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                       })}
                     </div>
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      Selected {selectedCount} of {order.items.length} item(s) —{' '}
-                      {formatCurrency(selectedSum)}
+                      {t('pos.selectedItems', {
+                        n: selectedCount,
+                        total: order.items.length,
+                        amount: formatCurrency(selectedSum),
+                      })}
                     </p>
                   </div>
                 )}
@@ -425,68 +444,70 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
           {/* ── Live preview (thermal style) ── */}
           <div className="rounded-xl bg-stone-200/70 p-3">
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
-              <ReceiptText className="size-3.5" /> Preview
+              <ReceiptText className="size-3.5" /> {t('pos.preview')}
             </p>
             <div className="mx-auto w-full max-w-[300px] rounded-md border border-stone-300 bg-white p-4 font-mono text-[12px] leading-tight text-stone-900 shadow-md">
-              <p className="text-center font-bold uppercase tracking-widest">{RESTAURANT_NAME}</p>
+              <p className="text-center font-bold uppercase tracking-widest">{restaurantName}</p>
               <p className="text-center uppercase">{model.title}</p>
               {model.customer && (
-                <p className="text-center font-bold">Customer: {model.customer}</p>
+                <p className="text-center font-bold">
+                  {t('pos.customer')}: {model.customer}
+                </p>
               )}
               <div className="my-2 border-t border-dashed border-stone-400" />
-              <CheckRow left={`Order #${model.orderId}`} right={model.tableName} />
-              <CheckRow left="Waiter" right={model.waiter} />
-              <CheckRow left="Date" right={model.date} />
+              <CheckRow left={`${t('common.order')} #${model.orderId}`} right={model.tableName} />
+              <CheckRow left={t('pos.waiter')} right={model.waiter} />
+              <CheckRow left={t('common.date')} right={model.date} />
               <div className="my-2 border-t border-dashed border-stone-400" />
               {model.items.map((it, i) => (
                 <div key={i}>
                   <CheckRow left={`${it.qty}× ${it.name}`} right={formatCurrency(it.total)} />
-                  {it.notes && <p className="pl-3 text-[10px] text-stone-500">* {it.notes}</p>}
+                  {it.notes && <p className="ps-3 text-[10px] text-stone-500">* {it.notes}</p>}
                 </div>
               ))}
               <div className="my-2 border-t border-dashed border-stone-400" />
-              <CheckRow left="Subtotal" right={formatCurrency(model.subtotal)} />
+              <CheckRow left={t('money.subtotal')} right={formatCurrency(model.subtotal)} />
               {model.discount > 0 && (
-                <CheckRow left="Discount" right={`-${formatCurrency(model.discount)}`} />
+                <CheckRow left={t('money.discount')} right={`-${formatCurrency(model.discount)}`} />
               )}
               <CheckRow left={model.taxLabel} right={formatCurrency(model.tax)} />
-              <CheckRow left="TOTAL" right={formatCurrency(model.total)} bold />
-              {model.paid > 0 && <CheckRow left="Paid" right={formatCurrency(model.paid)} />}
+              <CheckRow left={t('money.total')} right={formatCurrency(model.total)} bold />
+              {model.paid > 0 && <CheckRow left={t('money.paid')} right={formatCurrency(model.paid)} />}
               {model.split && model.split.length > 0 && (
                 <>
                   <div className="my-2 border-t border-dashed border-stone-400" />
-                  <p className="text-center font-semibold uppercase">Split bill</p>
+                  <p className="text-center font-semibold uppercase">{t('pos.splitBill')}</p>
                   {model.split.map((p, i) => (
                     <CheckRow
                       key={i}
-                      left={`${p.label}${p.method ? ` · ${PAYMENT_METHOD_LABELS[p.method] ?? p.method}` : ''}`}
+                      left={`${p.label}${p.method ? ` · ${t(`status.payment.${p.method}`)}` : ''}`}
                       right={formatCurrency(p.amount)}
                     />
                   ))}
                   {model.splitTotal != null && (
-                    <CheckRow left="Split total" right={formatCurrency(model.splitTotal)} bold />
+                    <CheckRow left={t('pos.splitTotal')} right={formatCurrency(model.splitTotal)} bold />
                   )}
-                  <CheckRow left="Remaining total" right={formatCurrency(model.remaining)} />
+                  <CheckRow left={t('pos.remainingTotal')} right={formatCurrency(model.remaining)} />
                 </>
               )}
               {model.reference.map((r, i) => (
                 <CheckRow key={i} left={r.label} right={formatCurrency(r.amount)} />
               ))}
               <div className="my-2 border-t border-dashed border-stone-400" />
-              <p className="text-center">Thank you — this is not a paid receipt</p>
+              <p className="text-center">{t('pos.checkFooter')}</p>
             </div>
           </div>
         </div>
 
         <div className="flex gap-2 border-t pt-3">
           <Button variant="outline" className="h-12 flex-1 rounded-xl" onClick={() => onOpenChange(false)}>
-            <Check /> Done
+            <Check /> {t('common.done')}
           </Button>
           <Button
             className="h-12 flex-[2] rounded-xl bg-[#714B67] text-base text-white hover:bg-[#714B67]/90"
             onClick={handlePrint}
           >
-            <Printer /> Print {title}
+            <Printer /> {t('common.print')} {titleLabel}
           </Button>
         </div>
       </DialogContent>

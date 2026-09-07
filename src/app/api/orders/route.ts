@@ -65,6 +65,16 @@ export async function POST(req: NextRequest) {
       table = { id: found.id, name: found.name }
     }
 
+    // Guests: integer 1-30, default 2 for table orders / 1 for takeaway
+    let guests = table != null ? 2 : 1
+    if (body?.guests != null) {
+      const parsedGuests = Number(body.guests)
+      if (!Number.isInteger(parsedGuests) || parsedGuests < 1 || parsedGuests > 30) {
+        throw new ApiError('Guests must be between 1 and 30', 400)
+      }
+      guests = parsedGuests
+    }
+
     // Items: products must exist / be active / sellable, qty > 0, course valid
     const items = await validateOrderItems(body?.items)
 
@@ -77,6 +87,7 @@ export async function POST(req: NextRequest) {
         data: {
           userId: sessionUserId(session),
           tableId: table?.id ?? null,
+          guests,
           items: {
             create: items.map((item) => ({
               productId: item.productId,

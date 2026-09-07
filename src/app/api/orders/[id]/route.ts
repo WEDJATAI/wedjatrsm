@@ -45,7 +45,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const body = await req.json().catch(() => {
       throw new ApiError('Invalid JSON body', 400)
     })
-    const { addItems, removeItemIds, updateItems, discountAmount } = body ?? {}
+    const { addItems, removeItemIds, updateItems, discountAmount, guests } = body ?? {}
 
     // Add new items (same validation as order creation, stock-aware)
     if (addItems != null) {
@@ -120,6 +120,15 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         throw new ApiError('Discount amount must be a non-negative number', 400)
       }
       await db.order.update({ where: { id: orderId }, data: { discountAmount: discount } })
+    }
+
+    // Number of guests seated on this order (integer 1-30)
+    if (guests != null) {
+      const parsedGuests = Number(guests)
+      if (!Number.isInteger(parsedGuests) || parsedGuests < 1 || parsedGuests > 30) {
+        throw new ApiError('Guests must be between 1 and 30', 400)
+      }
+      await db.order.update({ where: { id: orderId }, data: { guests: parsedGuests } })
     }
 
     const order = await recomputeTotals(orderId)

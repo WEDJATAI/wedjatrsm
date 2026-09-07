@@ -5,8 +5,8 @@ import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
 import type { InventoryItem, Product } from '@/lib/types'
-import { INVENTORY_REASON_LABELS } from '@/lib/constants'
 import { formatQty } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
@@ -45,6 +45,7 @@ export function InventoryAdjustDialog({
   target: InventoryAdjustTarget | null
   onClose: () => void
 }) {
+  const { t } = useI18n()
   return (
     <Dialog
       open={target != null}
@@ -55,15 +56,15 @@ export function InventoryAdjustDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-bold">
-            {target?.item.name ?? 'Adjust stock'}
+            {target?.item.name ?? t('admin.adjustStock')}
           </DialogTitle>
           <DialogDescription>
-            Current stock:{' '}
+            {t('admin.currentStock')}{' '}
             <span className="font-mono font-medium text-foreground">
               {target ? formatQty(target.item.stock) : '—'}
             </span>
             {target
-              ? ` · threshold ${formatQty(target.item.lowStockThreshold)}`
+              ? ` · ${t('admin.thresholdShort', { n: formatQty(target.item.lowStockThreshold) })}`
               : null}
           </DialogDescription>
         </DialogHeader>
@@ -88,6 +89,7 @@ function AdjustForm({
   target: InventoryAdjustTarget
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
   const preset = target.preset ?? 0
   const [quantityChange, setQuantityChange] = useState(preset > 0 ? String(preset) : '0')
@@ -107,7 +109,10 @@ function AdjustForm({
       }),
     onSuccess: (data) => {
       toast.success(
-        `${data.product.name} adjusted — stock is now ${formatQty(data.product.stock)}`,
+        t('admin.adjustedToast', {
+          name: data.product.name,
+          stock: formatQty(data.product.stock),
+        }),
       )
       void queryClient.invalidateQueries({ queryKey: ['inventory'] })
       void queryClient.invalidateQueries({ queryKey: ['inventory-value'] })
@@ -127,7 +132,7 @@ function AdjustForm({
     e.preventDefault()
     const qty = Number(quantityChange)
     if (!Number.isFinite(qty) || qty === 0) {
-      toast.error('Enter a non-zero quantity change')
+      toast.error(t('admin.nonZeroQty'))
       return
     }
     adjustMutation.mutate({
@@ -141,7 +146,7 @@ function AdjustForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="adjust-quantity">Quantity change</Label>
+        <Label htmlFor="adjust-quantity">{t('admin.quantityChange')}</Label>
         <div className="flex flex-wrap gap-1.5">
           {QUICK_CHANGES.map((delta) => (
             <Button
@@ -164,13 +169,11 @@ function AdjustForm({
           onChange={(e) => setQuantityChange(e.target.value)}
           className="font-mono"
         />
-        <p className="text-xs text-muted-foreground">
-          positive = add stock · negative = remove
-        </p>
+        <p className="text-xs text-muted-foreground">{t('admin.positiveNegative')}</p>
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="adjust-reason">Reason</Label>
+        <Label htmlFor="adjust-reason">{t('admin.reason')}</Label>
         <Select value={reason} onValueChange={(v) => setReason(v as AdjustReason)}>
           <SelectTrigger id="adjust-reason" className="w-full">
             <SelectValue />
@@ -178,7 +181,7 @@ function AdjustForm({
           <SelectContent>
             {ADJUST_REASONS.map((r) => (
               <SelectItem key={r} value={r}>
-                {INVENTORY_REASON_LABELS[r] ?? r}
+                {t(`reason.${r}`)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -186,21 +189,21 @@ function AdjustForm({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="adjust-note">Note (optional)</Label>
+        <Label htmlFor="adjust-note">{t('admin.noteOptional')}</Label>
         <Input
           id="adjust-note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. supplier invoice #"
+          placeholder={t('admin.notePlaceholder')}
         />
       </div>
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button type="submit" disabled={adjustMutation.isPending}>
-          {adjustMutation.isPending ? 'Saving…' : 'Save adjustment'}
+          {adjustMutation.isPending ? t('admin.saving') : t('admin.saveAdjustment')}
         </Button>
       </div>
     </form>

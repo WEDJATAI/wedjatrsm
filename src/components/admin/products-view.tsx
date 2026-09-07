@@ -18,6 +18,7 @@ import type { LucideIcon } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
 import { formatCurrency, formatQty } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import type { Category, Product } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
@@ -114,27 +115,31 @@ function toProductForm(p: Product): ProductForm {
   }
 }
 
-function validateProductForm(form: ProductForm, isCreate: boolean): ProductFormErrors {
+function validateProductForm(
+  form: ProductForm,
+  isCreate: boolean,
+  t: (key: string) => string,
+): ProductFormErrors {
   const errors: ProductFormErrors = {}
-  if (form.name.trim() === '') errors.name = 'Name is required'
+  if (form.name.trim() === '') errors.name = t('admin.nameRequired')
   const price = Number(form.price)
   if (form.price.trim() === '' || !Number.isFinite(price) || price < 0) {
-    errors.price = 'Enter a price of 0 or more'
+    errors.price = t('admin.priceMin')
   }
   if (form.cost.trim() !== '') {
     const cost = Number(form.cost)
-    if (!Number.isFinite(cost) || cost < 0) errors.cost = 'Cost must be 0 or more'
+    if (!Number.isFinite(cost) || cost < 0) errors.cost = t('admin.costMin')
   }
   if (form.isStockable) {
     if (form.lowStockThreshold.trim() !== '') {
       const threshold = Number(form.lowStockThreshold)
       if (!Number.isFinite(threshold) || threshold < 0) {
-        errors.lowStockThreshold = 'Must be 0 or more'
+        errors.lowStockThreshold = t('admin.mustBe0')
       }
     }
     if (isCreate && form.stock.trim() !== '') {
       const stock = Number(form.stock)
-      if (!Number.isFinite(stock) || stock < 0) errors.stock = 'Must be 0 or more'
+      if (!Number.isFinite(stock) || stock < 0) errors.stock = t('admin.mustBe0')
     }
   }
   return errors
@@ -222,14 +227,19 @@ function FlagIcon({
   )
 }
 
-function ActiveBadge({ active }: { active: boolean }) {
-  if (!active) return <Badge variant="outline" className="text-muted-foreground">Inactive</Badge>
+function ActiveBadge({ active, label }: { active: boolean; label: { active: string; inactive: string } }) {
+  if (!active)
+    return (
+      <Badge variant="outline" className="text-muted-foreground">
+        {label.inactive}
+      </Badge>
+    )
   return (
     <Badge
       variant="outline"
       className="border-emerald-600/30 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400"
     >
-      Active
+      {label.active}
     </Badge>
   )
 }
@@ -238,10 +248,12 @@ function ProductRowActions({
   product,
   onEdit,
   onDelete,
+  labels,
 }: {
   product: Product
   onEdit: (product: Product) => void
   onDelete: (product: Product) => void
+  labels: { actionsFor: string; edit: string; delete: string }
 }) {
   return (
     <DropdownMenu>
@@ -250,17 +262,17 @@ function ProductRowActions({
           variant="ghost"
           size="icon"
           className="size-11 text-muted-foreground"
-          aria-label={`Actions for ${product.name}`}
+          aria-label={labels.actionsFor}
         >
           <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={() => onEdit(product)}>
-          <Pencil /> Edit
+          <Pencil /> {labels.edit}
         </DropdownMenuItem>
         <DropdownMenuItem variant="destructive" onClick={() => onDelete(product)}>
-          <Trash2 /> Delete
+          <Trash2 /> {labels.delete}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -270,6 +282,7 @@ function ProductRowActions({
 // ─── View ───────────────────────────────────────────────────────────
 
 export default function ProductsView() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
@@ -319,7 +332,7 @@ export default function ProductsView() {
   }, [productsQuery.data, search])
 
   const isCreate = editing === null
-  const errors = validateProductForm(form, isCreate)
+  const errors = validateProductForm(form, isCreate, t)
   const hasErrors = Object.values(errors).some(Boolean)
 
   const saveMutation = useMutation({
@@ -350,7 +363,7 @@ export default function ProductsView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['products'] })
-      toast.success(editing === null ? 'Product created' : 'Product updated')
+      toast.success(editing === null ? t('admin.productCreated') : t('admin.productUpdated'))
       setFormOpen(false)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -361,7 +374,7 @@ export default function ProductsView() {
       apiFetch<{ ok: boolean }>(`/api/products/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['products'] })
-      toast.success('Product deactivated')
+      toast.success(t('admin.productDeactivated'))
       setDeleteTarget(null)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -386,13 +399,11 @@ export default function ProductsView() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold">Products</h1>
-          <p className="text-muted-foreground text-sm">
-            Menu items and ingredients — prices, costs, availability
-          </p>
+          <h1 className="text-2xl font-bold">{t('nav.products')}</h1>
+          <p className="text-muted-foreground text-sm">{t('admin.productsSubtitle')}</p>
         </div>
         <Button className="h-11" onClick={openCreate}>
-          <Plus /> New Product
+          <Plus /> {t('admin.newProduct')}
         </Button>
       </div>
 
@@ -401,23 +412,23 @@ export default function ProductsView() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full sm:w-72">
             <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+              className="pointer-events-none absolute top-1/2 start-3 size-4 -translate-y-1/2 text-muted-foreground"
               aria-hidden
             />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name or SKU…"
-              className="h-11 pl-9"
-              aria-label="Search products"
+              placeholder={t('admin.searchProduct')}
+              className="h-11 ps-9"
+              aria-label={t('admin.searchProduct')}
             />
           </div>
           <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="h-11 w-full sm:w-52" aria-label="Filter by category">
-              <SelectValue placeholder="All categories" />
+            <SelectTrigger className="h-11 w-full sm:w-52" aria-label={t('admin.allCategories')}>
+              <SelectValue placeholder={t('admin.allCategories')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All categories</SelectItem>
+              <SelectItem value="all">{t('admin.allCategories')}</SelectItem>
               {categories.map((c) => (
                 <SelectItem
                   key={c.id}
@@ -425,7 +436,7 @@ export default function ProductsView() {
                   className={c.active ? undefined : 'text-muted-foreground'}
                 >
                   {c.name}
-                  {c.active ? '' : ' (inactive)'}
+                  {c.active ? '' : ` ${t('admin.inactiveSuffix')}`}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -437,7 +448,7 @@ export default function ProductsView() {
               onCheckedChange={setShowInactive}
             />
             <Label htmlFor="products-show-inactive" className="cursor-pointer text-sm">
-              Show inactive
+              {t('admin.showInactive')}
             </Label>
           </div>
         </div>
@@ -462,29 +473,27 @@ export default function ProductsView() {
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <TriangleAlert className="size-10 text-destructive" aria-hidden />
             <div>
-              <p className="font-medium">Failed to load products</p>
+              <p className="font-medium">{t('admin.loadProductsFailed')}</p>
               <p className="text-muted-foreground text-sm">
-                {productsQuery.error?.message ?? 'Please try again.'}
+                {productsQuery.error?.message ?? t('common.error')}
               </p>
             </div>
             <Button variant="outline" className="h-11" onClick={() => void productsQuery.refetch()}>
-              Retry
+              {t('common.retry')}
             </Button>
           </div>
         ) : products.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <PackageSearch className="size-10 text-muted-foreground/50" aria-hidden />
             <div>
-              <p className="font-medium">No products found</p>
+              <p className="font-medium">{t('admin.noProducts')}</p>
               <p className="text-muted-foreground text-sm">
-                {hasActiveFilters
-                  ? 'Try adjusting the search or filters.'
-                  : 'Create your first product to build the menu.'}
+                {hasActiveFilters ? t('admin.noProductsFilters') : t('admin.noProductsCreate')}
               </p>
             </div>
             {!hasActiveFilters && (
               <Button className="h-11" onClick={openCreate}>
-                <Plus /> New Product
+                <Plus /> {t('admin.newProduct')}
               </Button>
             )}
           </div>
@@ -496,16 +505,16 @@ export default function ProductsView() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Product</TableHead>
-                      <TableHead className="hidden md:table-cell">Category</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead className="hidden text-right lg:table-cell">Cost</TableHead>
-                      <TableHead className="hidden lg:table-cell">Margin</TableHead>
-                      <TableHead className="hidden text-right md:table-cell">Stock</TableHead>
-                      <TableHead className="hidden lg:table-cell">Flags</TableHead>
-                      <TableHead className="hidden md:table-cell">Active</TableHead>
-                      <TableHead className="w-12 text-right">
-                        <span className="sr-only">Actions</span>
+                      <TableHead>{t('admin.product')}</TableHead>
+                      <TableHead className="hidden md:table-cell">{t('admin.category')}</TableHead>
+                      <TableHead className="text-end">{t('common.price')}</TableHead>
+                      <TableHead className="hidden text-end lg:table-cell">{t('common.cost')}</TableHead>
+                      <TableHead className="hidden lg:table-cell">{t('admin.margin')}</TableHead>
+                      <TableHead className="hidden text-end md:table-cell">{t('admin.colStock')}</TableHead>
+                      <TableHead className="hidden lg:table-cell">{t('admin.colFlags')}</TableHead>
+                      <TableHead className="hidden md:table-cell">{t('common.active')}</TableHead>
+                      <TableHead className="w-12 text-end">
+                        <span className="sr-only">{t('common.actions')}</span>
                       </TableHead>
                     </TableRow>
                   </TableHeader>
@@ -525,29 +534,41 @@ export default function ProductsView() {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
+                        <TableCell className="text-end font-medium tabular-nums">
                           {formatCurrency(p.price)}
                         </TableCell>
-                        <TableCell className="hidden text-right text-muted-foreground tabular-nums lg:table-cell">
+                        <TableCell className="hidden text-end text-muted-foreground tabular-nums lg:table-cell">
                           {formatCurrency(p.cost)}
                         </TableCell>
                         <TableCell className="hidden lg:table-cell">
                           <MarginCell product={p} />
                         </TableCell>
-                        <TableCell className="hidden text-right md:table-cell">
+                        <TableCell className="hidden text-end md:table-cell">
                           <StockCell product={p} />
                         </TableCell>
                         <TableCell className="hidden lg:table-cell">
                           <div className="flex items-center gap-1">
-                            <FlagIcon active={p.isSellable} icon={Store} label="Sellable — appears in POS" />
-                            <FlagIcon active={p.isStockable} icon={Package} label="Stock tracking" />
+                            <FlagIcon active={p.isSellable} icon={Store} label={t('admin.sellableFlag')} />
+                            <FlagIcon active={p.isStockable} icon={Package} label={t('admin.stockFlag')} />
                           </div>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
-                          <ActiveBadge active={p.active} />
+                          <ActiveBadge
+                            active={p.active}
+                            label={{ active: t('common.active'), inactive: t('common.inactive') }}
+                          />
                         </TableCell>
-                        <TableCell className="text-right">
-                          <ProductRowActions product={p} onEdit={openEdit} onDelete={setDeleteTarget} />
+                        <TableCell className="text-end">
+                          <ProductRowActions
+                            product={p}
+                            onEdit={openEdit}
+                            onDelete={setDeleteTarget}
+                            labels={{
+                              actionsFor: t('admin.actionsFor', { name: p.name }),
+                              edit: t('common.edit'),
+                              delete: t('common.delete'),
+                            }}
+                          />
                         </TableCell>
                       </TableRow>
                     ))}
@@ -563,7 +584,12 @@ export default function ProductsView() {
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium">{p.name}</span>
-                      {!p.active && <ActiveBadge active={false} />}
+                      {!p.active && (
+                        <ActiveBadge
+                          active={false}
+                          label={{ active: t('common.active'), inactive: t('common.inactive') }}
+                        />
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
                       {p.category ? (
@@ -573,16 +599,25 @@ export default function ProductsView() {
                       )}
                       {p.isStockable && (
                         <span className={cn('tabular-nums', stockColorClass(p))}>
-                          Stock {formatQty(p.stock)}
+                          {t('admin.stockLabel', { qty: formatQty(p.stock) })}
                         </span>
                       )}
                       {p.sku ? <span className="font-mono">{p.sku}</span> : null}
                     </div>
                   </div>
-                  <div className="shrink-0 text-right font-medium tabular-nums">
+                  <div className="shrink-0 text-end font-medium tabular-nums">
                     {formatCurrency(p.price)}
                   </div>
-                  <ProductRowActions product={p} onEdit={openEdit} onDelete={setDeleteTarget} />
+                  <ProductRowActions
+                    product={p}
+                    onEdit={openEdit}
+                    onDelete={setDeleteTarget}
+                    labels={{
+                      actionsFor: t('admin.actionsFor', { name: p.name }),
+                      edit: t('common.edit'),
+                      delete: t('common.delete'),
+                    }}
+                  />
                 </div>
               ))}
             </div>
@@ -594,22 +629,22 @@ export default function ProductsView() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{isCreate ? 'New Product' : 'Edit Product'}</DialogTitle>
+            <DialogTitle>{isCreate ? t('admin.newProduct') : t('admin.editProduct')}</DialogTitle>
             <DialogDescription>
-              {isCreate
-                ? 'Add a menu item or ingredient to the catalog.'
-                : 'Update details. Stock levels are managed from Inventory.'}
+              {isCreate ? t('admin.productCreateDesc') : t('admin.productEditDesc')}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="product-name">Name *</Label>
+              <Label htmlFor="product-name">
+                {t('common.name')} *
+              </Label>
               <Input
                 id="product-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Koshary"
+                placeholder={t('admin.productNamePlaceholder')}
                 className="h-11"
                 aria-invalid={errors.name ? true : undefined}
               />
@@ -617,16 +652,16 @@ export default function ProductsView() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="product-category">Category</Label>
+              <Label htmlFor="product-category">{t('admin.category')}</Label>
               <Select
                 value={form.categoryId === '' ? 'none' : form.categoryId}
                 onValueChange={(v) => setForm({ ...form, categoryId: v === 'none' ? '' : v })}
               >
                 <SelectTrigger id="product-category" className="h-11 w-full">
-                  <SelectValue placeholder="None" />
+                  <SelectValue placeholder={t('admin.none')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">None</SelectItem>
+                  <SelectItem value="none">{t('admin.none')}</SelectItem>
                   {categories.map((c) => (
                     <SelectItem
                       key={c.id}
@@ -634,7 +669,7 @@ export default function ProductsView() {
                       className={c.active ? undefined : 'text-muted-foreground'}
                     >
                       {c.name}
-                      {c.active ? '' : ' (inactive)'}
+                      {c.active ? '' : ` ${t('admin.inactiveSuffix')}`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -643,7 +678,9 @@ export default function ProductsView() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="product-price">Price *</Label>
+                <Label htmlFor="product-price">
+                  {t('common.price')} *
+                </Label>
                 <Input
                   id="product-price"
                   type="number"
@@ -659,7 +696,7 @@ export default function ProductsView() {
                 <FieldError message={errors.price} />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="product-cost">Cost</Label>
+                <Label htmlFor="product-cost">{t('common.cost')}</Label>
                 <Input
                   id="product-cost"
                   type="number"
@@ -678,32 +715,32 @@ export default function ProductsView() {
 
             <SwitchRow
               id="product-sellable"
-              label="Sellable"
-              helper="Appears in POS"
+              label={t('admin.sellable')}
+              helper={t('admin.sellableHint')}
               checked={form.isSellable}
               onCheckedChange={(checked) => setForm({ ...form, isSellable: checked })}
             />
             <SwitchRow
               id="product-stockable"
-              label="Stock tracking"
-              helper="Track inventory stock"
+              label={t('admin.stockTracking')}
+              helper={t('admin.stockTrackingHint')}
               checked={form.isStockable}
               onCheckedChange={(checked) => setForm({ ...form, isStockable: checked })}
             />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="product-sku">SKU</Label>
+                <Label htmlFor="product-sku">{t('admin.sku')}</Label>
                 <Input
                   id="product-sku"
                   value={form.sku}
                   onChange={(e) => setForm({ ...form, sku: e.target.value })}
-                  placeholder="e.g. ING-014"
+                  placeholder={t('admin.skuPlaceholder')}
                   className="h-11"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="product-image">Image URL</Label>
+                <Label htmlFor="product-image">{t('admin.imageUrl')}</Label>
                 <Input
                   id="product-image"
                   type="url"
@@ -718,7 +755,7 @@ export default function ProductsView() {
             {form.isStockable && (
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="product-threshold">Low stock alert at</Label>
+                  <Label htmlFor="product-threshold">{t('admin.lowStockAlertAt')}</Label>
                   <Input
                     id="product-threshold"
                     type="number"
@@ -734,7 +771,7 @@ export default function ProductsView() {
                 </div>
                 {isCreate && (
                   <div className="grid gap-2">
-                    <Label htmlFor="product-initial-stock">Initial stock</Label>
+                    <Label htmlFor="product-initial-stock">{t('admin.initialStock')}</Label>
                     <Input
                       id="product-initial-stock"
                       type="number"
@@ -747,7 +784,7 @@ export default function ProductsView() {
                       className="h-11"
                       aria-invalid={errors.stock ? true : undefined}
                     />
-                    <p className="text-muted-foreground text-xs">Sets opening stock (logged as purchase)</p>
+                    <p className="text-muted-foreground text-xs">{t('admin.initialStockHint')}</p>
                     <FieldError message={errors.stock} />
                   </div>
                 )}
@@ -762,14 +799,14 @@ export default function ProductsView() {
               onClick={() => setFormOpen(false)}
               disabled={saveMutation.isPending}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               className="h-11"
               disabled={saveMutation.isPending || hasErrors}
               onClick={() => saveMutation.mutate()}
             >
-              {saveMutation.isPending ? 'Saving…' : isCreate ? 'Create Product' : 'Save Changes'}
+              {saveMutation.isPending ? t('admin.saving') : isCreate ? t('admin.createProduct') : t('admin.saveChanges')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -779,14 +816,13 @@ export default function ProductsView() {
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Deactivate product?</AlertDialogTitle>
+            <AlertDialogTitle>{t('admin.deactivateProduct')}</AlertDialogTitle>
             <AlertDialogDescription>
-              “{deleteTarget?.name}” will disappear from POS. It stays in history and can be
-              re-enabled later from “Show inactive”.
+              {t('admin.deactivateProductDesc', { name: deleteTarget?.name ?? '' })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="h-11">{t('common.cancel')}</AlertDialogCancel>
             <Button
               variant="destructive"
               className="h-11"
@@ -795,7 +831,7 @@ export default function ProductsView() {
                 if (deleteTarget) deleteMutation.mutate(deleteTarget.id)
               }}
             >
-              {deleteMutation.isPending ? 'Deactivating…' : 'Deactivate'}
+              {deleteMutation.isPending ? t('admin.deactivating') : t('admin.deactivate')}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
-import { ApiError, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
+import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
 import { ROLES } from '@/lib/constants'
 
 // Never expose passwordHash in responses.
@@ -10,9 +10,43 @@ const USER_SAFE_SELECT = {
   email: true,
   name: true,
   role: true,
+  roleId: true,
+  roleRecord: { select: { name: true, permissions: true, active: true } },
   pin: true,
   active: true,
   createdAt: true,
+}
+
+type UserRowWithRole = {
+  id: number
+  email: string
+  name: string
+  role: string
+  roleId: number | null
+  roleRecord: { name: string; permissions: string; active: boolean } | null
+  pin: string | null
+  active: boolean
+  createdAt: Date
+}
+
+/** User row + derived role info (roleName / permissions) for the API. */
+function serializeUser(user: UserRowWithRole) {
+  const roleName = user.roleId ? (user.roleRecord?.name ?? null) : null
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    roleId: user.roleId,
+    roleName,
+    permissions: derivePermissions(
+      user.role,
+      user.roleRecord?.active ? user.roleRecord.permissions : null,
+    ),
+    pin: user.pin,
+    active: user.active,
+    createdAt: user.createdAt,
+  }
 }
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
@@ -27,18 +61,27 @@ async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
   return {}
 }
 
-/** Returns a normalized PIN (3-8 digits), null to clear, or undefined when absent. */
+/** Returns a normalized PIN (exactly 6 digits), null to clear, or undefined when absent. */
 function parsePin(value: unknown): string | null | undefined {
   if (value === undefined) return undefined
   if (value === null) return null
   const pin = typeof value === 'number' ? String(value) : value
-  if (typeof pin !== 'string') throw new ApiError('PIN must be 3-8 digits', 400)
+  if (typeof pin !== 'string') throw new ApiError('PIN must be exactly 6 digits', 400)
   const trimmed = pin.trim()
   if (trimmed === '') return null
-  if (!/^\d{3,8}$/.test(trimmed)) {
-    throw new ApiError('PIN must be 3-8 digits', 400)
+  if (!/^\d{6}$/.test(trimmed)) {
+    throw new ApiError('PIN must be exactly 6 digits', 400)
   }
   return trimmed
+}
+
+/** A roleId must reference an existing, active CustomRole (400 'Role not found' otherwise). */
+async function requireActiveRole(roleId: number): Promise<void> {
+  const roleRecord = await db.customRole.findFirst({
+    where: { id: roleId, active: true },
+    select: { id: true },
+  })
+  if (!roleRecord) throw new ApiError('Role not found', 400)
 }
 
 export async function PUT(
@@ -61,12 +104,12 @@ export async function PUT(
 
     const existing = await db.user.findUnique({
       where: { id: userId },
-      select: { id: true },
+      select: { id: true, role: true, roleId: true },
     })
     if (!existing) throw new ApiError('User not found', 404)
 
     const body = await readBody(req)
-    const data: Prisma.UserUpdateInput = {}
+    const data: Prisma.UserUncheckedUpdateInput = {}
 
     if (body.name !== undefined) {
       if (typeof body.name !== 'string' || !body.name.trim()) {
@@ -75,6 +118,7 @@ export async function PUT(
       data.name = body.name.trim()
     }
 
+    let roleAfterUpdate: string | undefined
     if (body.role !== undefined) {
       if (
         typeof body.role !== 'string' ||
@@ -82,7 +126,8 @@ export async function PUT(
       ) {
         throw new ApiError(`Role must be one of: ${ROLES.join(', ')}`, 400)
       }
-      data.role = body.role.trim()
+      roleAfterUpdate = body.role.trim()
+      data.role = roleAfterUpdate
     }
 
     if (body.pin !== undefined) {
@@ -107,12 +152,42 @@ export async function PUT(
       data.passwordHash = await hashPassword(body.password)
     }
 
+    // ── roleId handling (custom roles) ─────────────────────────────────
+    // - roleId with an effective non-custom role → 400
+    // - effective custom role must resolve to an active CustomRole
+    // - leaving the custom role clears any stale roleId
+    const effectiveRole = roleAfterUpdate ?? existing.role
+
+    if (body.roleId !== undefined && body.roleId !== null) {
+      if (effectiveRole !== 'custom') {
+        throw new ApiError('roleId can only be set when role is custom', 400)
+      }
+      const roleId = Number(body.roleId)
+      if (!Number.isInteger(roleId)) throw new ApiError('Role not found', 400)
+      await requireActiveRole(roleId)
+      data.roleId = roleId
+    } else if (body.roleId === null) {
+      if (effectiveRole === 'custom') {
+        // custom requires a role — clearing it outright is not allowed
+        throw new ApiError('Role not found', 400)
+      }
+      data.roleId = null
+    } else if (roleAfterUpdate !== undefined && roleAfterUpdate !== 'custom') {
+      // switching away from custom → drop the stale role link
+      data.roleId = null
+    } else if (roleAfterUpdate === 'custom') {
+      // switching to custom without a new roleId → keep the existing link
+      const keepId = existing.roleId
+      if (keepId === null) throw new ApiError('Role not found', 400)
+      await requireActiveRole(keepId)
+    }
+
     const user = await db.user.update({
       where: { id: userId },
       data,
       select: USER_SAFE_SELECT,
     })
-    return NextResponse.json({ user })
+    return NextResponse.json({ user: serializeUser(user) })
   } catch (err) {
     return errorResponse(err)
   }

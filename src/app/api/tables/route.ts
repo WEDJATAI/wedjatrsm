@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { TABLE_SHAPES } from '@/lib/constants'
 import { serializeTable } from '@/lib/orders'
 
 function parsePercent(value: unknown, label: string): number {
@@ -41,8 +42,17 @@ export async function POST(req: NextRequest) {
     const positionX = body?.positionX == null ? 50 : parsePercent(body.positionX, 'positionX')
     const positionY = body?.positionY == null ? 50 : parsePercent(body.positionY, 'positionY')
 
+    // Optional tile shape (defaults to 'square' at the DB level)
+    let shape: string | undefined
+    if (body?.shape != null) {
+      shape = String(body.shape)
+      if (!(TABLE_SHAPES as readonly string[]).includes(shape)) {
+        throw new ApiError('Invalid shape', 400)
+      }
+    }
+
     const table = await db.restaurantTable.create({
-      data: { floorPlanId, name, capacity, positionX, positionY },
+      data: { floorPlanId, name, capacity, positionX, positionY, shape },
     })
     return NextResponse.json({ table: serializeTable(table) })
   } catch (err) {

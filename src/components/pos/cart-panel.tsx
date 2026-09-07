@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowLeftRight,
   Ban,
   Check,
   CreditCard,
@@ -15,6 +16,7 @@ import {
   ShoppingBag,
   StickyNote,
   Trash2,
+  Users,
   X,
 } from 'lucide-react'
 
@@ -34,9 +36,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
-import { apiFetch } from '@/lib/api'
-import { COURSES, COURSE_LABELS, ITEM_STATUS_LABELS, ROLE_LABELS, TAX_RATE } from '@/lib/constants'
+import { apiFetch, fetcher } from '@/lib/api'
+import { COURSES, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Order, OrderItem } from '@/lib/types'
 import { computeCartTotals, round2, type DraftItem } from './pos-utils'
@@ -79,6 +82,7 @@ export default function CartPanel({
   userRole,
 }: CartPanelProps) {
   const queryClient = useQueryClient()
+  const { t } = useI18n()
   const orderId = order?.id ?? null
 
   const [editing, setEditing] = useState<DraftItem | null>(null)
@@ -91,8 +95,22 @@ export default function CartPanel({
   const [percentInput, setPercentInput] = useState('')
   const [fixedInput, setFixedInput] = useState('')
 
+  // ── Item transfer ("Move items") state ────────────────────────────
+  const [moveMode, setMoveMode] = useState(false)
+  const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+
   const totals = computeCartTotals(order, draft)
   const noItems = (order?.items.length ?? 0) + draft.length === 0
+
+  // Open orders (for the move-items target picker) — only fetched while the
+  // picker dialog is open; the query key matches the floor's live query.
+  const { data: openOrdersData, isLoading: openOrdersLoading } = useQuery({
+    queryKey: ['orders', 'open'],
+    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+    enabled: moveDialogOpen,
+  })
+  const otherOpenOrders = (openOrdersData?.orders ?? []).filter((o) => o.id !== orderId)
 
   // ── Server mutations (sent items) ─────────────────────────────────
   const markServed = useMutation({
@@ -102,7 +120,7 @@ export default function CartPanel({
         body: { status: 'served' },
       }),
     onSuccess: async (data) => {
-      toast.success(`${data.item.product?.name ?? 'Item'} marked served`)
+      toast.success(t('pos.markedServedToast', { name: data.item.product?.name ?? t('pos.item') }))
       await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
     },
@@ -111,7 +129,7 @@ export default function CartPanel({
 
   const removeItem = useMutation({
     mutationFn: (itemId: number) => {
-      if (orderId == null) throw new Error('No active order')
+      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
       return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
         method: 'PUT',
         body: { removeItemIds: [itemId] },
@@ -122,14 +140,14 @@ export default function CartPanel({
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
       await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
-      toast.success('Item removed from order')
+      toast.success(t('pos.itemRemovedToast'))
     },
     onError: (err: Error) => toast.error(err.message),
   })
 
   const applyDiscount = useMutation({
     mutationFn: (discountAmount: number) => {
-      if (orderId == null) throw new Error('No active order')
+      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
       return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
         method: 'PUT',
         body: { discountAmount },
@@ -140,11 +158,75 @@ export default function CartPanel({
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
       await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
-      toast.success('Discount updated')
+      toast.success(t('pos.discountUpdatedToast'))
       setDiscountOpen(false)
     },
     onError: (err: Error) => toast.error(err.message),
   })
+
+  // ── Item transfer mutation (move sent items to another open order) ──
+  const transferItems = useMutation({
+    mutationFn: (vars: {
+      sourceId: number
+      itemIds: number[]
+      targetOrderId: number
+      targetLabel: string
+    }) =>
+      apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
+        method: 'POST',
+        body: { itemIds: vars.itemIds, targetOrderId: vars.targetOrderId },
+      }),
+    onSuccess: async (_data, vars) => {
+      toast.success(
+        t('pos.itemsMovedToast', { n: vars.itemIds.length, target: vars.targetLabel }),
+      )
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.sourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.targetOrderId] }),
+      ])
+      exitMoveMode()
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // ── Move-items helpers ───────────────────────────────────────────
+  const enterMoveMode = () => {
+    setMoveMode(true)
+    setMoveSelected(new Set())
+  }
+
+  const exitMoveMode = () => {
+    setMoveMode(false)
+    setMoveSelected(new Set())
+    setMoveDialogOpen(false)
+  }
+
+  const toggleMoveItem = (itemId: number) => {
+    setMoveSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  // Only ids that still exist on the (live-polled) order — stale ids are dropped.
+  const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
+  const moveCount = selectedMoveIds.length
+
+  const pickMoveTarget = (target: Order) => {
+    if (orderId == null || moveCount === 0) return
+    transferItems.mutate({
+      sourceId: orderId,
+      itemIds: selectedMoveIds,
+      targetOrderId: target.id,
+      targetLabel: target.table?.name ?? t('common.takeaway'),
+    })
+  }
 
   // ── Draft helpers ─────────────────────────────────────────────────
   const updateDraft = (key: string, patch: Partial<DraftItem>) =>
@@ -202,17 +284,18 @@ export default function CartPanel({
           <p className="truncate text-base font-bold">{table.name}</p>
           {(order?.user?.name || userRole) && (
             <p className="text-[11px] text-muted-foreground">
-              Server: {order?.user?.name ?? (userRole ? (ROLE_LABELS[userRole] ?? userRole) : '')}
+              {t('pos.server')}:{' '}
+              {order?.user?.name ?? (userRole ? t(`role.${userRole}`) : '')}
             </p>
           )}
         </div>
         {order ? (
           <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
-            Order #{order.id}
+            {t('common.order')} #{order.id}
           </Badge>
         ) : (
           <Badge variant="secondary" className="shrink-0">
-            Not sent
+            {t('pos.notSent')}
           </Badge>
         )}
       </div>
@@ -228,28 +311,45 @@ export default function CartPanel({
         ) : noItems ? (
           <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
             <ShoppingBag className="size-10 opacity-30" />
-            <p className="text-sm">Tap products to add items</p>
+            <p className="text-sm">{t('pos.tapToAdd')}</p>
           </div>
         ) : (
           <>
             {/* Sent to kitchen */}
             {order && order.items.length > 0 && (
               <section className="py-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Sent to kitchen ({order.items.length})
+                    {t('pos.sentItems')} ({order.items.length})
                   </h3>
-                  {canCancel && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      title="Cancel this order"
-                      onClick={onCancel}
-                    >
-                      <Ban className="size-3.5" /> Cancel order
-                    </Button>
-                  )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {!moveMode && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 px-2 text-xs border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                        title={t('pos.transferItems')}
+                        onClick={enterMoveMode}
+                      >
+                        <ArrowLeftRight className="size-3.5" /> {t('pos.transferItems')}
+                      </Button>
+                    )}
+                    {moveMode ? (
+                      <span className="text-[11px] text-muted-foreground">{t('pos.moveModeHint')}</span>
+                    ) : (
+                      canCancel && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          title={t('pos.cancelOrder')}
+                          onClick={onCancel}
+                        >
+                          <Ban className="size-3.5" /> {t('pos.cancelOrder')}
+                        </Button>
+                      )
+                    )}
+                  </div>
                 </div>
                 {order.items.map((item) => (
                   <SentItemRow
@@ -259,6 +359,9 @@ export default function CartPanel({
                     onRemove={() => removeItem.mutate(item.id)}
                     servedPending={markServed.isPending && markServed.variables === item.id}
                     removePending={removeItem.isPending && removeItem.variables === item.id}
+                    moveMode={moveMode}
+                    moveSelected={moveSelected.has(item.id)}
+                    onToggleMove={() => toggleMoveItem(item.id)}
                   />
                 ))}
               </section>
@@ -268,7 +371,7 @@ export default function CartPanel({
             {draft.length > 0 && (
               <section className="py-2">
                 <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  New items — not sent ({draft.length})
+                  {t('pos.newItemsNotSent')} ({draft.length})
                 </h3>
                 {draft.map((d) => (
                   <DraftRow
@@ -287,16 +390,16 @@ export default function CartPanel({
 
       {/* Footer */}
       <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
-        <SummaryRow label="Subtotal" value={formatCurrency(totals.subtotal)} />
+        <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
         <div className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-1 text-muted-foreground">
-            Discount
+            {t('money.discount')}
             <Button
               variant="ghost"
               size="icon"
               className="size-7 text-muted-foreground"
               disabled={!order}
-              title={order ? 'Apply discount' : 'Send order first'}
+              title={order ? t('pos.applyDiscount') : t('pos.sendFirst')}
               onClick={openDiscountDialog}
             >
               <Pencil className="size-3.5" />
@@ -306,68 +409,152 @@ export default function CartPanel({
             − {formatCurrency(totals.discount)}
           </span>
         </div>
-        <SummaryRow label={`VAT ${Math.round(TAX_RATE * 100)}%`} value={formatCurrency(totals.tax)} />
+        <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
         <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
-          <span className="text-sm font-semibold">Total</span>
+          <span className="text-sm font-semibold">{t('money.total')}</span>
           <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
         </div>
         {order && order.paidAmount > 0 && (
           <>
             <SummaryRow
-              label="Paid"
+              label={t('money.paid')}
               value={formatCurrency(order.paidAmount)}
               valueClassName="text-emerald-600"
             />
             <SummaryRow
-              label="Remaining"
+              label={t('money.remaining')}
               value={formatCurrency(Math.max(0, order.remainingAmount))}
               valueClassName="font-bold text-amber-600"
             />
           </>
         )}
 
-        {/* Actions */}
-        <Button
-          variant="secondary"
-          className="h-11 w-full rounded-xl"
-          disabled={draft.length === 0 || sending}
-          onClick={onSend}
-        >
-          {sending ? <Loader2 className="animate-spin" /> : <Send />} Send to Kitchen
-          {draft.length > 0 && (
-            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
-              {draft.reduce((n, d) => n + d.quantity, 0)}
-            </Badge>
-          )}
-        </Button>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
-            disabled={!order || sending || !onPrintCheck}
-            title={!order ? 'Send items to the kitchen first' : 'Print a pre-payment guest check'}
-            onClick={onPrintCheck}
-          >
-            <Printer />
-            <span className="hidden sm:inline">Print Check</span>
-          </Button>
-          <Button
-            className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
-            disabled={noItems || sending}
-            onClick={onPay}
-          >
-            {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
-            <span className="truncate">Payment · {formatCurrency(totals.total)}</span>
-          </Button>
-        </div>
+        {moveMode ? (
+          /* ── Item-transfer footer ── */
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+              onClick={exitMoveMode}
+              disabled={transferItems.isPending}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              className="h-14 flex-[1.6] rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+              disabled={moveCount === 0 || transferItems.isPending}
+              onClick={() => setMoveDialogOpen(true)}
+            >
+              {transferItems.isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <ArrowLeftRight className="size-5" />
+              )}
+              <span className="truncate">{t('pos.moveNItems', { n: moveCount })}</span>
+            </Button>
+          </div>
+        ) : (
+          /* ── Normal actions ── */
+          <>
+            <Button
+              variant="secondary"
+              className="h-11 w-full rounded-xl"
+              disabled={draft.length === 0 || sending}
+              onClick={onSend}
+            >
+              {sending ? <Loader2 className="animate-spin" /> : <Send />} {t('pos.sendToKitchen')}
+              {draft.length > 0 && (
+                <Badge className="ms-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+                  {draft.reduce((n, d) => n + d.quantity, 0)}
+                </Badge>
+              )}
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+                disabled={!order || sending || !onPrintCheck}
+                title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
+                onClick={onPrintCheck}
+              >
+                <Printer />
+                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+              </Button>
+              <Button
+                className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+                disabled={noItems || sending}
+                onClick={onPay}
+              >
+                {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+                <span className="truncate">
+                  {t('pos.payment')} · {formatCurrency(totals.total)}
+                </span>
+              </Button>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Move-items target picker dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="size-5 text-[#714B67]" /> {t('pos.moveItemsTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
+          </DialogHeader>
+          <div className="rms-scroll max-h-[50dvh] space-y-2 overflow-y-auto">
+            {openOrdersLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </div>
+            ) : otherOpenOrders.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {t('pos.noOtherOpenOrders')}
+              </p>
+            ) : (
+              otherOpenOrders.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  disabled={transferItems.isPending}
+                  onClick={() => pickMoveTarget(o)}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">
+                      {o.table?.name ?? t('common.takeaway')}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      {t('common.order')} #{o.id}
+                      <span className="inline-flex items-center gap-1">
+                        <Users className="size-3.5" aria-hidden /> {o.guests} {t('common.people')}
+                      </span>
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-[#714B67]">
+                    {formatCurrency(o.totalAmount)}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={transferItems.isPending}>
+              {t('common.cancel')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Draft item edit dialog */}
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{editing?.name}</DialogTitle>
-            <DialogDescription>Adjust quantity, notes and course.</DialogDescription>
+            <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3">
@@ -397,16 +584,16 @@ export default function CartPanel({
               </Button>
             </div>
             <div className="space-y-1.5">
-              <p className="text-sm font-medium">Notes</p>
+              <p className="text-sm font-medium">{t('common.notes')}</p>
               <Textarea
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
-                placeholder="e.g. no onions, extra spicy…"
+                placeholder={t('pos.notesPlaceholder')}
                 rows={2}
               />
             </div>
             <div className="space-y-1.5">
-              <p className="text-sm font-medium">Course</p>
+              <p className="text-sm font-medium">{t('pos.course')}</p>
               <Select value={editCourse} onValueChange={setEditCourse}>
                 <SelectTrigger className="h-11 w-full">
                   <SelectValue />
@@ -414,7 +601,7 @@ export default function CartPanel({
                 <SelectContent>
                   {COURSES.map((c) => (
                     <SelectItem key={c} value={c}>
-                      {COURSE_LABELS[c]}
+                      {t(`course.${c}`)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -423,10 +610,10 @@ export default function CartPanel({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button onClick={saveEdit} disabled={!(parseFloat(editQty) > 0)}>
-              Save
+              {t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -436,15 +623,13 @@ export default function CartPanel({
       <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Apply discount</DialogTitle>
-            <DialogDescription>
-              Order-level discount on sent items (EGP, before VAT).
-            </DialogDescription>
+            <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
+            <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
           </DialogHeader>
           <Tabs value={discountTab} onValueChange={(v) => setDiscountTab(v as 'percent' | 'fixed')}>
             <TabsList className="grid h-10 w-full grid-cols-2">
-              <TabsTrigger value="percent">Percent</TabsTrigger>
-              <TabsTrigger value="fixed">Fixed</TabsTrigger>
+              <TabsTrigger value="percent">{t('pos.percent')}</TabsTrigger>
+              <TabsTrigger value="fixed">{t('pos.fixed')}</TabsTrigger>
             </TabsList>
             <TabsContent value="percent" className="pt-3">
               <div className="flex items-center gap-2">
@@ -472,16 +657,18 @@ export default function CartPanel({
                   placeholder="0"
                   className="h-11 text-right text-base tabular-nums"
                 />
-                <span className="text-lg font-semibold text-muted-foreground">EGP</span>
+                <span className="text-lg font-semibold text-muted-foreground">
+                  {t('pos.currencySuffix')}
+                </span>
               </div>
             </TabsContent>
           </Tabs>
           <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
-            <SummaryRow label="Order subtotal" value={formatCurrency(orderSubtotal)} />
-            <SummaryRow label="Discount" value={`− ${formatCurrency(previewDiscount)}`} />
-            <SummaryRow label={`VAT ${Math.round(TAX_RATE * 100)}%`} value={formatCurrency(previewTax)} />
+            <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
+            <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
+            <SummaryRow label={t('money.tax')} value={formatCurrency(previewTax)} />
             <div className="flex items-center justify-between border-t pt-1.5 font-bold">
-              <span>New total</span>
+              <span>{t('pos.newTotal')}</span>
               <span className="tabular-nums">
                 {formatCurrency(round2(previewBase + previewTax))}
               </span>
@@ -489,13 +676,13 @@ export default function CartPanel({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDiscountOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               onClick={() => applyDiscount.mutate(previewDiscount)}
               disabled={applyDiscount.isPending}
             >
-              {applyDiscount.isPending && <Loader2 className="animate-spin" />} Apply
+              {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -527,28 +714,57 @@ function SentItemRow({
   onRemove,
   servedPending,
   removePending,
+  moveMode,
+  moveSelected,
+  onToggleMove,
 }: {
   item: OrderItem
   onServed: () => void
   onRemove: () => void
   servedPending: boolean
   removePending: boolean
+  moveMode: boolean
+  moveSelected: boolean
+  onToggleMove: () => void
 }) {
+  const { t } = useI18n()
   const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
   const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
   return (
-    <div className="flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0">
+    <div
+      onClick={moveMode ? onToggleMove : undefined}
+      role={moveMode ? 'button' : undefined}
+      aria-pressed={moveMode ? moveSelected : undefined}
+      className={cn(
+        'flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0',
+        moveMode && 'cursor-pointer rounded-lg transition-colors',
+        moveMode && moveSelected && 'bg-[#714B67]/10',
+      )}
+    >
+      {moveMode && (
+        <span
+          className={cn(
+            'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+            moveSelected
+              ? 'border-[#714B67] bg-[#714B67] text-white'
+              : 'border-[#E2E2E0] bg-white',
+          )}
+          aria-hidden
+        >
+          {moveSelected && <Check className="size-3.5" />}
+        </span>
+      )}
       <span
         className={cn(
           'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
           chip,
         )}
       >
-        {ITEM_STATUS_LABELS[item.status] ?? item.status}
+        {t(`status.item.${item.status}`)}
       </span>
       <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
         <p className="truncate text-sm font-medium">
-          {formatQty(item.quantity)} × {item.product?.name ?? 'Item'}
+          {formatQty(item.quantity)} × {item.product?.name ?? t('pos.item')}
         </p>
         {item.notes && (
           <p className="flex items-center gap-1 truncate text-xs text-amber-600">
@@ -559,39 +775,41 @@ function SentItemRow({
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
-        <div className="flex gap-1">
-          {item.status === 'ready' && (
+        {!moveMode && (
+          <div className="flex gap-1">
+            {item.status === 'ready' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                disabled={servedPending}
+                onClick={onServed}
+                title={t('pos.markServed')}
+              >
+                {servedPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5" />
+                )}
+                {t('status.item.served')}
+              </Button>
+            )}
             <Button
               variant="ghost"
-              size="sm"
-              className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
-              disabled={servedPending}
-              onClick={onServed}
-              title="Mark as served"
+              size="icon"
+              className="size-8 text-muted-foreground hover:text-destructive"
+              disabled={removePending}
+              onClick={onRemove}
+              title={t('pos.removeItem')}
             >
-              {servedPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
+              {removePending ? (
+                <Loader2 className="size-4 animate-spin" />
               ) : (
-                <Check className="size-3.5" />
+                <Trash2 className="size-4" />
               )}
-              Served
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-muted-foreground hover:text-destructive"
-            disabled={removePending}
-            onClick={onRemove}
-            title="Remove item from order"
-          >
-            {removePending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Trash2 className="size-4" />
-            )}
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -608,6 +826,7 @@ function DraftRow({
   onEdit: () => void
   onRemove: () => void
 }) {
+  const { t } = useI18n()
   return (
     <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
       <div className="flex shrink-0 items-center gap-1">
@@ -623,17 +842,15 @@ function DraftRow({
       </div>
       <button
         type="button"
-        className="min-w-0 flex-1 text-left"
+        className="min-w-0 flex-1 text-start"
         onClick={onEdit}
-        title="Edit notes, course & quantity"
+        title={t('pos.editItemDesc')}
       >
         <p className="flex items-center gap-1 truncate text-sm font-medium">
           <span className="truncate">{item.name}</span>
           {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
         </p>
-        <p className="text-[11px] text-muted-foreground">
-          {COURSE_LABELS[item.course] ?? item.course}
-        </p>
+        <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
       </button>
       <span className="shrink-0 text-sm font-semibold tabular-nums">
         {formatCurrency(round2(item.quantity * item.price))}
@@ -643,7 +860,7 @@ function DraftRow({
         size="icon"
         className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
         onClick={onRemove}
-        title="Remove line"
+        title={t('pos.removeLine')}
       >
         <X className="size-4" />
       </Button>

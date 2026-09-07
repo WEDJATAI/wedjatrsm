@@ -9,6 +9,7 @@ import {
   Boxes,
   ChefHat,
   Receipt,
+  Users,
   Utensils,
   type LucideIcon,
 } from 'lucide-react'
@@ -29,36 +30,49 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { fetcher } from '@/lib/api'
-import { formatCurrency, formatDate, formatQty, toDateInputValue } from '@/lib/format'
+import { formatCurrency, formatDate, formatLocale, formatQty, toDateInputValue } from '@/lib/format'
 import type { InventoryItem, Order, SalesReport } from '@/lib/types'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
-const QUICK_ACTIONS: { view: string; label: string; icon: LucideIcon }[] = [
-  { view: 'pos', label: 'POS', icon: Utensils },
-  { view: 'kitchen', label: 'Kitchen', icon: ChefHat },
-  { view: 'inventory', label: 'Inventory', icon: Boxes },
-  { view: 'reports', label: 'Reports', icon: BarChart3 },
+const QUICK_ACTIONS: { view: string; labelKey: string; icon: LucideIcon }[] = [
+  { view: 'pos', labelKey: 'nav.pos', icon: Utensils },
+  { view: 'kitchen', labelKey: 'nav.kitchen', icon: ChefHat },
+  { view: 'inventory', labelKey: 'nav.inventory', icon: Boxes },
+  { view: 'reports', labelKey: 'nav.reports', icon: BarChart3 },
 ]
+
+/** Locale-aware date formatters (Latin digits in Arabic, per format.ts). */
+function dayLocale(): string {
+  return formatLocale() === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB'
+}
 
 /** "05 Mar" */
 function dayShort(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00`)
   if (Number.isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+  return d.toLocaleDateString(dayLocale(), { day: '2-digit', month: 'short' })
 }
 
 /** "Tue, 05 Mar" */
 function dayLabel(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00`)
   if (Number.isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' })
+  return d.toLocaleDateString(dayLocale(), { weekday: 'short', day: '2-digit', month: 'short' })
 }
 
+/** Compact axis money: "E£12k" / "12 ألف ج.م" style (Latin digits in Arabic). */
 function yTick(value: number): string {
-  return `EGP ${Math.round(value)}`
+  const locale = dayLocale()
+  const compact = new Intl.NumberFormat(locale, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
+  return formatLocale() === 'ar' ? `${compact} ج.م` : `E£${compact}`
 }
 
 export default function DashboardView({ onNavigate }: { onNavigate?: (view: string) => void }) {
+  const { t } = useI18n()
   const today = useMemo(() => toDateInputValue(new Date()), [])
   const weekStart = useMemo(() => {
     const d = new Date()
@@ -139,14 +153,14 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div className="space-y-1">
           <nav aria-label="Breadcrumb" className="text-xs text-muted-foreground">
-            <span>Home</span>
+            <span>{t('nav.home')}</span>
             <span className="mx-1.5" aria-hidden>
               /
             </span>
-            <span className="font-medium text-primary">Dashboard</span>
+            <span className="font-medium text-primary">{t('admin.dashboard')}</span>
           </nav>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Today at a glance</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('admin.dashboard')}</h1>
+          <p className="text-sm text-muted-foreground">{t('admin.todayAtGlance')}</p>
         </div>
         <p className="text-xs text-muted-foreground">{formatDate(new Date())}</p>
       </div>
@@ -154,26 +168,30 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
       {errorMessage && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" aria-hidden />
-          <AlertTitle>Some dashboard data failed to load</AlertTitle>
+          <AlertTitle>{t('admin.dashboardError')}</AlertTitle>
           <AlertDescription>{errorMessage}</AlertDescription>
         </Alert>
       )}
 
       {/* KPI cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <KpiCard
-          label="Revenue today"
+          label={t('admin.revenueToday')}
           icon={Banknote}
           iconClass="bg-emerald-100 text-emerald-700"
           loading={salesLoading}
           value={salesError ? '—' : formatCurrency(todaySales.data?.totalRevenue ?? 0)}
           sub={
-            salesError ? 'failed to load' : todaySales.data ? `${todaySales.data.totalOrders} orders today` : undefined
+            salesError
+              ? t('admin.failedToLoad')
+              : todaySales.data
+                ? t('admin.ordersToday', { count: todaySales.data.totalOrders })
+                : undefined
           }
           subError={salesError}
         />
         <KpiCard
-          label="Open orders"
+          label={t('admin.openOrders')}
           icon={Utensils}
           iconClass="bg-primary/10 text-primary"
           loading={openOrders.isLoading}
@@ -181,27 +199,42 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
           sub={
             <span className="inline-flex items-center gap-1.5">
               <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" aria-hidden />
-              live · refreshes 5s
+              {t('admin.liveRefresh')}
             </span>
           }
           subError={openOrders.isError}
         />
         <KpiCard
-          label="Avg order value"
+          label={t('money.avgOrderValue')}
           icon={Receipt}
           iconClass="bg-stone-100 text-stone-700"
           loading={salesLoading}
           value={salesError ? '—' : formatCurrency(todaySales.data?.avgOrderValue ?? 0)}
-          sub={salesError ? 'failed to load' : 'per paid order today'}
+          sub={salesError ? t('admin.failedToLoad') : t('admin.perPaidOrder')}
           subError={salesError}
         />
         <KpiCard
-          label="Low stock items"
+          label={t('money.avgCheckPerPerson')}
+          icon={Users}
+          iconClass="bg-primary/15 text-primary"
+          loading={salesLoading}
+          value={salesError ? '—' : formatCurrency(todaySales.data?.avgCheckPerPerson ?? 0)}
+          sub={
+            salesError
+              ? t('admin.failedToLoad')
+              : todaySales.data
+                ? t('admin.perGuestToday', { count: todaySales.data.totalGuests })
+                : undefined
+          }
+          subError={salesError}
+        />
+        <KpiCard
+          label={t('admin.lowStock')}
           icon={AlertCircle}
           iconClass="bg-amber-100 text-amber-700"
           loading={lowStock.isLoading}
           value={lowStock.isError ? '—' : String(lowStock.data?.items.length ?? 0)}
-          sub={lowStock.isError ? 'failed to load' : 'below reorder threshold'}
+          sub={lowStock.isError ? t('admin.failedToLoad') : t('admin.belowThreshold')}
           subError={lowStock.isError}
         />
       </div>
@@ -211,22 +244,30 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
         {/* Revenue — last 7 days */}
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Revenue — last 7 days</CardTitle>
+            <CardTitle>{t('admin.revenueLast7')}</CardTitle>
             <CardDescription>
               {weekSales.isLoading
-                ? 'Loading…'
+                ? t('common.loading')
                 : weekSales.data
-                  ? `${formatCurrency(weekSales.data.totalRevenue)} across ${weekSales.data.totalOrders} paid orders`
-                  : 'Paid orders only'}
+                  ? t('admin.acrossOrders', {
+                      revenue: formatCurrency(weekSales.data.totalRevenue),
+                      count: weekSales.data.totalOrders,
+                    })
+                  : t('admin.paidOrdersOnly')}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {weekSales.isError ? (
-              <ChartError message={weekSales.error instanceof Error ? weekSales.error.message : 'Request failed'} />
+              <ChartError
+                title={t('admin.chartLoadFailed')}
+                message={weekSales.error instanceof Error ? weekSales.error.message : t('error.generic')}
+              />
             ) : weekSales.isLoading ? (
               <Skeleton className="h-72 w-full" />
             ) : !hasWeekSales ? (
-              <div className="grid h-72 place-items-center text-sm text-muted-foreground">No sales yet</div>
+              <div className="grid h-72 place-items-center text-sm text-muted-foreground">
+                {t('admin.noSalesYet')}
+              </div>
             ) : (
               <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -259,7 +300,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                       labelStyle={{ color: '#6b6b6b', fontWeight: 600 }}
                       itemStyle={{ color: '#37352f' }}
                       labelFormatter={(label) => dayLabel(String(label))}
-                      formatter={(value) => [formatCurrency(Number(value)), 'Revenue'] as [string, string]}
+                      formatter={(value) => [formatCurrency(Number(value)), t('admin.revenue')] as [string, string]}
                     />
                     <Bar dataKey="revenue" fill="#714B67" radius={[6, 6, 0, 0]} maxBarSize={44} />
                   </BarChart>
@@ -272,12 +313,15 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
         {/* Top products */}
         <Card>
           <CardHeader>
-            <CardTitle>Top products</CardTitle>
-            <CardDescription>Best sellers · last 7 days</CardDescription>
+            <CardTitle>{t('admin.topProducts')}</CardTitle>
+            <CardDescription>{t('admin.topProductsDesc')}</CardDescription>
           </CardHeader>
           <CardContent>
             {weekSales.isError ? (
-              <ChartError message={weekSales.error instanceof Error ? weekSales.error.message : 'Request failed'} />
+              <ChartError
+                title={t('admin.chartLoadFailed')}
+                message={weekSales.error instanceof Error ? weekSales.error.message : t('error.generic')}
+              />
             ) : weekSales.isLoading ? (
               <div className="space-y-4">
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -292,7 +336,9 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                 ))}
               </div>
             ) : topProducts.length === 0 ? (
-              <div className="grid h-72 place-items-center text-sm text-muted-foreground">No sales yet</div>
+              <div className="grid h-72 place-items-center text-sm text-muted-foreground">
+                {t('admin.noSalesYet')}
+              </div>
             ) : (
               <ol className="space-y-4">
                 {topProducts.map((p, i) => (
@@ -310,7 +356,9 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                       <span className="min-w-0 flex-1 truncate text-sm font-medium" title={p.name}>
                         {p.name}
                       </span>
-                      <span className="shrink-0 text-xs text-muted-foreground">{formatQty(p.quantity)} sold</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {t('admin.sold', { qty: formatQty(p.quantity) })}
+                      </span>
                       <span className="shrink-0 text-sm font-semibold tabular-nums">
                         {formatCurrency(p.revenue)}
                       </span>
@@ -318,7 +366,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                     <Progress
                       value={Math.min(100, (p.revenue / maxTopRevenue) * 100)}
                       className="h-1.5"
-                      aria-label={`${p.name} share of top revenue`}
+                      aria-label={t('admin.shareOfTop', { name: p.name })}
                     />
                   </li>
                 ))}
@@ -331,7 +379,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
       {/* Quick actions */}
       {onNavigate && (
         <Card className="gap-3 p-5">
-          <p className="text-sm font-semibold">Quick actions</p>
+          <p className="text-sm font-semibold">{t('admin.quickActions')}</p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {QUICK_ACTIONS.map((action) => {
               const Icon = action.icon
@@ -343,7 +391,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                   className="h-16 flex-col gap-1.5 rounded-xl hover:border-primary hover:bg-primary/5 hover:text-primary"
                 >
                   <Icon className="h-5 w-5" aria-hidden />
-                  <span className="text-xs font-medium">{action.label}</span>
+                  <span className="text-xs font-medium">{t(action.labelKey)}</span>
                 </Button>
               )
             })}
@@ -395,12 +443,12 @@ function KpiCard({
   )
 }
 
-function ChartError({ message }: { message: string }) {
+function ChartError({ title, message }: { title: string; message: string }) {
   return (
     <div className="grid h-72 place-items-center px-4">
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" aria-hidden />
-        <AlertTitle>Failed to load chart</AlertTitle>
+        <AlertTitle>{title}</AlertTitle>
         <AlertDescription>{message}</AlertDescription>
       </Alert>
     </div>

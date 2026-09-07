@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { TABLE_SHAPES } from '@/lib/constants'
 import { parseId, serializeTable } from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -25,6 +26,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       capacity?: number
       positionX?: number
       positionY?: number
+      shape?: string
       status?: string
       active?: boolean
     } = {}
@@ -54,6 +56,13 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         throw new ApiError('positionY must be a number between 0 and 100', 400)
       }
       data.positionY = positionY
+    }
+    if (body?.shape != null) {
+      const shape = String(body.shape)
+      if (!(TABLE_SHAPES as readonly string[]).includes(shape)) {
+        throw new ApiError('Invalid shape', 400)
+      }
+      data.shape = shape
     }
     if (body?.status != null) {
       const status = String(body.status)

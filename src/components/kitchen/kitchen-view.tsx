@@ -9,21 +9,23 @@ import { KitchenOrderCard, type CourseFilter } from '@/components/kitchen/kitche
 import { Badge } from '@/components/ui/badge'
 import { apiFetch, fetcher } from '@/lib/api'
 import { COURSES, type ItemStatus } from '@/lib/constants'
+import { useI18n } from '@/lib/i18n'
 import type { Order, OrderItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const FILTER_LABELS: Record<CourseFilter, string> = {
-  all: 'All',
-  starter: 'Starters',
-  main: 'Mains',
-  dessert: 'Desserts',
-  drink: 'Drinks',
+const FILTER_LABEL_KEYS: Record<CourseFilter, string> = {
+  all: 'kds.all',
+  starter: 'kds.filterStarters',
+  main: 'kds.filterMains',
+  dessert: 'kds.filterDesserts',
+  drink: 'kds.filterDrinks',
 }
 
 const COURSE_FILTERS: CourseFilter[] = ['all', ...COURSES]
 
 /** Kitchen Display System — dark kitchen screen (by design, not dark mode). */
 export default function KitchenView() {
+  const { t, isRTL } = useI18n()
   const queryClient = useQueryClient()
   const [courseFilter, setCourseFilter] = useState<CourseFilter>('all')
   const [clock, setClock] = useState(() => new Date())
@@ -87,7 +89,7 @@ export default function KitchenView() {
       return { previous }
     },
     onError: (mutationError, _variables, context) => {
-      toast.error(mutationError.message || 'Failed to update item')
+      toast.error(mutationError.message || t('kds.updateFailed'))
       if (context?.previous) {
         queryClient.setQueryData(['orders', 'open'], context.previous)
       }
@@ -99,7 +101,7 @@ export default function KitchenView() {
 
   const pendingItemId = statusMutation.isPending ? (statusMutation.variables?.id ?? null) : null
 
-  const clockText = clock.toLocaleTimeString('en-GB', {
+  const clockText = clock.toLocaleTimeString(isRTL ? 'ar-EG-u-nu-latn' : 'en-GB', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -113,16 +115,16 @@ export default function KitchenView() {
           <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/20">
             <ChefHat className="size-6" />
           </div>
-          <h1 className="text-xl font-bold">Kitchen Display</h1>
+          <h1 className="text-xl font-bold">{t('kds.title')}</h1>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400">
             <span className="relative flex size-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
             </span>
-            live · 3s
+            {t('kds.live3s')}
           </span>
           <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-zinc-400">
-            {orders.length} open · {pendingItemCount} items pending
+            {t('kds.stats', { n: orders.length, m: pendingItemCount })}
           </Badge>
         </div>
 
@@ -143,7 +145,7 @@ export default function KitchenView() {
                       : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200',
                   )}
                 >
-                  {FILTER_LABELS[filter]}
+                  {t(FILTER_LABEL_KEYS[filter])}
                 </button>
               )
             })}
@@ -153,7 +155,7 @@ export default function KitchenView() {
 
       {isError && (
         <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
-          {error instanceof Error ? error.message : 'Failed to load open orders'}
+          {error instanceof Error ? error.message : t('kds.loadFailed')}
         </div>
       )}
 
@@ -169,7 +171,7 @@ export default function KitchenView() {
       ) : sortedOrders.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
           <ChefHat className="size-24 text-zinc-800" strokeWidth={1} />
-          <p className="text-lg text-zinc-500">No open orders — all caught up!</p>
+          <p className="text-lg text-zinc-500">{t('kds.empty')}</p>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">

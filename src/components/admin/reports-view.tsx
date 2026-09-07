@@ -10,6 +10,7 @@ import {
   CalendarRange,
   Receipt,
   TrendingUp,
+  Users,
   Wallet,
 } from 'lucide-react'
 import {
@@ -27,8 +28,8 @@ import {
 } from 'recharts'
 import { fetcher } from '@/lib/api'
 import type { InventoryValueReport, SalesReport } from '@/lib/types'
-import { PAYMENT_METHOD_LABELS } from '@/lib/constants'
-import { formatCurrency, formatDate, toDateInputValue } from '@/lib/format'
+import { formatCurrency, formatDate, formatLocale, toDateInputValue } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -53,20 +54,28 @@ function parseDay(value: string): Date {
   return new Date(`${value}T00:00:00`)
 }
 
+function dayLocale(): string {
+  return formatLocale() === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB'
+}
+
 function shortDay(dateStr: string): string {
-  return parseDay(dateStr).toLocaleDateString('en-GB', {
+  return parseDay(dateStr).toLocaleDateString(dayLocale(), {
     day: '2-digit',
     month: 'short',
   })
 }
 
-const COMPACT = new Intl.NumberFormat('en', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
+function compactFormatter(): Intl.NumberFormat {
+  return new Intl.NumberFormat(dayLocale(), {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  })
+}
 
 function axisEGP(value: number): string {
-  return `E£${COMPACT.format(value)}`
+  return formatLocale() === 'ar'
+    ? `${compactFormatter().format(value)} ج.م`
+    : `E£${compactFormatter().format(value)}`
 }
 
 const PIE_PALETTE = ['#d97706', '#f59e0b', '#059669', '#a8a29e', '#e11d48', '#78716c']
@@ -115,11 +124,13 @@ function ChartCard({
   title,
   description,
   empty,
+  emptyLabel,
   children,
 }: {
   title: string
   description?: string
   empty?: boolean
+  emptyLabel: string
   children: ReactNode
 }) {
   return (
@@ -132,7 +143,7 @@ function ChartCard({
         {empty ? (
           <div className="flex h-[280px] flex-col items-center justify-center gap-2 text-center">
             <BarChart3 className="size-8 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">No sales in this period</p>
+            <p className="text-sm text-muted-foreground">{emptyLabel}</p>
           </div>
         ) : (
           children
@@ -145,6 +156,7 @@ function ChartCard({
 // ─── Reports view ──────────────────────────────────────────────────
 
 export default function ReportsView() {
+  const { t } = useI18n()
   const [draftFrom, setDraftFrom] = useState(() => daysAgo(6))
   const [draftTo, setDraftTo] = useState(() => toDateInputValue(new Date()))
   const [range, setRange] = useState(() => ({
@@ -170,7 +182,11 @@ export default function ReportsView() {
     [report],
   )
   const byHour = useMemo(
-    () => (report?.byHour ?? []).map((h) => ({ ...h, label: `${h.hour}h` })),
+    () =>
+      (report?.byHour ?? []).map((h) => ({
+        ...h,
+        label: formatLocale() === 'ar' ? `${h.hour} س` : `${h.hour}h`,
+      })),
     [report],
   )
   const topProducts = report?.topProducts ?? []
@@ -180,7 +196,7 @@ export default function ReportsView() {
 
   function applyRange() {
     if (draftFrom > draftTo) {
-      toast.error('“From” date must be on or before “To” date')
+      toast.error(t('admin.rangeError'))
       return
     }
     setRange({ from: draftFrom, to: draftTo })
@@ -199,10 +215,8 @@ export default function ReportsView() {
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Reports</h1>
-        <p className="text-sm text-muted-foreground">
-          Sales performance and inventory insights
-        </p>
+        <h1 className="text-2xl font-bold">{t('nav.reports')}</h1>
+        <p className="text-sm text-muted-foreground">{t('admin.reportsSubtitle')}</p>
       </div>
 
       {/* Date range */}
@@ -210,7 +224,7 @@ export default function ReportsView() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="report-from" className="text-xs text-muted-foreground">
-              From
+              {t('admin.from')}
             </Label>
             <Input
               id="report-from"
@@ -223,7 +237,7 @@ export default function ReportsView() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="report-to" className="text-xs text-muted-foreground">
-              To
+              {t('admin.to')}
             </Label>
             <Input
               id="report-to"
@@ -237,39 +251,38 @@ export default function ReportsView() {
           </div>
           <Button onClick={applyRange} disabled={salesQuery.isFetching}>
             <CalendarRange />
-            Apply
+            {t('common.apply')}
           </Button>
-          <div className="ml-auto flex flex-wrap gap-2">
+          <div className="ms-auto flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => applyQuickRange(1)}>
-              Today
+              {t('common.today')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => applyQuickRange(7)}>
-              7 days
+              {t('admin.last7')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => applyQuickRange(30)}>
-              30 days
+              {t('admin.last30')}
             </Button>
           </div>
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Showing {formatDate(parseDay(range.from))} → {formatDate(parseDay(range.to))}
-          {report ? ` · ${report.totalOrders} paid order${report.totalOrders === 1 ? '' : 's'}` : ''}
+          {t('admin.showingRange', {
+            from: formatDate(parseDay(range.from)),
+            to: formatDate(parseDay(range.to)),
+          })}
+          {report ? ` · ${t('admin.paidOrders', { count: report.totalOrders })}` : ''}
         </p>
       </Card>
 
       {/* KPI row */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {salesQuery.isLoading ? (
-          <>
-            <Skeleton className="h-24 rounded-xl" />
-            <Skeleton className="h-24 rounded-xl" />
-            <Skeleton className="h-24 rounded-xl" />
-          </>
+          Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)
         ) : (
           <>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Total revenue</p>
+                <p className="text-sm text-muted-foreground">{t('admin.totalRevenue')}</p>
                 <TrendingUp className="size-5 text-emerald-600" />
               </div>
               <p className="text-2xl font-bold">
@@ -278,18 +291,30 @@ export default function ReportsView() {
             </Card>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Orders</p>
+                <p className="text-sm text-muted-foreground">{t('money.orders')}</p>
                 <Receipt className="size-5 text-muted-foreground" />
               </div>
               <p className="text-2xl font-bold">{report?.totalOrders ?? 0}</p>
             </Card>
             <Card className="gap-2 p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Avg order value</p>
+                <p className="text-sm text-muted-foreground">{t('money.avgOrderValue')}</p>
                 <Wallet className="size-5 text-amber-600" />
               </div>
               <p className="text-2xl font-bold">
                 {formatCurrency(report?.avgOrderValue ?? 0)}
+              </p>
+            </Card>
+            <Card className="gap-2 p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">{t('money.avgCheckPerPerson')}</p>
+                <Users className="size-5 text-primary" />
+              </div>
+              <p className="text-2xl font-bold">
+                {formatCurrency(report?.avgCheckPerPerson ?? 0)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t('admin.guestsSub', { count: report?.totalGuests ?? 0 })}
               </p>
             </Card>
           </>
@@ -313,14 +338,14 @@ export default function ReportsView() {
           <Card className="lg:col-span-2">
             <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
               <p className="text-sm text-rose-600">
-                {(salesQuery.error as Error | null)?.message ?? 'Failed to load report'}
+                {(salesQuery.error as Error | null)?.message ?? t('admin.loadReportFailed')}
               </p>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => void salesQuery.refetch()}
               >
-                Retry
+                {t('common.retry')}
               </Button>
             </CardContent>
           </Card>
@@ -328,9 +353,10 @@ export default function ReportsView() {
           <>
             {/* 1. Revenue by day */}
             <ChartCard
-              title="Revenue by day"
-              description="Paid revenue per day (zero-filled, continuous)"
+              title={t('admin.revenueByDay')}
+              description={t('admin.revenueByDayDesc')}
               empty={noSales}
+              emptyLabel={t('admin.noSalesPeriod')}
             >
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={byDay} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -352,14 +378,16 @@ export default function ReportsView() {
                   <Tooltip
                     content={
                       <ChartTooltip
-                        detail={(e) => ` · ${e.payload?.orders ?? 0} order${(e.payload?.orders ?? 0) === 1 ? '' : 's'}`}
+                        detail={(e) =>
+                          ` · ${t('admin.paidOrders', { count: e.payload?.orders ?? 0 })}`
+                        }
                       />
                     }
                     cursor={{ fill: 'rgba(217, 119, 6, 0.08)' }}
                   />
                   <Bar
                     dataKey="revenue"
-                    name="Revenue"
+                    name={t('money.revenue')}
                     fill="#d97706"
                     radius={[6, 6, 0, 0]}
                     maxBarSize={36}
@@ -370,9 +398,10 @@ export default function ReportsView() {
 
             {/* 2. Revenue by hour */}
             <ChartCard
-              title="Revenue by hour"
-              description="Paid revenue split by hour of day (0–23)"
+              title={t('admin.revenueByHour')}
+              description={t('admin.revenueByHourDesc')}
               empty={noSales}
+              emptyLabel={t('admin.noSalesPeriod')}
             >
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={byHour} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -397,7 +426,7 @@ export default function ReportsView() {
                   />
                   <Bar
                     dataKey="revenue"
-                    name="Revenue"
+                    name={t('money.revenue')}
                     fill="#f59e0b"
                     radius={[6, 6, 0, 0]}
                     maxBarSize={20}
@@ -408,9 +437,10 @@ export default function ReportsView() {
 
             {/* 3. Top products (horizontal) */}
             <ChartCard
-              title="Top products"
-              description="Best sellers by revenue in the period"
+              title={t('admin.topProductsPeriod')}
+              description={t('admin.topProductsPeriodDesc')}
               empty={noSales || topProducts.length === 0}
+              emptyLabel={t('admin.noSalesPeriod')}
             >
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart
@@ -438,13 +468,15 @@ export default function ReportsView() {
                   />
                   <Tooltip
                     content={
-                      <ChartTooltip detail={(e) => ` · sold ${e.payload?.quantity ?? 0}`} />
+                      <ChartTooltip
+                        detail={(e) => ` · ${t('admin.sold', { qty: String(e.payload?.quantity ?? 0) })}`}
+                      />
                     }
                     cursor={{ fill: 'rgba(5, 150, 105, 0.08)' }}
                   />
                   <Bar
                     dataKey="revenue"
-                    name="Revenue"
+                    name={t('money.revenue')}
                     fill="#059669"
                     radius={[0, 6, 6, 0]}
                     maxBarSize={18}
@@ -455,9 +487,10 @@ export default function ReportsView() {
 
             {/* 4. Revenue by category (donut) */}
             <ChartCard
-              title="Revenue by category"
-              description="Share of revenue across the menu"
+              title={t('admin.revenueByCategory')}
+              description={t('admin.revenueByCategoryDesc')}
               empty={noSales || byCategory.length === 0}
+              emptyLabel={t('admin.noSalesPeriod')}
             >
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
@@ -490,14 +523,14 @@ export default function ReportsView() {
             {/* 5. Payment methods */}
             <Card>
               <CardHeader>
-                <CardTitle>Payment methods</CardTitle>
-                <CardDescription>How guests paid in the period</CardDescription>
+                <CardTitle>{t('admin.paymentMethods')}</CardTitle>
+                <CardDescription>{t('admin.paymentMethodsDesc')}</CardDescription>
               </CardHeader>
               <CardContent>
                 {byMethod.length === 0 ? (
                   <div className="flex h-[240px] items-center justify-center">
                     <p className="text-sm text-muted-foreground">
-                      No payments recorded in this period
+                      {t('admin.noPaymentsPeriod')}
                     </p>
                   </div>
                 ) : (
@@ -508,16 +541,16 @@ export default function ReportsView() {
                         <div key={m.method} className="space-y-1.5">
                           <div className="flex items-center justify-between gap-2">
                             <p className="text-sm font-medium">
-                              {PAYMENT_METHOD_LABELS[m.method] ?? m.method}
+                              {t(`status.payment.${m.method}`)}
                             </p>
                             <div className="flex items-baseline gap-2">
                               <span className="text-xs text-muted-foreground">
-                                {m.count} payment{m.count === 1 ? '' : 's'}
+                                {t('admin.paymentsCount', { count: m.count })}
                               </span>
                               <span className="text-sm font-semibold">
                                 {formatCurrency(m.amount)}
                               </span>
-                              <span className="w-10 text-right text-xs text-muted-foreground">
+                              <span className="w-10 text-end text-xs text-muted-foreground">
                                 {Math.round(share)}%
                               </span>
                             </div>
@@ -534,8 +567,8 @@ export default function ReportsView() {
             {/* 6. Inventory snapshot */}
             <Card>
               <CardHeader>
-                <CardTitle>Inventory snapshot</CardTitle>
-                <CardDescription>Current stock valuation</CardDescription>
+                <CardTitle>{t('admin.inventorySnapshot')}</CardTitle>
+                <CardDescription>{t('admin.inventorySnapshotDesc')}</CardDescription>
               </CardHeader>
               <CardContent>
                 {inventoryValueQuery.isLoading ? (
@@ -543,7 +576,7 @@ export default function ReportsView() {
                 ) : inventoryValueQuery.isError ? (
                   <p className="text-sm text-rose-600">
                     {(inventoryValueQuery.error as Error | null)?.message ??
-                      'Failed to load inventory value'}
+                      t('admin.loadInventoryValueFailed')}
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -555,7 +588,9 @@ export default function ReportsView() {
                     </div>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
                       <span>
-                        {inventoryValueQuery.data?.itemCount ?? 0} items tracked
+                        {t('admin.itemsTracked', {
+                          count: inventoryValueQuery.data?.itemCount ?? 0,
+                        })}
                       </span>
                       <span
                         className={
@@ -564,11 +599,13 @@ export default function ReportsView() {
                             : ''
                         }
                       >
-                        {inventoryValueQuery.data?.lowStockCount ?? 0} low stock
+                        {t('admin.lowStockCount', {
+                          count: inventoryValueQuery.data?.lowStockCount ?? 0,
+                        })}
                       </span>
                     </div>
                     <p className="text-xs font-medium text-primary underline-offset-2 hover:underline">
-                      See Inventory tab
+                      {t('admin.seeInventory')}
                     </p>
                   </div>
                 )}

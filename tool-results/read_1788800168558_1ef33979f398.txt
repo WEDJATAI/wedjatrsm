@@ -1,0 +1,728 @@
+     1→'use client'
+     2→
+     3→import { useRef, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import { Armchair, Loader2, Map, MapPin, Plus, Trash2 } from 'lucide-react'
+     6→import { toast } from 'sonner'
+     7→
+     8→import {
+     9→  AlertDialog,
+    10→  AlertDialogAction,
+    11→  AlertDialogCancel,
+    12→  AlertDialogContent,
+    13→  AlertDialogDescription,
+    14→  AlertDialogFooter,
+    15→  AlertDialogHeader,
+    16→  AlertDialogTitle,
+    17→  AlertDialogTrigger,
+    18→} from '@/components/ui/alert-dialog'
+    19→import { Button } from '@/components/ui/button'
+    20→import { Card } from '@/components/ui/card'
+    21→import {
+    22→  Dialog,
+    23→  DialogContent,
+    24→  DialogDescription,
+    25→  DialogFooter,
+    26→  DialogHeader,
+    27→  DialogTitle,
+    28→  DialogTrigger,
+    29→} from '@/components/ui/dialog'
+    30→import { Input } from '@/components/ui/input'
+    31→import { Label } from '@/components/ui/label'
+    32→import {
+    33→  Select,
+    34→  SelectContent,
+    35→  SelectItem,
+    36→  SelectTrigger,
+    37→  SelectValue,
+    38→} from '@/components/ui/select'
+    39→import { Skeleton } from '@/components/ui/skeleton'
+    40→import { Switch } from '@/components/ui/switch'
+    41→import { apiFetch, fetcher } from '@/lib/api'
+    42→import { TABLE_STATUS_LABELS } from '@/lib/constants'
+    43→import type { FloorPlan, RestaurantTable } from '@/lib/types'
+    44→import { cn } from '@/lib/utils'
+    45→
+    46→type DragState = {
+    47→  table: RestaurantTable
+    48→  pointerId: number
+    49→  startX: number
+    50→  startY: number
+    51→  /** Offset (in canvas %) between the grab point and the table center. */
+    52→  offX: number
+    53→  offY: number
+    54→  x: number
+    55→  y: number
+    56→  movedPx: number
+    57→}
+    58→
+    59→const TABLE_STYLES: Record<string, { surface: string; dot: string }> = {
+    60→  free: { surface: 'border-emerald-400 bg-emerald-50 text-emerald-900', dot: 'bg-emerald-500' },
+    61→  occupied: { surface: 'border-amber-400 bg-amber-100 text-amber-950', dot: 'bg-amber-500' },
+    62→  reserved: { surface: 'border-rose-400 bg-rose-50 text-rose-900', dot: 'bg-rose-500' },
+    63→}
+    64→
+    65→const clampPercent = (value: number, min: number, max: number) =>
+    66→  Math.min(max, Math.max(min, value))
+    67→const round1 = (value: number) => Math.round(value * 10) / 10
+    68→const toNumber = (value: string, fallback: number) => {
+    69→  const parsed = Number(value)
+    70→  return Number.isFinite(parsed) ? parsed : fallback
+    71→}
+    72→
+    73→/** Floor plan manager — list of plans + drag-to-arrange table canvas. */
+    74→export default function FloorPlansView() {
+    75→  const queryClient = useQueryClient()
+    76→  const canvasRef = useRef<HTMLDivElement | null>(null)
+    77→  const dragRef = useRef<DragState | null>(null)
+    78→  const [drag, setDrag] = useState<DragState | null>(null)
+    79→
+    80→  const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null)
+    81→
+    82→  const [newPlanOpen, setNewPlanOpen] = useState(false)
+    83→  const [newPlanName, setNewPlanName] = useState('')
+    84→
+    85→  const [addTableOpen, setAddTableOpen] = useState(false)
+    86→  const [addTableName, setAddTableName] = useState('')
+    87→  const [addTableCapacity, setAddTableCapacity] = useState('2')
+    88→
+    89→  const [editOpen, setEditOpen] = useState(false)
+    90→  const [editingTable, setEditingTable] = useState<RestaurantTable | null>(null)
+    91→  const [editName, setEditName] = useState('')
+    92→  const [editCapacity, setEditCapacity] = useState('2')
+    93→  const [editX, setEditX] = useState('50')
+    94→  const [editY, setEditY] = useState('50')
+    95→  const [editStatus, setEditStatus] = useState('free')
+    96→
+    97→  const { data, isLoading, isError, error } = useQuery({
+    98→    queryKey: ['floorplans'],
+    99→    queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
+   100→    refetchInterval: 10000,
+   101→  })
+   102→
+   103→  const floorPlans = data?.floorPlans ?? []
+   104→  const selectedPlan = floorPlans.find((plan) => plan.id === selectedPlanId) ?? floorPlans[0] ?? null
+   105→  const activeTables = selectedPlan
+   106→    ? selectedPlan.tables.filter((table) => table.active)
+   107→    : []
+   108→
+   109→  // ── Mutations ────────────────────────────────────────────────────────
+   110→
+   111→  const createPlanMutation = useMutation({
+   112→    mutationFn: (name: string) =>
+   113→      apiFetch<{ floorPlan: FloorPlan }>('/api/floorplans', { method: 'POST', body: { name } }),
+   114→    onSuccess: ({ floorPlan }) => {
+   115→      toast.success(`Floor plan "${floorPlan.name}" created`)
+   116→      void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   117→      setSelectedPlanId(floorPlan.id)
+   118→      setNewPlanOpen(false)
+   119→      setNewPlanName('')
+   120→    },
+   121→    onError: (mutationError) => toast.error(mutationError.message || 'Failed to create floor plan'),
+   122→  })
+   123→
+   124→  const togglePlanMutation = useMutation({
+   125→    mutationFn: ({ id, active }: { id: number; active: boolean }) =>
+   126→      apiFetch(`/api/floorplans/${id}`, { method: 'PUT', body: { active } }),
+   127→    onMutate: async ({ id, active }) => {
+   128→      await queryClient.cancelQueries({ queryKey: ['floorplans'] })
+   129→      const previous = queryClient.getQueryData<{ floorPlans: FloorPlan[] }>(['floorplans'])
+   130→      if (previous) {
+   131→        queryClient.setQueryData(['floorplans'], {
+   132→          floorPlans: previous.floorPlans.map((plan) =>
+   133→            plan.id === id ? { ...plan, active } : plan,
+   134→          ),
+   135→        })
+   136→      }
+   137→      return { previous }
+   138→    },
+   139→    onError: (mutationError, _variables, context) => {
+   140→      toast.error(mutationError.message || 'Failed to update floor plan')
+   141→      if (context?.previous) {
+   142→        queryClient.setQueryData(['floorplans'], context.previous)
+   143→      }
+   144→    },
+   145→    onSettled: () => {
+   146→      void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   147→    },
+   148→  })
+   149→
+   150→  const addTableMutation = useMutation({
+   151→    mutationFn: (input: {
+   152→      floorPlanId: number
+   153→      name: string
+   154→      capacity: number
+   155→      positionX: number
+   156→      positionY: number
+   157→    }) => apiFetch<{ table: RestaurantTable }>('/api/tables', { method: 'POST', body: input }),
+   158→    onSuccess: ({ table }) => {
+   159→      toast.success(`Table "${table.name}" added`)
+   160→      void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   161→      setAddTableOpen(false)
+   162→      setAddTableName('')
+   163→      setAddTableCapacity('2')
+   164→    },
+   165→    onError: (mutationError) => toast.error(mutationError.message || 'Failed to add table'),
+   166→  })
+   167→
+   168→  const updateTableMutation = useMutation({
+   169→    mutationFn: ({
+   170→      id,
+   171→      body,
+   172→    }: {
+   173→      id: number
+   174→      body: Record<string, unknown>
+   175→      successMessage?: string
+   176→      closeDialog?: boolean
+   177→    }) => apiFetch<{ table: RestaurantTable }>(`/api/tables/${id}`, { method: 'PUT', body }),
+   178→    onSuccess: (_result, variables) => {
+   179→      toast.success(variables.successMessage ?? 'Table updated')
+   180→      void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   181→      if (variables.closeDialog) {
+   182→        setEditOpen(false)
+   183→        setEditingTable(null)
+   184→      }
+   185→    },
+   186→    onError: (mutationError) => toast.error(mutationError.message || 'Failed to update table'),
+   187→  })
+   188→
+   189→  // ── Table edit dialog ────────────────────────────────────────────────
+   190→
+   191→  function openTableDialog(table: RestaurantTable) {
+   192→    setEditName(table.name)
+   193→    setEditCapacity(String(table.capacity))
+   194→    setEditX(String(round1(table.positionX)))
+   195→    setEditY(String(round1(table.positionY)))
+   196→    setEditStatus(table.status)
+   197→    setEditingTable(table)
+   198→    setEditOpen(true)
+   199→  }
+   200→
+   201→  // ── Pointer-based dragging (mouse + touch) ───────────────────────────
+   202→
+   203→  function beginDrag(event: React.PointerEvent<HTMLDivElement>, table: RestaurantTable) {
+   204→    if (event.pointerType === 'mouse' && event.button !== 0) return
+   205→    const rect = canvasRef.current?.getBoundingClientRect()
+   206→    if (!rect) return
+   207→    event.preventDefault()
+   208→    try {
+   209→      event.currentTarget.setPointerCapture(event.pointerId)
+   210→    } catch {
+   211→      // Pointer already released — ignore.
+   212→    }
+   213→    const pointerX = ((event.clientX - rect.left) / rect.width) * 100
+   214→    const pointerY = ((event.clientY - rect.top) / rect.height) * 100
+   215→    const state: DragState = {
+   216→      table,
+   217→      pointerId: event.pointerId,
+   218→      startX: event.clientX,
+   219→      startY: event.clientY,
+   220→      offX: pointerX - table.positionX,
+   221→      offY: pointerY - table.positionY,
+   222→      x: table.positionX,
+   223→      y: table.positionY,
+   224→      movedPx: 0,
+   225→    }
+   226→    dragRef.current = state
+   227→    setDrag(state)
+   228→  }
+   229→
+   230→  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+   231→    const current = dragRef.current
+   232→    if (!current || current.pointerId !== event.pointerId) return
+   233→    const rect = canvasRef.current?.getBoundingClientRect()
+   234→    if (!rect) return
+   235→    const pointerX = ((event.clientX - rect.left) / rect.width) * 100
+   236→    const pointerY = ((event.clientY - rect.top) / rect.height) * 100
+   237→    const next: DragState = {
+   238→      ...current,
+   239→      x: clampPercent(pointerX - current.offX, 2, 98),
+   240→      y: clampPercent(pointerY - current.offY, 2, 98),
+   241→      movedPx: Math.max(
+   242→        current.movedPx,
+   243→        Math.hypot(event.clientX - current.startX, event.clientY - current.startY),
+   244→      ),
+   245→    }
+   246→    dragRef.current = next
+   247→    setDrag(next)
+   248→  }
+   249→
+   250→  function endDrag(event: React.PointerEvent<HTMLDivElement>, commit: boolean) {
+   251→    const current = dragRef.current
+   252→    if (!current || current.pointerId !== event.pointerId) return
+   253→    dragRef.current = null
+   254→    setDrag(null)
+   255→    if (!commit) return
+   256→    if (current.movedPx < 6) {
+   257→      // Treated as a click → open the table editor.
+   258→      openTableDialog(current.table)
+   259→      return
+   260→    }
+   261→    updateTableMutation.mutate({
+   262→      id: current.table.id,
+   263→      body: { positionX: round1(current.x), positionY: round1(current.y) },
+   264→      successMessage: 'Position saved',
+   265→    })
+   266→  }
+   267→
+   268→  // ── Form submit handlers ─────────────────────────────────────────────
+   269→
+   270→  function handleCreatePlan() {
+   271→    const name = newPlanName.trim()
+   272→    if (!name) {
+   273→      toast.error('Floor plan name is required')
+   274→      return
+   275→    }
+   276→    createPlanMutation.mutate(name)
+   277→  }
+   278→
+   279→  function handleAddTable() {
+   280→    if (!selectedPlan) return
+   281→    const name = addTableName.trim()
+   282→    if (!name) {
+   283→      toast.error('Table name is required')
+   284→      return
+   285→    }
+   286→    const parsedCapacity = Number(addTableCapacity)
+   287→    const capacity = Math.max(
+   288→      1,
+   289→      Math.round(Number.isFinite(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : 2),
+   290→    )
+   291→    // Spawn at a center-ish random spot (30-70%).
+   292→    const positionX = round1(30 + Math.random() * 40)
+   293→    const positionY = round1(30 + Math.random() * 40)
+   294→    addTableMutation.mutate({ floorPlanId: selectedPlan.id, name, capacity, positionX, positionY })
+   295→  }
+   296→
+   297→  function handleSaveTable() {
+   298→    if (!editingTable) return
+   299→    const name = editName.trim()
+   300→    if (!name) {
+   301→      toast.error('Table name is required')
+   302→      return
+   303→    }
+   304→    const parsedCapacity = Number(editCapacity)
+   305→    const capacity = Math.max(
+   306→      1,
+   307→      Math.round(
+   308→        Number.isFinite(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : editingTable.capacity,
+   309→      ),
+   310→    )
+   311→    const body: Record<string, unknown> = {
+   312→      name,
+   313→      capacity,
+   314→      positionX: clampPercent(round1(toNumber(editX, editingTable.positionX)), 0, 100),
+   315→      positionY: clampPercent(round1(toNumber(editY, editingTable.positionY)), 0, 100),
+   316→    }
+   317→    // 'occupied' is managed automatically by open orders — never send it.
+   318→    if (editStatus === 'free' || editStatus === 'reserved') {
+   319→      body.status = editStatus
+   320→    }
+   321→    updateTableMutation.mutate({
+   322→      id: editingTable.id,
+   323→      body,
+   324→      successMessage: 'Table updated',
+   325→      closeDialog: true,
+   326→    })
+   327→  }
+   328→
+   329→  function handleRemoveTable() {
+   330→    if (!editingTable) return
+   331→    updateTableMutation.mutate({
+   332→      id: editingTable.id,
+   333→      body: { active: false },
+   334→      successMessage: 'Table removed',
+   335→      closeDialog: true,
+   336→    })
+   337→  }
+   338→
+   339→  const creatingPlan = createPlanMutation.isPending
+   340→  const addingTable = addTableMutation.isPending
+   341→  const savingTable = updateTableMutation.isPending
+   342→
+   343→  return (
+   344→    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+   345→      {/* Header */}
+   346→      <div className="flex flex-wrap items-center justify-between gap-3">
+   347→        <div>
+   348→          <h1 className="text-2xl font-bold tracking-tight">Floor Plans</h1>
+   349→          <p className="text-sm text-muted-foreground">
+   350→            Arrange tables per dining area — positions sync live to the POS table map.
+   351→          </p>
+   352→        </div>
+   353→        <Dialog open={newPlanOpen} onOpenChange={setNewPlanOpen}>
+   354→          <DialogTrigger asChild>
+   355→            <Button size="lg">
+   356→              <Plus className="size-4" />
+   357→              New Floor Plan
+   358→            </Button>
+   359→          </DialogTrigger>
+   360→          <DialogContent className="sm:max-w-sm">
+   361→            <DialogHeader>
+   362→              <DialogTitle>New floor plan</DialogTitle>
+   363→              <DialogDescription>
+   364→                Create a new dining area, e.g. Terrace or Mezzanine.
+   365→              </DialogDescription>
+   366→            </DialogHeader>
+   367→            <div className="grid gap-1.5">
+   368→              <Label htmlFor="plan-name">Name</Label>
+   369→              <Input
+   370→                id="plan-name"
+   371→                value={newPlanName}
+   372→                placeholder="e.g. Main Hall"
+   373→                onChange={(event) => setNewPlanName(event.target.value)}
+   374→                onKeyDown={(event) => {
+   375→                  if (event.key === 'Enter') handleCreatePlan()
+   376→                }}
+   377→              />
+   378→            </div>
+   379→            <DialogFooter>
+   380→              <Button variant="outline" onClick={() => setNewPlanOpen(false)}>
+   381→                Cancel
+   382→              </Button>
+   383→              <Button onClick={handleCreatePlan} disabled={creatingPlan || !newPlanName.trim()}>
+   384→                {creatingPlan ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+   385→                Create
+   386→              </Button>
+   387→            </DialogFooter>
+   388→          </DialogContent>
+   389→        </Dialog>
+   390→      </div>
+   391→
+   392→      {isError && (
+   393→        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+   394→          {error instanceof Error ? error.message : 'Failed to load floor plans'}
+   395→        </div>
+   396→      )}
+   397→
+   398→      {isLoading ? (
+   399→        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+   400→          <div className="space-y-2">
+   401→            {Array.from({ length: 4 }).map((_, index) => (
+   402→              <Skeleton key={index} className="h-16 w-full" />
+   403→            ))}
+   404→          </div>
+   405→          <div className="space-y-3">
+   406→            <Skeleton className="h-8 w-48" />
+   407→            <Skeleton className="h-[460px] w-full rounded-xl" />
+   408→          </div>
+   409→        </div>
+   410→      ) : floorPlans.length === 0 ? (
+   411→        <Card className="flex flex-col items-center justify-center gap-3 border-dashed p-12 py-20 text-center">
+   412→          <Map className="size-14 text-muted-foreground/40" />
+   413→          <div className="space-y-1">
+   414→            <p className="font-semibold">No floor plans yet</p>
+   415→            <p className="text-sm text-muted-foreground">Create your first floor plan</p>
+   416→          </div>
+   417→          <Button onClick={() => setNewPlanOpen(true)}>
+   418→            <Plus className="size-4" />
+   419→            New Floor Plan
+   420→          </Button>
+   421→        </Card>
+   422→      ) : (
+   423→        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+   424→          {/* Floor plan list */}
+   425→          <div className="space-y-2 self-start">
+   426→            <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   427→              Dining areas
+   428→            </p>
+   429→            {floorPlans.map((plan) => {
+   430→              const activeTableCount = plan.tables.filter((table) => table.active).length
+   431→              const isSelected = selectedPlan !== null && plan.id === selectedPlan.id
+   432→              return (
+   433→                <Card
+   434→                  key={plan.id}
+   435→                  role="button"
+   436→                  tabIndex={0}
+   437→                  onClick={() => setSelectedPlanId(plan.id)}
+   438→                  onKeyDown={(event) => {
+   439→                    if (event.key === 'Enter' || event.key === ' ') {
+   440→                      event.preventDefault()
+   441→                      setSelectedPlanId(plan.id)
+   442→                    }
+   443→                  }}
+   444→                  className={cn(
+   445→                    'cursor-pointer p-3 transition-colors hover:bg-accent/40',
+   446→                    isSelected && 'border-primary bg-primary/5',
+   447→                    !plan.active && 'opacity-60',
+   448→                  )}
+   449→                >
+   450→                  <div className="flex items-center justify-between gap-3">
+   451→                    <div className="min-w-0">
+   452→                      <p className="truncate text-sm font-semibold leading-tight">{plan.name}</p>
+   453→                      <p className="mt-0.5 text-xs text-muted-foreground">
+   454→                        {activeTableCount} tables
+   455→                      </p>
+   456→                    </div>
+   457→                    <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+   458→                      <Switch
+   459→                        checked={plan.active}
+   460→                        onCheckedChange={(checked) =>
+   461→                          togglePlanMutation.mutate({ id: plan.id, active: checked })
+   462→                        }
+   463→                        aria-label={`${plan.active ? 'Deactivate' : 'Activate'} ${plan.name}`}
+   464→                      />
+   465→                    </div>
+   466→                  </div>
+   467→                </Card>
+   468→              )
+   469→            })}
+   470→          </div>
+   471→
+   472→          {/* Canvas editor */}
+   473→          {selectedPlan && (
+   474→            <Card className="gap-4 p-4">
+   475→              <div className="flex flex-wrap items-center justify-between gap-2">
+   476→                <div className="min-w-0">
+   477→                  <h2 className="truncate text-lg font-bold leading-tight">{selectedPlan.name}</h2>
+   478→                  <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+   479→                    <MapPin className="size-3.5 shrink-0" />
+   480→                    Drag tables to reposition · click a table to edit
+   481→                  </p>
+   482→                </div>
+   483→                <Dialog open={addTableOpen} onOpenChange={setAddTableOpen}>
+   484→                  <DialogTrigger asChild>
+   485→                    <Button variant="outline">
+   486→                      <Plus className="size-4" />
+   487→                      Add Table
+   488→                    </Button>
+   489→                  </DialogTrigger>
+   490→                  <DialogContent className="sm:max-w-sm">
+   491→                    <DialogHeader>
+   492→                      <DialogTitle>Add table</DialogTitle>
+   493→                      <DialogDescription>
+   494→                        New tables spawn near the center of the canvas — drag them into place.
+   495→                      </DialogDescription>
+   496→                    </DialogHeader>
+   497→                    <div className="grid gap-4">
+   498→                      <div className="grid gap-1.5">
+   499→                        <Label htmlFor="table-name">Name</Label>
+   500→                        <Input
+   501→                          id="table-name"
+   502→                          value={addTableName}
+   503→                          placeholder="e.g. T10"
+   504→                          onChange={(event) => setAddTableName(event.target.value)}
+   505→                          onKeyDown={(event) => {
+   506→                            if (event.key === 'Enter') handleAddTable()
+   507→                          }}
+   508→                        />
+   509→                      </div>
+   510→                      <div className="grid gap-1.5">
+   511→                        <Label htmlFor="table-capacity">Capacity (seats)</Label>
+   512→                        <Input
+   513→                          id="table-capacity"
+   514→                          type="number"
+   515→                          min={1}
+   516→                          value={addTableCapacity}
+   517→                          onChange={(event) => setAddTableCapacity(event.target.value)}
+   518→                        />
+   519→                      </div>
+   520→                    </div>
+   521→                    <DialogFooter>
+   522→                      <Button variant="outline" onClick={() => setAddTableOpen(false)}>
+   523→                        Cancel
+   524→                      </Button>
+   525→                      <Button onClick={handleAddTable} disabled={addingTable || !addTableName.trim()}>
+   526→                        {addingTable ? (
+   527→                          <Loader2 className="size-4 animate-spin" />
+   528→                        ) : (
+   529→                          <Plus className="size-4" />
+   530→                        )}
+   531→                        Add
+   532→                      </Button>
+   533→                    </DialogFooter>
+   534→                  </DialogContent>
+   535→                </Dialog>
+   536→              </div>
+   537→
+   538→              <div
+   539→                ref={canvasRef}
+   540→                className="relative h-[460px] w-full touch-none overflow-hidden rounded-xl border-2 border-dashed border-border bg-[radial-gradient(circle,#e7e2d8_1px,transparent_1px)] [background-size:22px_22px]"
+   541→              >
+   542→                {activeTables.length === 0 ? (
+   543→                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
+   544→                    <Armchair className="size-12 text-muted-foreground/40" />
+   545→                    <p className="text-sm font-medium text-muted-foreground">
+   546→                      Add tables to arrange your floor
+   547→                    </p>
+   548→                  </div>
+   549→                ) : (
+   550→                  activeTables.map((table) => {
+   551→                    const isDragging = drag !== null && drag.table.id === table.id
+   552→                    const x = isDragging ? drag.x : table.positionX
+   553→                    const y = isDragging ? drag.y : table.positionY
+   554→                    const styles =
+   555→                      TABLE_STYLES[table.status] ?? {
+   556→                        surface: 'border-stone-300 bg-stone-50 text-stone-700',
+   557→                        dot: 'bg-stone-400',
+   558→                      }
+   559→                    return (
+   560→                      <div
+   561→                        key={table.id}
+   562→                        role="button"
+   563→                        tabIndex={0}
+   564→                        aria-label={`${table.name}, ${TABLE_STATUS_LABELS[table.status] ?? table.status}`}
+   565→                        style={{ left: `${x}%`, top: `${y}%` }}
+   566→                        onPointerDown={(event) => beginDrag(event, table)}
+   567→                        onPointerMove={moveDrag}
+   568→                        onPointerUp={(event) => endDrag(event, true)}
+   569→                        onPointerCancel={(event) => endDrag(event, false)}
+   570→                        onKeyDown={(event) => {
+   571→                          if (event.key === 'Enter' || event.key === ' ') {
+   572→                            event.preventDefault()
+   573→                            openTableDialog(table)
+   574→                          }
+   575→                        }}
+   576→                        className={cn(
+   577→                          'absolute flex h-20 w-24 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 font-semibold shadow-sm transition-shadow active:cursor-grabbing',
+   578→                          styles.surface,
+   579→                          isDragging && 'z-30 cursor-grabbing scale-105 shadow-lg ring-2 ring-ring/60',
+   580→                        )}
+   581→                      >
+   582→                        <span className="truncate text-sm font-bold leading-tight">{table.name}</span>
+   583→                        <span className="text-[11px] font-medium opacity-75">
+   584→                          seats {table.capacity}
+   585→                        </span>
+   586→                        <span className="mt-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider opacity-80">
+   587→                          <span className={cn('size-2 rounded-full', styles.dot)} />
+   588→                          {TABLE_STATUS_LABELS[table.status] ?? table.status}
+   589→                        </span>
+   590→                      </div>
+   591→                    )
+   592→                  })
+   593→                )}
+   594→              </div>
+   595→            </Card>
+   596→          )}
+   597→        </div>
+   598→      )}
+   599→
+   600→      {/* Table edit dialog */}
+   601→      <Dialog
+   602→        open={editOpen}
+   603→        onOpenChange={(open) => {
+   604→          setEditOpen(open)
+   605→          if (!open) setEditingTable(null)
+   606→        }}
+   607→      >
+   608→        <DialogContent className="sm:max-w-md">
+   609→          <DialogHeader>
+   610→            <DialogTitle>Edit table</DialogTitle>
+   611→            <DialogDescription>
+   612→              Update name, capacity, position or reservation status.
+   613→            </DialogDescription>
+   614→          </DialogHeader>
+   615→          <div className="grid gap-4">
+   616→            <div className="grid gap-1.5">
+   617→              <Label htmlFor="edit-name">Name</Label>
+   618→              <Input
+   619→                id="edit-name"
+   620→                value={editName}
+   621→                onChange={(event) => setEditName(event.target.value)}
+   622→              />
+   623→            </div>
+   624→            <div className="grid grid-cols-2 gap-3">
+   625→              <div className="grid gap-1.5">
+   626→                <Label htmlFor="edit-capacity">Capacity (seats)</Label>
+   627→                <Input
+   628→                  id="edit-capacity"
+   629→                  type="number"
+   630→                  min={1}
+   631→                  value={editCapacity}
+   632→                  onChange={(event) => setEditCapacity(event.target.value)}
+   633→                />
+   634→              </div>
+   635→              <div className="grid gap-1.5">
+   636→                <Label htmlFor="edit-status">Status</Label>
+   637→                <Select value={editStatus} onValueChange={setEditStatus}>
+   638→                  <SelectTrigger id="edit-status" className="w-full">
+   639→                    <SelectValue placeholder="Status" />
+   640→                  </SelectTrigger>
+   641→                  <SelectContent>
+   642→                    <SelectItem value="free">Free</SelectItem>
+   643→                    <SelectItem value="reserved">Reserved</SelectItem>
+   644→                    <SelectItem value="occupied" disabled>
+   645→                      Occupied (automatic)
+   646→                    </SelectItem>
+   647→                  </SelectContent>
+   648→                </Select>
+   649→              </div>
+   650→            </div>
+   651→            <p className="-mt-2 text-xs text-muted-foreground">
+   652→              Occupied is set automatically while an order is open on the table.
+   653→            </p>
+   654→            <div className="grid grid-cols-2 gap-3">
+   655→              <div className="grid gap-1.5">
+   656→                <Label htmlFor="edit-x">Position X (%)</Label>
+   657→                <Input
+   658→                  id="edit-x"
+   659→                  type="number"
+   660→                  min={0}
+   661→                  max={100}
+   662→                  step={0.5}
+   663→                  value={editX}
+   664→                  onChange={(event) => setEditX(event.target.value)}
+   665→                />
+   666→              </div>
+   667→              <div className="grid gap-1.5">
+   668→                <Label htmlFor="edit-y">Position Y (%)</Label>
+   669→                <Input
+   670→                  id="edit-y"
+   671→                  type="number"
+   672→                  min={0}
+   673→                  max={100}
+   674→                  step={0.5}
+   675→                  value={editY}
+   676→                  onChange={(event) => setEditY(event.target.value)}
+   677→                />
+   678→              </div>
+   679→            </div>
+   680→          </div>
+   681→          <DialogFooter className="gap-2 sm:justify-between">
+   682→            <AlertDialog>
+   683→              <AlertDialogTrigger asChild>
+   684→                <Button variant="destructive" disabled={savingTable}>
+   685→                  <Trash2 className="size-4" />
+   686→                  Remove table
+   687→                </Button>
+   688→              </AlertDialogTrigger>
+   689→              <AlertDialogContent>
+   690→                <AlertDialogHeader>
+   691→                  <AlertDialogTitle>Remove this table?</AlertDialogTitle>
+   692→                  <AlertDialogDescription>
+   693→                    Table will be hidden from POS (soft delete). Existing order history is kept.
+   694→                  </AlertDialogDescription>
+   695→                </AlertDialogHeader>
+   696→                <AlertDialogFooter>
+   697→                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+   698→                  <AlertDialogAction
+   699→                    onClick={handleRemoveTable}
+   700→                    className="bg-destructive text-white hover:bg-destructive/90"
+   701→                  >
+   702→                    Remove table
+   703→                  </AlertDialogAction>
+   704→                </AlertDialogFooter>
+   705→              </AlertDialogContent>
+   706→            </AlertDialog>
+   707→            <div className="flex gap-2">
+   708→              <Button
+   709→                variant="outline"
+   710→                onClick={() => {
+   711→                  setEditOpen(false)
+   712→                  setEditingTable(null)
+   713→                }}
+   714→              >
+   715→                Cancel
+   716→              </Button>
+   717→              <Button onClick={handleSaveTable} disabled={savingTable || !editName.trim()}>
+   718→                {savingTable && <Loader2 className="size-4 animate-spin" />}
+   719→                Save changes
+   720→              </Button>
+   721→            </div>
+   722→          </DialogFooter>
+   723→        </DialogContent>
+   724→      </Dialog>
+   725→    </div>
+   726→  )
+   727→}
+   728→

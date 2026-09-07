@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { BookOpen, Info, Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiFetch, fetcher } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
 import type { Product, RecipeComponent } from '@/lib/types'
 import { formatCurrency, formatQty } from '@/lib/format'
 import {
@@ -49,6 +50,7 @@ import {
 } from '@/components/ui/table'
 
 export default function RecipesView() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [dishSearch, setDishSearch] = useState('')
@@ -103,7 +105,7 @@ export default function RecipesView() {
         body: vars,
       }),
     onSuccess: (_data, vars) => {
-      toast.success('Recipe saved')
+      toast.success(t('admin.recipeSaved'))
       void queryClient.invalidateQueries({ queryKey: ['recipes', vars.productId] })
     },
     onError: (err: Error) => toast.error(err.message),
@@ -113,7 +115,7 @@ export default function RecipesView() {
     mutationFn: (id: number) =>
       apiFetch<{ ok: boolean }>(`/api/recipes/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      toast.success('Ingredient removed from recipe')
+      toast.success(t('admin.ingredientRemoved'))
       if (activeDishId != null) {
         void queryClient.invalidateQueries({ queryKey: ['recipes', activeDishId] })
       }
@@ -139,12 +141,12 @@ export default function RecipesView() {
   function handleAddIngredient() {
     if (activeDishId == null) return
     if (!newIngredientId) {
-      toast.error('Pick an ingredient first')
+      toast.error(t('admin.pickIngredientFirst'))
       return
     }
     const qty = Number(newQuantity)
     if (!Number.isFinite(qty) || qty <= 0) {
-      toast.error('Quantity must be greater than zero')
+      toast.error(t('admin.qtyPositive'))
       return
     }
     upsertMutation.mutate(
@@ -166,7 +168,7 @@ export default function RecipesView() {
     if (price <= 0) {
       marginBadge = (
         <Badge className="border-transparent bg-rose-100 text-rose-700">
-          No price set
+          {t('admin.noPriceSet')}
         </Badge>
       )
     } else {
@@ -178,7 +180,7 @@ export default function RecipesView() {
           : ratio < 0.8
             ? 'border-transparent bg-amber-100 text-amber-800'
             : 'border-transparent bg-rose-100 text-rose-700'
-      marginBadge = <Badge className={cls}>Food cost {pct}%</Badge>
+      marginBadge = <Badge className={cls}>{t('admin.foodCostPct', { pct })}</Badge>
     }
   }
 
@@ -186,29 +188,27 @@ export default function RecipesView() {
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Recipes</h1>
-        <p className="text-sm text-muted-foreground">
-          Bill of materials — ingredient costing per dish
-        </p>
+        <h1 className="text-2xl font-bold">{t('nav.recipes')}</h1>
+        <p className="text-sm text-muted-foreground">{t('admin.recipesSubtitle')}</p>
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[300px_1fr]">
         {/* Dish picker */}
         <Card>
           <CardHeader>
-            <CardTitle>Dishes</CardTitle>
+            <CardTitle>{t('admin.dishes')}</CardTitle>
             <CardDescription>
-              {dishes.length} sellable {dishes.length === 1 ? 'dish' : 'dishes'}
+              {t('admin.sellableDishes', { count: dishes.length })}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={dishSearch}
                 onChange={(e) => setDishSearch(e.target.value)}
-                placeholder="Search dishes…"
-                className="pl-8"
+                placeholder={t('admin.searchDishes')}
+                className="ps-8"
               />
             </div>
             {dishesQuery.isLoading ? (
@@ -219,12 +219,11 @@ export default function RecipesView() {
               </div>
             ) : dishesQuery.isError ? (
               <p className="py-6 text-center text-sm text-rose-600">
-                {(dishesQuery.error as Error | null)?.message ??
-                  'Failed to load dishes'}
+                {(dishesQuery.error as Error | null)?.message ?? t('admin.loadDishesFailed')}
               </p>
             ) : filteredDishes.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
-                No dishes found.
+                {t('admin.noDishes')}
               </p>
             ) : (
               <div className="max-h-[640px] space-y-1 overflow-y-auto rms-scroll pr-1">
@@ -234,7 +233,7 @@ export default function RecipesView() {
                     type="button"
                     onClick={() => setSelectedId(dish.id)}
                     className={cn(
-                      'flex w-full items-center justify-between gap-2 rounded-lg border p-2.5 text-left text-sm transition-colors',
+                      'flex w-full items-center justify-between gap-2 rounded-lg border p-2.5 text-start text-sm transition-colors',
                       dish.id === activeDishId
                         ? 'border-primary bg-primary/10'
                         : 'border-transparent hover:bg-muted',
@@ -263,26 +262,26 @@ export default function RecipesView() {
                   </Badge>
                 </CardTitle>
                 <CardDescription>
-                  Ingredient costing per serving vs sell price
+                  {t('admin.ingredientCosting')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Cost summary */}
                 <div className="grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-4">
                   <div>
-                    <p className="text-xs text-muted-foreground">Recipe cost</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.recipeCost')}</p>
                     <p className="text-lg font-bold">{formatCurrency(recipeCost)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Sell price</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.sellPrice')}</p>
                     <p className="text-lg font-semibold">{formatCurrency(price)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Food cost</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.foodCost')}</p>
                     <div className="pt-1">{marginBadge}</div>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Margin / serving</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.marginPerServing')}</p>
                     <p className="text-lg font-semibold text-emerald-700">
                       {hasComponents
                         ? formatCurrency(Math.max(0, price - recipeCost))
@@ -300,25 +299,22 @@ export default function RecipesView() {
                   </div>
                 ) : recipeQuery.isError ? (
                   <p className="py-6 text-center text-sm text-rose-600">
-                    {(recipeQuery.error as Error | null)?.message ??
-                      'Failed to load recipe'}
+                    {(recipeQuery.error as Error | null)?.message ?? t('admin.loadRecipeFailed')}
                   </p>
                 ) : components.length === 0 ? (
                   <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-10 text-center">
                     <BookOpen className="size-8 text-muted-foreground/50" />
                     <p className="text-sm text-muted-foreground">
-                      No ingredients yet — add the first one below
+                      {t('admin.noIngredients')}
                     </p>
                   </div>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Ingredient</TableHead>
-                        <TableHead>Qty per unit</TableHead>
-                        <TableHead className="text-right">
-                          Cost per serving
-                        </TableHead>
+                        <TableHead>{t('admin.ingredient')}</TableHead>
+                        <TableHead>{t('admin.qtyPerUnit')}</TableHead>
+                        <TableHead className="text-end">{t('admin.costPerServing')}</TableHead>
                         <TableHead className="w-12" />
                       </TableRow>
                     </TableHeader>
@@ -343,7 +339,7 @@ export default function RecipesView() {
                                       : 'text-muted-foreground',
                                   )}
                                 >
-                                  stock {formatQty(ingredient?.stock ?? 0)}
+                                  {t('admin.stockBadge', { qty: formatQty(ingredient?.stock ?? 0) })}
                                 </Badge>
                               </div>
                             </TableCell>
@@ -363,21 +359,21 @@ export default function RecipesView() {
                                 }}
                               />
                             </TableCell>
-                            <TableCell className="text-right font-medium">
+                            <TableCell className="text-end font-medium">
                               {formatCurrency(
                                 (ingredient?.cost ?? 0) * component.quantity,
                               )}
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-end">
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button
                                     variant="ghost"
                                     size="icon"
                                     className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-                                    aria-label={`Remove ${
-                                      ingredient?.name ?? 'ingredient'
-                                    }`}
+                                    aria-label={t('admin.removeAria', {
+                                      name: ingredient?.name ?? t('admin.ingredient'),
+                                    })}
                                   >
                                     <Trash2 />
                                   </Button>
@@ -385,21 +381,22 @@ export default function RecipesView() {
                                 <AlertDialogContent>
                                   <AlertDialogHeader>
                                     <AlertDialogTitle>
-                                      Remove ingredient from recipe?
+                                      {t('admin.removeIngredientQ')}
                                     </AlertDialogTitle>
                                     <AlertDialogDescription>
-                                      {ingredient?.name ?? 'This ingredient'} will no
-                                      longer be deducted when {selectedDish.name} is
-                                      sold.
+                                      {t('admin.removeIngredientDesc', {
+                                        name: ingredient?.name ?? t('admin.ingredient'),
+                                        dish: selectedDish.name,
+                                      })}
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
                                     <AlertDialogAction
                                       className="bg-rose-600 text-white hover:bg-rose-700"
                                       onClick={() => deleteMutation.mutate(component.id)}
                                     >
-                                      Remove
+                                      {t('common.remove')}
                                     </AlertDialogAction>
                                   </AlertDialogFooter>
                                 </AlertDialogContent>
@@ -416,15 +413,15 @@ export default function RecipesView() {
                 <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed p-3">
                   <div className="min-w-48 flex-1 space-y-1.5">
                     <Label className="text-xs text-muted-foreground">
-                      Add ingredient
+                      {t('admin.addIngredient')}
                     </Label>
                     {stockableQuery.isLoading ? (
                       <Skeleton className="h-9 w-full" />
                     ) : availableIngredients.length === 0 ? (
                       <p className="pt-2 text-sm text-muted-foreground">
                         {stockable.length === 0
-                          ? 'No stockable products available.'
-                          : 'All stockable ingredients are already in this recipe.'}
+                          ? t('admin.noStockableAvailable')
+                          : t('admin.allInRecipe')}
                       </p>
                     ) : (
                       <Select
@@ -432,12 +429,15 @@ export default function RecipesView() {
                         onValueChange={setNewIngredientId}
                       >
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Pick an ingredient" />
+                          <SelectValue placeholder={t('admin.pickIngredient')} />
                         </SelectTrigger>
                         <SelectContent>
                           {availableIngredients.map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>
-                              {p.name} · stock {formatQty(p.stock)}
+                              {t('admin.ingredientOption', {
+                                name: p.name,
+                                stock: formatQty(p.stock),
+                              })}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -448,7 +448,7 @@ export default function RecipesView() {
                     <>
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
-                          Qty per unit
+                          {t('admin.qtyPerUnit')}
                         </Label>
                         <Input
                           type="number"
@@ -465,7 +465,7 @@ export default function RecipesView() {
                         disabled={upsertMutation.isPending || !newIngredientId}
                       >
                         <Plus />
-                        Add
+                        {t('common.add')}
                       </Button>
                     </>
                   )}
@@ -473,7 +473,7 @@ export default function RecipesView() {
 
                 <p className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Info className="size-3.5 shrink-0" />
-                  Inventory is deducted automatically when an order is fully paid
+                  {t('admin.recipeInfo')}
                 </p>
               </CardContent>
             </>
@@ -485,7 +485,7 @@ export default function RecipesView() {
                 <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
                   <BookOpen className="size-8 text-muted-foreground/50" />
                   <p className="text-sm text-muted-foreground">
-                    No dishes available — create sellable products first.
+                    {t('admin.noDishesAvailable')}
                   </p>
                 </div>
               )}
@@ -508,6 +508,7 @@ function QtyInput({
   disabled?: boolean
   onSave: (ingredientId: number, quantity: number) => void
 }) {
+  const { t } = useI18n()
   const [value, setValue] = useState(String(component.quantity))
 
   function commit() {
@@ -533,9 +534,9 @@ function QtyInput({
         if (e.key === 'Enter') e.currentTarget.blur()
       }}
       className="h-8 w-24 font-mono"
-      aria-label={`Quantity of ${
-        component.ingredient?.name ?? 'ingredient'
-      } per unit`}
+      aria-label={t('admin.qtyAria', {
+        name: component.ingredient?.name ?? t('admin.ingredient'),
+      })}
     />
   )
 }

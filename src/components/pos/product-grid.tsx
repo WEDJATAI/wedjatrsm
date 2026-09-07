@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatCurrency } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Product } from '@/lib/types'
 import { guessCourse, type CourseKey } from './pos-utils'
@@ -27,6 +28,7 @@ type ProductGridProps = {
 }
 
 export default function ProductGrid({ products, onAdd, className }: ProductGridProps) {
+  const { t } = useI18n()
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState<string>('all')
 
@@ -52,12 +54,12 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
     <div className={cn('flex min-h-0 flex-col', className)}>
       {/* Search */}
       <div className="relative shrink-0 px-3 pb-3 pt-3 sm:px-4">
-        <Search className="pointer-events-none absolute left-6 top-1/2 size-4 -translate-y-1/2 text-muted-foreground sm:left-7" />
+        <Search className="pointer-events-none absolute start-6 top-1/2 size-4 -translate-y-1/2 text-muted-foreground sm:start-7" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search dishes…"
-          className="h-11 rounded-xl border-[#E2E2E0] bg-white pl-9 text-base"
+          placeholder={t('pos.searchDishes')}
+          className="h-11 rounded-xl border-[#E2E2E0] bg-white ps-9 text-base"
           inputMode="search"
         />
       </div>
@@ -71,7 +73,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
                 value="all"
                 className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
               >
-                All
+                {t('pos.all')}
               </TabsTrigger>
               {categories.map((c) => (
                 <TabsTrigger
@@ -92,12 +94,12 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
         {products.length === 0 ? (
           <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
             <UtensilsCrossed className="size-8 opacity-40" />
-            <p className="text-sm">No sellable products available.</p>
+            <p className="text-sm">{t('pos.noProducts')}</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
             <Search className="size-8 opacity-40" />
-            <p className="text-sm">No dishes match “{search}”.</p>
+            <p className="text-sm">{t('pos.noMatch', { search: search.trim() })}</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
@@ -116,6 +118,7 @@ function ProductTile({
   onAdd,
   ...rest
 }: { product: Product; onAdd: (p: Product) => void } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
+  const { t } = useI18n()
   const course = guessCourse(product)
   const Icon = COURSE_ICONS[course]
   const soldOut = product.isStockable && product.stock <= 0
@@ -129,7 +132,7 @@ function ProductTile({
       aria-disabled={soldOut}
       onClick={() => onAdd(product)}
       className={cn(
-        'h-auto min-h-[96px] flex-col items-start justify-between gap-1.5 rounded-xl border-[#E2E2E0] bg-white p-3 text-left shadow-sm transition active:scale-95',
+        'h-auto min-h-[96px] flex-col items-start justify-between gap-1.5 rounded-xl border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition active:scale-95',
         'hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] hover:shadow',
         soldOut && 'pointer-events-none cursor-not-allowed opacity-50',
       )}
@@ -147,15 +150,15 @@ function ProductTile({
           <span>
             {soldOut ? (
               <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
-                Sold out
+                {t('pos.soldOut')}
               </Badge>
             ) : lowStock ? (
               <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
-                Low: {product.stock}
+                {t('pos.lowStock', { qty: product.stock })}
               </Badge>
             ) : (
               <Badge variant="outline" className="text-muted-foreground">
-                {product.stock} left
+                {t('pos.left', { qty: product.stock })}
               </Badge>
             )}
           </span>

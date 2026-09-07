@@ -2,6 +2,10 @@ import type { DictPair } from '../index'
 
 // ─── Auth / login dictionary (owner: agent 6-d) ─────────────────────
 // 6-d may add keys here; everyone may read. Login + employee check-in card.
+// Reused from common.ts: common.email, common.password, common.clear,
+// common.done, attendance.username, attendance.pin, attendance.checkIn,
+// attendance.checkOut, attendance.checkedInAt/checkedOutAt/worked,
+// attendance.lateBy/onTime/welcome/roleDetected, attendance.shift.
 
 export const authDict: DictPair = {
   en: {
@@ -21,6 +25,26 @@ export const authDict: DictPair = {
     'auth.checkOutSuccess': 'Checked out',
     'auth.enterName': 'Your name or email',
     'auth.enterPin': 'PIN',
+
+    // keypad / keyboard a11y + hints
+    'auth.pinStatus': 'PIN: {n} of {total} digits entered',
+    'auth.digit': 'Digit {d}',
+    'auth.backspace': 'Backspace',
+
+    // toasts / error fallbacks
+    'auth.welcomeBack': 'Welcome back, {name}',
+    'auth.enterEmailPassword': 'Please enter your email and password',
+    'auth.loginFailed': 'Login failed',
+    'auth.nameRequired': 'Please enter your name or email first',
+    'auth.pinIncomplete': 'Enter your 6-digit PIN',
+    'auth.checkInFailed': 'Check-in failed',
+    'auth.checkOutFailed': 'Check-out failed',
+    'auth.checkingIn': 'Checking in…',
+    'auth.checkingOut': 'Checking out…',
+
+    // demo credentials card
+    'auth.demoHint':
+      'Employees: check in from the “Employee check-in” tab with your name and PIN.',
   },
   ar: {
     'auth.title': 'تسجيل الدخول',
@@ -39,5 +63,24 @@ export const authDict: DictPair = {
     'auth.checkOutSuccess': 'تم تسجيل الانصراف',
     'auth.enterName': 'اسمك أو بريدك الإلكتروني',
     'auth.enterPin': 'الرمز السري',
+
+    // keypad / keyboard a11y + hints
+    'auth.pinStatus': 'الرمز السري: تم إدخال {n} من {total} أرقام',
+    'auth.digit': 'رقم {d}',
+    'auth.backspace': 'حذف',
+
+    // toasts / error fallbacks
+    'auth.welcomeBack': 'أهلاً بعودتك، {name}',
+    'auth.enterEmailPassword': 'يرجى إدخال البريد الإلكتروني وكلمة المرور',
+    'auth.loginFailed': 'فشل تسجيل الدخول',
+    'auth.nameRequired': 'أدخل اسمك أو بريدك الإلكتروني أولاً',
+    'auth.pinIncomplete': 'أدخل الرمز السري المكوّن من 6 أرقام',
+    'auth.checkInFailed': 'تعذّر تسجيل الحضور',
+    'auth.checkOutFailed': 'تعذّر تسجيل الانصراف',
+    'auth.checkingIn': 'جارٍ تسجيل الحضور…',
+    'auth.checkingOut': 'جارٍ تسجيل الانصراف…',
+
+    // demo credentials card
+    'auth.demoHint': 'للموظفين: سجّلوا الحضور من تبويب «حضور الموظفين» بالاسم والرمز السري.',
   },
 }

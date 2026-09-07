@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
-import { ApiError, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
+import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
 import { ROLES } from '@/lib/constants'
 
 // Never expose passwordHash in responses.
@@ -10,9 +10,43 @@ const USER_SAFE_SELECT = {
   email: true,
   name: true,
   role: true,
+  roleId: true,
+  roleRecord: { select: { name: true, permissions: true, active: true } },
   pin: true,
   active: true,
   createdAt: true,
+}
+
+type UserRowWithRole = {
+  id: number
+  email: string
+  name: string
+  role: string
+  roleId: number | null
+  roleRecord: { name: string; permissions: string; active: boolean } | null
+  pin: string | null
+  active: boolean
+  createdAt: Date
+}
+
+/** User row + derived role info (roleName / permissions) for the API. */
+function serializeUser(user: UserRowWithRole) {
+  const roleName = user.roleId ? (user.roleRecord?.name ?? null) : null
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    roleId: user.roleId,
+    roleName,
+    permissions: derivePermissions(
+      user.role,
+      user.roleRecord?.active ? user.roleRecord.permissions : null,
+    ),
+    pin: user.pin,
+    active: user.active,
+    createdAt: user.createdAt,
+  }
 }
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
@@ -27,18 +61,43 @@ async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
   return {}
 }
 
-/** Returns a normalized PIN (3-8 digits), null to clear, or undefined when absent. */
+/** Returns a normalized PIN (exactly 6 digits), null to clear, or undefined when absent. */
 function parsePin(value: unknown): string | null | undefined {
   if (value === undefined) return undefined
   if (value === null) return null
   const pin = typeof value === 'number' ? String(value) : value
-  if (typeof pin !== 'string') throw new ApiError('PIN must be 3-8 digits', 400)
+  if (typeof pin !== 'string') throw new ApiError('PIN must be exactly 6 digits', 400)
   const trimmed = pin.trim()
   if (trimmed === '') return null
-  if (!/^\d{3,8}$/.test(trimmed)) {
-    throw new ApiError('PIN must be 3-8 digits', 400)
+  if (!/^\d{6}$/.test(trimmed)) {
+    throw new ApiError('PIN must be exactly 6 digits', 400)
   }
   return trimmed
+}
+
+/**
+ * Validate the roleId payload against the effective role.
+ * - 'custom' requires a roleId that exists and is active (else 400 'Role not found')
+ * - a roleId sent with a non-custom role is rejected
+ * Returns the roleId to persist (null when not custom).
+ */
+async function resolveRoleId(role: string, body: Record<string, unknown>): Promise<number | null> {
+  const raw = body.roleId
+  if (raw === undefined || raw === null) {
+    if (role === 'custom') throw new ApiError('Role not found', 400)
+    return null
+  }
+  if (role !== 'custom') {
+    throw new ApiError('roleId can only be set when role is custom', 400)
+  }
+  const roleId = Number(raw)
+  if (!Number.isInteger(roleId)) throw new ApiError('Role not found', 400)
+  const roleRecord = await db.customRole.findFirst({
+    where: { id: roleId, active: true },
+    select: { id: true },
+  })
+  if (!roleRecord) throw new ApiError('Role not found', 400)
+  return roleId
 }
 
 export async function GET(req: NextRequest) {
@@ -48,7 +107,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'asc' },
       select: USER_SAFE_SELECT,
     })
-    return NextResponse.json({ users })
+    return NextResponse.json({ users: users.map(serializeUser) })
   } catch (err) {
     return errorResponse(err)
   }
@@ -75,14 +134,16 @@ export async function POST(req: NextRequest) {
       throw new ApiError(`Role must be one of: ${ROLES.join(', ')}`, 400)
     }
 
+    const roleId = await resolveRoleId(role, body)
+
     const passwordHash = await hashPassword(password)
 
     try {
       const user = await db.user.create({
-        data: { name, email, passwordHash, role, pin },
+        data: { name, email, passwordHash, role, pin, roleId },
         select: USER_SAFE_SELECT,
       })
-      return NextResponse.json({ user })
+      return NextResponse.json({ user: serializeUser(user) })
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

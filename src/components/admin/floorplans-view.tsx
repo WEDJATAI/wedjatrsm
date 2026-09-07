@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Armchair, Loader2, Map, MapPin, Plus, Trash2 } from 'lucide-react'
+import { Armchair, Loader2, Map, MapPin, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -39,8 +39,9 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { apiFetch, fetcher } from '@/lib/api'
-import { TABLE_STATUS_LABELS } from '@/lib/constants'
+import { TABLE_SHAPES } from '@/lib/constants'
 import type { FloorPlan, RestaurantTable } from '@/lib/types'
+import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
 type DragState = {
@@ -62,6 +63,31 @@ const TABLE_STYLES: Record<string, { surface: string; dot: string }> = {
   reserved: { surface: 'border-rose-400 bg-rose-50 text-rose-900', dot: 'bg-rose-500' },
 }
 
+/** Canvas tile sizing per table shape (6-c spec): round → circle, etc. */
+const SHAPE_TILE_CLASSES: Record<string, string> = {
+  square: 'h-20 w-24 rounded-xl',
+  round: 'h-24 w-24 rounded-full',
+  rectangle: 'h-24 w-32 rounded-xl',
+  oval: 'h-24 w-32 rounded-full',
+}
+
+function shapeTileClasses(shape: string): string {
+  return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+}
+
+/** Tiny shape glyph used next to each Select option. */
+function ShapeGlyph({ shape, className }: { shape: string; className?: string }) {
+  const cls =
+    shape === 'round'
+      ? 'size-3.5 rounded-full'
+      : shape === 'oval'
+        ? 'h-3 w-5 rounded-full'
+        : shape === 'rectangle'
+          ? 'h-3 w-5 rounded-[3px]'
+          : 'size-3.5 rounded-[3px]'
+  return <span className={cn('inline-block shrink-0 border-2 border-current', cls, className)} aria-hidden />
+}
+
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
 const round1 = (value: number) => Math.round(value * 10) / 10
@@ -72,6 +98,7 @@ const toNumber = (value: string, fallback: number) => {
 
 /** Floor plan manager — list of plans + drag-to-arrange table canvas. */
 export default function FloorPlansView() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -85,11 +112,13 @@ export default function FloorPlansView() {
   const [addTableOpen, setAddTableOpen] = useState(false)
   const [addTableName, setAddTableName] = useState('')
   const [addTableCapacity, setAddTableCapacity] = useState('2')
+  const [addTableShape, setAddTableShape] = useState('square')
 
   const [editOpen, setEditOpen] = useState(false)
   const [editingTable, setEditingTable] = useState<RestaurantTable | null>(null)
   const [editName, setEditName] = useState('')
   const [editCapacity, setEditCapacity] = useState('2')
+  const [editShape, setEditShape] = useState('square')
   const [editX, setEditX] = useState('50')
   const [editY, setEditY] = useState('50')
   const [editStatus, setEditStatus] = useState('free')
@@ -112,13 +141,14 @@ export default function FloorPlansView() {
     mutationFn: (name: string) =>
       apiFetch<{ floorPlan: FloorPlan }>('/api/floorplans', { method: 'POST', body: { name } }),
     onSuccess: ({ floorPlan }) => {
-      toast.success(`Floor plan "${floorPlan.name}" created`)
+      toast.success(t('admin.floorPlanCreated', { name: floorPlan.name }))
       void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       setSelectedPlanId(floorPlan.id)
       setNewPlanOpen(false)
       setNewPlanName('')
     },
-    onError: (mutationError) => toast.error(mutationError.message || 'Failed to create floor plan'),
+    onError: (mutationError) =>
+      toast.error(mutationError.message || t('error.generic')),
   })
 
   const togglePlanMutation = useMutation({
@@ -137,7 +167,7 @@ export default function FloorPlansView() {
       return { previous }
     },
     onError: (mutationError, _variables, context) => {
-      toast.error(mutationError.message || 'Failed to update floor plan')
+      toast.error(mutationError.message || t('error.generic'))
       if (context?.previous) {
         queryClient.setQueryData(['floorplans'], context.previous)
       }
@@ -152,17 +182,20 @@ export default function FloorPlansView() {
       floorPlanId: number
       name: string
       capacity: number
+      shape: string
       positionX: number
       positionY: number
     }) => apiFetch<{ table: RestaurantTable }>('/api/tables', { method: 'POST', body: input }),
     onSuccess: ({ table }) => {
-      toast.success(`Table "${table.name}" added`)
+      toast.success(t('admin.tableAdded', { name: table.name }))
       void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       setAddTableOpen(false)
       setAddTableName('')
       setAddTableCapacity('2')
+      setAddTableShape('square')
     },
-    onError: (mutationError) => toast.error(mutationError.message || 'Failed to add table'),
+    onError: (mutationError) =>
+      toast.error(mutationError.message || t('error.generic')),
   })
 
   const updateTableMutation = useMutation({
@@ -176,14 +209,15 @@ export default function FloorPlansView() {
       closeDialog?: boolean
     }) => apiFetch<{ table: RestaurantTable }>(`/api/tables/${id}`, { method: 'PUT', body }),
     onSuccess: (_result, variables) => {
-      toast.success(variables.successMessage ?? 'Table updated')
+      toast.success(variables.successMessage ?? t('admin.tableUpdated'))
       void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
       if (variables.closeDialog) {
         setEditOpen(false)
         setEditingTable(null)
       }
     },
-    onError: (mutationError) => toast.error(mutationError.message || 'Failed to update table'),
+    onError: (mutationError) =>
+      toast.error(mutationError.message || t('error.generic')),
   })
 
   // ── Table edit dialog ────────────────────────────────────────────────
@@ -191,6 +225,7 @@ export default function FloorPlansView() {
   function openTableDialog(table: RestaurantTable) {
     setEditName(table.name)
     setEditCapacity(String(table.capacity))
+    setEditShape(table.shape ?? 'square')
     setEditX(String(round1(table.positionX)))
     setEditY(String(round1(table.positionY)))
     setEditStatus(table.status)
@@ -261,7 +296,7 @@ export default function FloorPlansView() {
     updateTableMutation.mutate({
       id: current.table.id,
       body: { positionX: round1(current.x), positionY: round1(current.y) },
-      successMessage: 'Position saved',
+      successMessage: t('admin.positionSaved'),
     })
   }
 
@@ -270,7 +305,7 @@ export default function FloorPlansView() {
   function handleCreatePlan() {
     const name = newPlanName.trim()
     if (!name) {
-      toast.error('Floor plan name is required')
+      toast.error(t('admin.floorPlanNameRequired'))
       return
     }
     createPlanMutation.mutate(name)
@@ -280,7 +315,7 @@ export default function FloorPlansView() {
     if (!selectedPlan) return
     const name = addTableName.trim()
     if (!name) {
-      toast.error('Table name is required')
+      toast.error(t('admin.tableNameRequired'))
       return
     }
     const parsedCapacity = Number(addTableCapacity)
@@ -291,14 +326,21 @@ export default function FloorPlansView() {
     // Spawn at a center-ish random spot (30-70%).
     const positionX = round1(30 + Math.random() * 40)
     const positionY = round1(30 + Math.random() * 40)
-    addTableMutation.mutate({ floorPlanId: selectedPlan.id, name, capacity, positionX, positionY })
+    addTableMutation.mutate({
+      floorPlanId: selectedPlan.id,
+      name,
+      capacity,
+      shape: addTableShape,
+      positionX,
+      positionY,
+    })
   }
 
   function handleSaveTable() {
     if (!editingTable) return
     const name = editName.trim()
     if (!name) {
-      toast.error('Table name is required')
+      toast.error(t('admin.tableNameRequired'))
       return
     }
     const parsedCapacity = Number(editCapacity)
@@ -311,6 +353,7 @@ export default function FloorPlansView() {
     const body: Record<string, unknown> = {
       name,
       capacity,
+      shape: editShape,
       positionX: clampPercent(round1(toNumber(editX, editingTable.positionX)), 0, 100),
       positionY: clampPercent(round1(toNumber(editY, editingTable.positionY)), 0, 100),
     }
@@ -321,7 +364,7 @@ export default function FloorPlansView() {
     updateTableMutation.mutate({
       id: editingTable.id,
       body,
-      successMessage: 'Table updated',
+      successMessage: t('admin.tableUpdated'),
       closeDialog: true,
     })
   }
@@ -331,7 +374,7 @@ export default function FloorPlansView() {
     updateTableMutation.mutate({
       id: editingTable.id,
       body: { active: false },
-      successMessage: 'Table removed',
+      successMessage: t('admin.tableRemoved'),
       closeDialog: true,
     })
   }
@@ -345,31 +388,27 @@ export default function FloorPlansView() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Floor Plans</h1>
-          <p className="text-sm text-muted-foreground">
-            Arrange tables per dining area — positions sync live to the POS table map.
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight">{t('nav.floorplans')}</h1>
+          <p className="text-sm text-muted-foreground">{t('admin.floorplansSubtitle')}</p>
         </div>
         <Dialog open={newPlanOpen} onOpenChange={setNewPlanOpen}>
           <DialogTrigger asChild>
             <Button size="lg">
               <Plus className="size-4" />
-              New Floor Plan
+              {t('admin.newFloorPlan')}
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-sm">
             <DialogHeader>
-              <DialogTitle>New floor plan</DialogTitle>
-              <DialogDescription>
-                Create a new dining area, e.g. Terrace or Mezzanine.
-              </DialogDescription>
+              <DialogTitle>{t('admin.newFloorPlanTitle')}</DialogTitle>
+              <DialogDescription>{t('admin.newFloorPlanDesc')}</DialogDescription>
             </DialogHeader>
             <div className="grid gap-1.5">
-              <Label htmlFor="plan-name">Name</Label>
+              <Label htmlFor="plan-name">{t('common.name')}</Label>
               <Input
                 id="plan-name"
                 value={newPlanName}
-                placeholder="e.g. Main Hall"
+                placeholder={t('admin.planNamePlaceholder')}
                 onChange={(event) => setNewPlanName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') handleCreatePlan()
@@ -378,11 +417,11 @@ export default function FloorPlansView() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setNewPlanOpen(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button onClick={handleCreatePlan} disabled={creatingPlan || !newPlanName.trim()}>
                 {creatingPlan ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                Create
+                {t('admin.create')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -391,7 +430,7 @@ export default function FloorPlansView() {
 
       {isError && (
         <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error instanceof Error ? error.message : 'Failed to load floor plans'}
+          {error instanceof Error ? error.message : t('admin.loadFloorplansFailed')}
         </div>
       )}
 
@@ -411,12 +450,12 @@ export default function FloorPlansView() {
         <Card className="flex flex-col items-center justify-center gap-3 border-dashed p-12 py-20 text-center">
           <Map className="size-14 text-muted-foreground/40" />
           <div className="space-y-1">
-            <p className="font-semibold">No floor plans yet</p>
-            <p className="text-sm text-muted-foreground">Create your first floor plan</p>
+            <p className="font-semibold">{t('admin.noFloorPlans')}</p>
+            <p className="text-sm text-muted-foreground">{t('admin.createFirstPlan')}</p>
           </div>
           <Button onClick={() => setNewPlanOpen(true)}>
             <Plus className="size-4" />
-            New Floor Plan
+            {t('admin.newFloorPlan')}
           </Button>
         </Card>
       ) : (
@@ -424,7 +463,7 @@ export default function FloorPlansView() {
           {/* Floor plan list */}
           <div className="space-y-2 self-start">
             <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Dining areas
+              {t('admin.diningAreas')}
             </p>
             {floorPlans.map((plan) => {
               const activeTableCount = plan.tables.filter((table) => table.active).length
@@ -451,7 +490,7 @@ export default function FloorPlansView() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold leading-tight">{plan.name}</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        {activeTableCount} tables
+                        {t('admin.tableCount', { count: activeTableCount })}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
@@ -460,7 +499,7 @@ export default function FloorPlansView() {
                         onCheckedChange={(checked) =>
                           togglePlanMutation.mutate({ id: plan.id, active: checked })
                         }
-                        aria-label={`${plan.active ? 'Deactivate' : 'Activate'} ${plan.name}`}
+                        aria-label={`${t('common.active')}: ${plan.name}`}
                       />
                     </div>
                   </div>
@@ -477,50 +516,68 @@ export default function FloorPlansView() {
                   <h2 className="truncate text-lg font-bold leading-tight">{selectedPlan.name}</h2>
                   <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                     <MapPin className="size-3.5 shrink-0" />
-                    Drag tables to reposition · click a table to edit
+                    {t('admin.dragHint')}
                   </p>
                 </div>
                 <Dialog open={addTableOpen} onOpenChange={setAddTableOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline">
                       <Plus className="size-4" />
-                      Add Table
+                      {t('admin.addTable')}
                     </Button>
                   </DialogTrigger>
                   <DialogContent className="sm:max-w-sm">
                     <DialogHeader>
-                      <DialogTitle>Add table</DialogTitle>
-                      <DialogDescription>
-                        New tables spawn near the center of the canvas — drag them into place.
-                      </DialogDescription>
+                      <DialogTitle>{t('admin.addTableTitle')}</DialogTitle>
+                      <DialogDescription>{t('admin.addTableDesc')}</DialogDescription>
                     </DialogHeader>
                     <div className="grid gap-4">
                       <div className="grid gap-1.5">
-                        <Label htmlFor="table-name">Name</Label>
+                        <Label htmlFor="table-name">{t('common.name')}</Label>
                         <Input
                           id="table-name"
                           value={addTableName}
-                          placeholder="e.g. T10"
+                          placeholder={t('admin.tableNamePlaceholder')}
                           onChange={(event) => setAddTableName(event.target.value)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter') handleAddTable()
                           }}
                         />
                       </div>
-                      <div className="grid gap-1.5">
-                        <Label htmlFor="table-capacity">Capacity (seats)</Label>
-                        <Input
-                          id="table-capacity"
-                          type="number"
-                          min={1}
-                          value={addTableCapacity}
-                          onChange={(event) => setAddTableCapacity(event.target.value)}
-                        />
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-1.5">
+                          <Label htmlFor="table-capacity">{t('admin.capacitySeats')}</Label>
+                          <Input
+                            id="table-capacity"
+                            type="number"
+                            min={1}
+                            value={addTableCapacity}
+                            onChange={(event) => setAddTableCapacity(event.target.value)}
+                          />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <Label htmlFor="table-shape">{t('admin.shapeLabel')}</Label>
+                          <Select value={addTableShape} onValueChange={setAddTableShape}>
+                            <SelectTrigger id="table-shape" className="w-full">
+                              <SelectValue placeholder={t('admin.shapeLabel')} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TABLE_SHAPES.map((shape) => (
+                                <SelectItem key={shape} value={shape}>
+                                  <span className="flex items-center gap-2">
+                                    <ShapeGlyph shape={shape} />
+                                    {t(`shape.${shape}`)}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
                     <DialogFooter>
                       <Button variant="outline" onClick={() => setAddTableOpen(false)}>
-                        Cancel
+                        {t('common.cancel')}
                       </Button>
                       <Button onClick={handleAddTable} disabled={addingTable || !addTableName.trim()}>
                         {addingTable ? (
@@ -528,7 +585,7 @@ export default function FloorPlansView() {
                         ) : (
                           <Plus className="size-4" />
                         )}
-                        Add
+                        {t('common.add')}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -543,7 +600,7 @@ export default function FloorPlansView() {
                   <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
                     <Armchair className="size-12 text-muted-foreground/40" />
                     <p className="text-sm font-medium text-muted-foreground">
-                      Add tables to arrange your floor
+                      {t('admin.addTablesEmpty')}
                     </p>
                   </div>
                 ) : (
@@ -556,12 +613,15 @@ export default function FloorPlansView() {
                         surface: 'border-stone-300 bg-stone-50 text-stone-700',
                         dot: 'bg-stone-400',
                       }
+                    const statusLabel = t(`status.table.${table.status}`)
+                    const showGuests =
+                      table.status === 'occupied' && table.openOrderGuests != null
                     return (
                       <div
                         key={table.id}
                         role="button"
                         tabIndex={0}
-                        aria-label={`${table.name}, ${TABLE_STATUS_LABELS[table.status] ?? table.status}`}
+                        aria-label={`${table.name}, ${statusLabel}`}
                         style={{ left: `${x}%`, top: `${y}%` }}
                         onPointerDown={(event) => beginDrag(event, table)}
                         onPointerMove={moveDrag}
@@ -574,18 +634,28 @@ export default function FloorPlansView() {
                           }
                         }}
                         className={cn(
-                          'absolute flex h-20 w-24 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 font-semibold shadow-sm transition-shadow active:cursor-grabbing',
+                          'absolute flex -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none select-none flex-col items-center justify-center gap-0.5 border-2 p-1 font-semibold shadow-sm transition-shadow active:cursor-grabbing',
+                          shapeTileClasses(table.shape ?? 'square'),
                           styles.surface,
                           isDragging && 'z-30 cursor-grabbing scale-105 shadow-lg ring-2 ring-ring/60',
                         )}
                       >
-                        <span className="truncate text-sm font-bold leading-tight">{table.name}</span>
-                        <span className="text-[11px] font-medium opacity-75">
-                          seats {table.capacity}
+                        <span className="max-w-full truncate px-1 text-sm font-bold leading-tight">
+                          {table.name}
                         </span>
+                        {showGuests ? (
+                          <span className="flex items-center gap-1 text-[11px] font-medium opacity-80">
+                            <Users className="size-3 shrink-0" aria-hidden />
+                            {table.openOrderGuests} {t('common.people')}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-medium opacity-75">
+                            {table.capacity} {t('common.seats')}
+                          </span>
+                        )}
                         <span className="mt-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider opacity-80">
                           <span className={cn('size-2 rounded-full', styles.dot)} />
-                          {TABLE_STATUS_LABELS[table.status] ?? table.status}
+                          {statusLabel}
                         </span>
                       </div>
                     )
@@ -607,14 +677,12 @@ export default function FloorPlansView() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Edit table</DialogTitle>
-            <DialogDescription>
-              Update name, capacity, position or reservation status.
-            </DialogDescription>
+            <DialogTitle>{t('admin.editTable')}</DialogTitle>
+            <DialogDescription>{t('admin.editTableDesc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-1.5">
-              <Label htmlFor="edit-name">Name</Label>
+              <Label htmlFor="edit-name">{t('common.name')}</Label>
               <Input
                 id="edit-name"
                 value={editName}
@@ -623,7 +691,7 @@ export default function FloorPlansView() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
-                <Label htmlFor="edit-capacity">Capacity (seats)</Label>
+                <Label htmlFor="edit-capacity">{t('admin.capacitySeats')}</Label>
                 <Input
                   id="edit-capacity"
                   type="number"
@@ -633,27 +701,43 @@ export default function FloorPlansView() {
                 />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="edit-status">Status</Label>
-                <Select value={editStatus} onValueChange={setEditStatus}>
-                  <SelectTrigger id="edit-status" className="w-full">
-                    <SelectValue placeholder="Status" />
+                <Label htmlFor="edit-shape">{t('admin.shapeLabel')}</Label>
+                <Select value={editShape} onValueChange={setEditShape}>
+                  <SelectTrigger id="edit-shape" className="w-full">
+                    <SelectValue placeholder={t('admin.shapeLabel')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="free">Free</SelectItem>
-                    <SelectItem value="reserved">Reserved</SelectItem>
-                    <SelectItem value="occupied" disabled>
-                      Occupied (automatic)
-                    </SelectItem>
+                    {TABLE_SHAPES.map((shape) => (
+                      <SelectItem key={shape} value={shape}>
+                        <span className="flex items-center gap-2">
+                          <ShapeGlyph shape={shape} />
+                          {t(`shape.${shape}`)}
+                        </span>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <p className="-mt-2 text-xs text-muted-foreground">
-              Occupied is set automatically while an order is open on the table.
-            </p>
+            <div className="grid gap-1.5">
+              <Label htmlFor="edit-status">{t('common.status')}</Label>
+              <Select value={editStatus} onValueChange={setEditStatus}>
+                <SelectTrigger id="edit-status" className="w-full">
+                  <SelectValue placeholder={t('admin.statusPlaceholder')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="free">{t('status.table.free')}</SelectItem>
+                  <SelectItem value="reserved">{t('status.table.reserved')}</SelectItem>
+                  <SelectItem value="occupied" disabled>
+                    {t('admin.occupiedAuto')}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t('admin.occupiedNote')}</p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
-                <Label htmlFor="edit-x">Position X (%)</Label>
+                <Label htmlFor="edit-x">{t('admin.positionX')}</Label>
                 <Input
                   id="edit-x"
                   type="number"
@@ -665,7 +749,7 @@ export default function FloorPlansView() {
                 />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="edit-y">Position Y (%)</Label>
+                <Label htmlFor="edit-y">{t('admin.positionY')}</Label>
                 <Input
                   id="edit-y"
                   type="number"
@@ -683,23 +767,21 @@ export default function FloorPlansView() {
               <AlertDialogTrigger asChild>
                 <Button variant="destructive" disabled={savingTable}>
                   <Trash2 className="size-4" />
-                  Remove table
+                  {t('admin.removeTable')}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Remove this table?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Table will be hidden from POS (soft delete). Existing order history is kept.
-                  </AlertDialogDescription>
+                  <AlertDialogTitle>{t('admin.removeTableQ')}</AlertDialogTitle>
+                  <AlertDialogDescription>{t('admin.removeTableDesc')}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={handleRemoveTable}
                     className="bg-destructive text-white hover:bg-destructive/90"
                   >
-                    Remove table
+                    {t('admin.removeTable')}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -712,11 +794,11 @@ export default function FloorPlansView() {
                   setEditingTable(null)
                 }}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button onClick={handleSaveTable} disabled={savingTable || !editName.trim()}>
                 {savingTable && <Loader2 className="size-4 animate-spin" />}
-                Save changes
+                {t('admin.saveChanges')}
               </Button>
             </div>
           </DialogFooter>

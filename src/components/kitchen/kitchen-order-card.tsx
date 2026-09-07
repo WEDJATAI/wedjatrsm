@@ -4,8 +4,9 @@ import { Check, CheckCircle2, Loader2, Play, StickyNote } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { COURSE_LABELS, type Course, type ItemStatus } from '@/lib/constants'
+import { type Course, type ItemStatus } from '@/lib/constants'
 import { elapsedMinutes, elapsedSince, formatCurrency, formatQty, formatTime } from '@/lib/format'
+import { useI18n } from '@/lib/i18n'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -18,17 +19,17 @@ const STATUS_CHIP_CLASSES: Record<string, string> = {
   served: 'border-zinc-700 bg-zinc-800 text-zinc-500',
 }
 
-const STATUS_CHIP_LABELS: Record<string, string> = {
-  new: 'New',
-  preparing: 'Prep',
-  ready: 'Ready',
-  served: 'Served',
+const STATUS_CHIP_LABEL_KEYS: Record<string, string> = {
+  new: 'status.item.new',
+  preparing: 'status.item.preparing',
+  ready: 'status.item.ready',
+  served: 'status.item.served',
 }
 
-const NEXT_STATUS: Record<string, { label: string; status: ItemStatus }> = {
-  new: { label: 'Start', status: 'preparing' },
-  preparing: { label: 'Ready', status: 'ready' },
-  ready: { label: 'Served', status: 'served' },
+const NEXT_STATUS: Record<string, { labelKey: string; status: ItemStatus }> = {
+  new: { labelKey: 'kds.start', status: 'preparing' },
+  preparing: { labelKey: 'status.item.ready', status: 'ready' },
+  ready: { labelKey: 'status.item.served', status: 'served' },
 }
 
 /** Card border urgency: < 10m calm, 10-20m warning, > 20m critical. */
@@ -60,11 +61,13 @@ export function KitchenOrderCard({
   pendingItemId,
   onUpdateItemStatus,
 }: KitchenOrderCardProps) {
+  const { t } = useI18n()
   const minutes = elapsedMinutes(order.createdAt)
   const items = order.items
   const completed = items.length > 0 && items.every((item) => item.status === 'served')
   const readyCount = items.filter((item) => item.status === 'ready' || item.status === 'served').length
-  const tableName = order.table?.name ?? (order.tableId ? `Table #${order.tableId}` : 'Takeaway')
+  const tableName =
+    order.table?.name ?? (order.tableId ? `${t('common.table')} #${order.tableId}` : t('common.takeaway'))
 
   return (
     <article
@@ -80,7 +83,7 @@ export function KitchenOrderCard({
         <div className="min-w-0">
           <h2 className="truncate text-lg font-bold leading-tight">{tableName}</h2>
           <p className="text-sm text-zinc-500">
-            Order #{order.id} · {formatTime(order.createdAt)}
+            {t('common.order')} #{order.id} · {formatTime(order.createdAt)}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -113,10 +116,10 @@ export function KitchenOrderCard({
                     STATUS_CHIP_CLASSES[item.status] ?? 'border-zinc-700 bg-zinc-800 text-zinc-500',
                   )}
                 >
-                  {STATUS_CHIP_LABELS[item.status] ?? item.status}
+                  {t(STATUS_CHIP_LABEL_KEYS[item.status] ?? 'status.item.served')}
                 </span>
                 <span className="truncate text-sm font-medium text-zinc-100">
-                  {formatQty(item.quantity)} × {item.product?.name ?? 'Item'}
+                  {formatQty(item.quantity)} × {item.product?.name ?? t('kds.item')}
                 </span>
                 {item.notes ? (
                   <span
@@ -128,7 +131,7 @@ export function KitchenOrderCard({
                   </span>
                 ) : null}
                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                  {COURSE_LABELS[item.course] ?? item.course}
+                  {t(`course.${item.course}`)}
                 </span>
               </div>
 
@@ -156,7 +159,7 @@ export function KitchenOrderCard({
                   ) : (
                     <Check className="size-4" />
                   )}
-                  {next.label}
+                  {t(next.labelKey)}
                 </Button>
               ) : null}
             </li>
@@ -167,11 +170,12 @@ export function KitchenOrderCard({
       {/* Progress footer */}
       <div className="flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
         <p className="text-xs text-zinc-500">
-          {readyCount}/{items.length} items ready · {formatCurrency(order.totalAmount)}
+          {t('kds.itemsReady', { ready: readyCount, total: items.length })} ·{' '}
+          {formatCurrency(order.totalAmount)}
         </p>
         {completed && (
           <Badge variant="outline" className="border-zinc-700 bg-zinc-800 text-zinc-400">
-            Completed
+            {t('kds.completed')}
           </Badge>
         )}
       </div>

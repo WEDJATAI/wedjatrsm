@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { GripVertical, MoreHorizontal, Pencil, Plus, Tags, Trash2, TriangleAlert } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
 import type { Category } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
@@ -48,12 +49,15 @@ type CategoryForm = {
 
 type CategoryFormErrors = Partial<Record<'name' | 'displayOrder', string>>
 
-function validateCategoryForm(form: CategoryForm): CategoryFormErrors {
+function validateCategoryForm(
+  form: CategoryForm,
+  t: (key: string) => string,
+): CategoryFormErrors {
   const errors: CategoryFormErrors = {}
-  if (form.name.trim() === '') errors.name = 'Name is required'
+  if (form.name.trim() === '') errors.name = t('admin.nameRequired')
   const order = Number(form.displayOrder)
   if (form.displayOrder.trim() === '' || !Number.isInteger(order) || order < 0) {
-    errors.displayOrder = 'Enter a whole number of 0 or more'
+    errors.displayOrder = t('admin.orderWhole')
   }
   return errors
 }
@@ -74,6 +78,7 @@ function BadgeOrder({ order }: { order: number }) {
 // ─── View ───────────────────────────────────────────────────────────
 
 export default function CategoriesView() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -101,7 +106,7 @@ export default function CategoriesView() {
   }
 
   const isCreate = editing === null
-  const errors = validateCategoryForm(form)
+  const errors = validateCategoryForm(form, t)
   const hasErrors = Object.values(errors).some(Boolean)
 
   const saveMutation = useMutation({
@@ -116,7 +121,7 @@ export default function CategoriesView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['categories'] })
-      toast.success(editing === null ? 'Category created' : 'Category updated')
+      toast.success(editing === null ? t('admin.categoryCreated') : t('admin.categoryUpdated'))
       setFormOpen(false)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -139,7 +144,7 @@ export default function CategoriesView() {
       return { prev }
     },
     onSuccess: (_data, vars) => {
-      toast.success(vars.active ? 'Category activated' : 'Category deactivated')
+      toast.success(vars.active ? t('admin.categoryActivated') : t('admin.categoryDeactivated'))
     },
     onError: (err: Error, _vars, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(['categories', 'all'], ctx.prev)
@@ -155,7 +160,7 @@ export default function CategoriesView() {
       apiFetch<{ ok: boolean }>(`/api/categories/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['categories'] })
-      toast.success('Category deactivated')
+      toast.success(t('admin.categoryDeactivated'))
       setDeleteTarget(null)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -178,11 +183,11 @@ export default function CategoriesView() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold">Categories</h1>
-          <p className="text-muted-foreground text-sm">Menu groups shown as POS tabs</p>
+          <h1 className="text-2xl font-bold">{t('nav.categories')}</h1>
+          <p className="text-muted-foreground text-sm">{t('admin.categoriesSubtitle')}</p>
         </div>
         <Button className="h-11" onClick={openCreate}>
-          <Plus /> New Category
+          <Plus /> {t('admin.newCategory')}
         </Button>
       </div>
 
@@ -206,9 +211,9 @@ export default function CategoriesView() {
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <TriangleAlert className="size-10 text-destructive" aria-hidden />
             <div>
-              <p className="font-medium">Failed to load categories</p>
+              <p className="font-medium">{t('admin.loadCategoriesFailed')}</p>
               <p className="text-muted-foreground text-sm">
-                {categoriesQuery.error?.message ?? 'Please try again.'}
+                {categoriesQuery.error?.message ?? t('common.error')}
               </p>
             </div>
             <Button
@@ -216,20 +221,18 @@ export default function CategoriesView() {
               className="h-11"
               onClick={() => void categoriesQuery.refetch()}
             >
-              Retry
+              {t('common.retry')}
             </Button>
           </div>
         ) : categories.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
             <Tags className="size-10 text-muted-foreground/50" aria-hidden />
             <div>
-              <p className="font-medium">No categories yet</p>
-              <p className="text-muted-foreground text-sm">
-                Create your first category to organize the POS menu.
-              </p>
+              <p className="font-medium">{t('admin.noCategories')}</p>
+              <p className="text-muted-foreground text-sm">{t('admin.noCategoriesHint')}</p>
             </div>
             <Button className="h-11" onClick={openCreate}>
-              <Plus /> New Category
+              <Plus /> {t('admin.newCategory')}
             </Button>
           </div>
         ) : (
@@ -248,7 +251,7 @@ export default function CategoriesView() {
                     {c.name}
                   </p>
                   <p className="text-muted-foreground text-sm">
-                    {c.productCount ?? 0} {c.productCount === 1 ? 'product' : 'products'}
+                    {t('admin.productsCount', { count: c.productCount ?? 0 })}
                   </p>
                 </div>
                 <BadgeOrder order={c.displayOrder} />
@@ -256,7 +259,7 @@ export default function CategoriesView() {
                   checked={c.active}
                   disabled={toggleMutation.isPending && toggleMutation.variables?.id === c.id}
                   onCheckedChange={(checked) => toggleMutation.mutate({ id: c.id, active: checked })}
-                  aria-label={`${c.active ? 'Deactivate' : 'Activate'} ${c.name}`}
+                  aria-label={`${c.active ? t('admin.deactivate') : t('admin.activate')} ${c.name}`}
                 />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -264,17 +267,17 @@ export default function CategoriesView() {
                       variant="ghost"
                       size="icon"
                       className="size-11 shrink-0 text-muted-foreground"
-                      aria-label={`Actions for ${c.name}`}
+                      aria-label={t('admin.actionsFor', { name: c.name })}
                     >
                       <MoreHorizontal />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => openEdit(c)}>
-                      <Pencil /> Edit
+                      <Pencil /> {t('common.edit')}
                     </DropdownMenuItem>
                     <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(c)}>
-                      <Trash2 /> Delete
+                      <Trash2 /> {t('common.delete')}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -288,26 +291,26 @@ export default function CategoriesView() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{isCreate ? 'New Category' : 'Edit Category'}</DialogTitle>
-            <DialogDescription>
-              Categories become tabs in the POS, ordered by display order.
-            </DialogDescription>
+            <DialogTitle>{isCreate ? t('admin.newCategory') : t('admin.editCategory')}</DialogTitle>
+            <DialogDescription>{t('admin.categoryDesc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="category-name">Name *</Label>
+              <Label htmlFor="category-name">
+                {t('common.name')} *
+              </Label>
               <Input
                 id="category-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Main Courses"
+                placeholder={t('admin.categoryPlaceholder')}
                 className="h-11"
                 aria-invalid={errors.name ? true : undefined}
               />
               <FieldError message={errors.name} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="category-order">Display order</Label>
+              <Label htmlFor="category-order">{t('admin.displayOrder')}</Label>
               <Input
                 id="category-order"
                 type="number"
@@ -319,9 +322,7 @@ export default function CategoriesView() {
                 className="h-11"
                 aria-invalid={errors.displayOrder ? true : undefined}
               />
-              <p className="text-muted-foreground text-xs">
-                Lower numbers appear first on POS tabs.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('admin.displayOrderHint')}</p>
               <FieldError message={errors.displayOrder} />
             </div>
           </div>
@@ -332,14 +333,14 @@ export default function CategoriesView() {
               onClick={() => setFormOpen(false)}
               disabled={saveMutation.isPending}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               className="h-11"
               disabled={saveMutation.isPending || hasErrors}
               onClick={() => saveMutation.mutate()}
             >
-              {saveMutation.isPending ? 'Saving…' : isCreate ? 'Create Category' : 'Save Changes'}
+              {saveMutation.isPending ? t('admin.saving') : isCreate ? t('admin.createCategory') : t('admin.saveChanges')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -352,14 +353,13 @@ export default function CategoriesView() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Deactivate category?</AlertDialogTitle>
+            <AlertDialogTitle>{t('admin.deactivateCategory')}</AlertDialogTitle>
             <AlertDialogDescription>
-              “{deleteTarget?.name}” will be hidden from POS tabs. Its products are kept and can be
-              re-categorized later.
+              {t('admin.deactivateCategoryDesc', { name: deleteTarget?.name ?? '' })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="h-11">{t('common.cancel')}</AlertDialogCancel>
             <Button
               variant="destructive"
               className="h-11"
@@ -368,7 +368,7 @@ export default function CategoriesView() {
                 if (deleteTarget) deleteMutation.mutate(deleteTarget.id)
               }}
             >
-              {deleteMutation.isPending ? 'Deactivating…' : 'Deactivate'}
+              {deleteMutation.isPending ? t('admin.deactivating') : t('admin.deactivate')}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
