@@ -7,6 +7,7 @@ import {
   Banknote,
   Check,
   CreditCard,
+  Hourglass,
   Loader2,
   MoreHorizontal,
   Plus,
@@ -40,6 +41,9 @@ type PaymentModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: (order: Order, closed: boolean) => void
+  /** Called after the check is deferred (pay later, client name recorded).
+   *  The modal closes itself; the parent resets its order screen state. */
+  onDeferred?: (order: Order) => void
 }
 
 type PaymentResult = {
@@ -66,11 +70,16 @@ const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
   other: { labelKey: 'status.payment.other', icon: MoreHorizontal },
 }
 
-export default function PaymentModal({ order, open, onOpenChange, onSuccess }: PaymentModalProps) {
+export default function PaymentModal({ order, open, onOpenChange, onSuccess, onDeferred }: PaymentModalProps) {
   const { t, lang } = useI18n()
   const [tab, setTab] = useState<SplitTab>('single')
   const [submitting, setSubmitting] = useState(false)
   const [checkOpen, setCheckOpen] = useState(false)
+
+  // Defer-payment state (check stays open under the client's name)
+  const [deferOpen, setDeferOpen] = useState(false)
+  const [deferName, setDeferName] = useState('')
+  const [deferSubmitting, setDeferSubmitting] = useState(false)
 
   // Which payment row the method tiles currently target.
   const [activeIdx, setActiveIdx] = useState(0)
@@ -102,6 +111,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
     setSubmitting(false)
     setActiveIdx(0)
     setCheckOpen(false)
+    setDeferOpen(false)
+    setDeferName('')
+    setDeferSubmitting(false)
   }, [open, order.id, order.remainingAmount])
 
   // ── Derived payment rows per tab ──────────────────────────────────
@@ -278,6 +290,33 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
       toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  // ── Defer payment (client pays later, check tracked by name) ──────
+  const canDefer = order.status === 'open' && remaining > 0
+
+  const handleDefer = async () => {
+    const clientName = deferName.trim()
+    if (!clientName) {
+      toast.error(t('pos.deferredNameRequired'))
+      return
+    }
+    if (deferSubmitting) return
+    setDeferSubmitting(true)
+    try {
+      const result = await apiFetch<{ order: Order }>(`/api/orders/${order.id}/defer`, {
+        method: 'POST',
+        body: { clientName },
+      })
+      toast.success(t('pos.deferredToast', { order: order.id, client: clientName }))
+      setDeferOpen(false)
+      onDeferred?.(result.order)
+      onOpenChange(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
+    } finally {
+      setDeferSubmitting(false)
     }
   }
 
@@ -543,14 +582,25 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
             </div>
             <div className="flex gap-2">
               <Button
-                variant="outline"
-                className="h-12 flex-1 rounded-xl border-[#E2E2E0]"
+                               variant="outline"
+                className="h-12 rounded-xl border-[#E2E2E0]"
                 onClick={() => setCheckOpen(true)}
                 title={t('pos.printCheckPaymentHint')}
               >
                 <Printer />
                 <span className="hidden sm:inline">{t('pos.printCheck')}</span>
               </Button>
+              {canDefer && (
+                <Button
+                  variant="outline"
+                  className="h-12 rounded-xl border-violet-400 text-violet-700 hover:bg-violet-50 hover:text-violet-800"
+                  onClick={() => setDeferOpen(true)}
+                  title={t('pos.deferredDesc')}
+                >
+                  <Hourglass />
+                  <span className="hidden lg:inline">{t('pos.deferredButton')}</span>
+                </Button>
+              )}
               <Button
                 className="h-12 flex-[1.8] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
                 disabled={!canSubmit}
@@ -569,6 +619,52 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess }: P
       {/* Guest check for the CURRENT split configuration — printing does NOT
           record payments; the payment modal stays open behind it. */}
       <CheckModal order={order} open={checkOpen} onOpenChange={setCheckOpen} rows={checkRows} />
+
+      {/* Defer-payment dialog — client name is required; the check stays
+          open as a receivable and the table is released for cleanup. */}
+      <Dialog open={deferOpen} onOpenChange={setDeferOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Hourglass className="size-5 text-violet-600" /> {t('pos.deferredTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('pos.deferredDesc')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="defer-client-name">
+              {t('pos.deferredNameLabel')} *
+            </label>
+            <input
+              id="defer-client-name"
+              value={deferName}
+              onChange={(e) => setDeferName(e.target.value)}
+              placeholder={t('pos.deferredNamePlaceholder')}
+              maxLength={60}
+              autoFocus
+              className="h-11 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void handleDefer()
+                }
+              }}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" className="h-11" onClick={() => setDeferOpen(false)} disabled={deferSubmitting}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              className="h-11 bg-violet-600 text-white hover:bg-violet-700"
+              onClick={() => void handleDefer()}
+              disabled={deferSubmitting || deferName.trim().length === 0}
+            >
+              {deferSubmitting ? <Loader2 className="animate-spin" /> : <Hourglass />}
+              {t('pos.deferredButton')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
