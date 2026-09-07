@@ -74,6 +74,7 @@ export const common: DictPair = {
     'nav.roles': 'Roles',
     'nav.attendance': 'Attendance',
     'nav.settings': 'Settings',
+    'nav.activity': 'Activity',
     'nav.admin': 'Admin',
     'nav.logout': 'Log out',
     'nav.home': 'Home',
@@ -88,8 +89,9 @@ export const common: DictPair = {
     'status.table.free': 'Free',
     'status.table.occupied': 'Occupied',
     'status.table.reserved': 'Reserved',
-    'status.table.paid': 'Paid — tap to clear',
-    'status.table.deferred': 'Deferred — tap to clear',
+    'status.table.paid': 'Paid — tap to bus',
+    'status.table.deferred': 'Deferred — tap to bus',
+    'status.table.dirty': 'Needs cleaning',
 
     // table shapes
     'shape.square': 'Square',
@@ -185,6 +187,14 @@ export const common: DictPair = {
     'error.forbidden': 'You do not have permission to do this',
     'error.notFound': 'Not found',
     'error.generic': 'Request failed',
+
+    // idle session timeout (shared terminals)
+    'idle.warningTitle': 'Still there?',
+    'idle.warningDesc':
+      'You have been inactive for a while. For security on shared terminals you will be signed out in {seconds}s.',
+    'idle.stay': 'Stay signed in',
+    'idle.logoutNow': 'Sign out now',
+    'idle.signedOutToast': 'Signed out after inactivity',
   },
   ar: {
     // generic actions
@@ -255,6 +265,7 @@ export const common: DictPair = {
     'nav.roles': 'الأدوار',
     'nav.attendance': 'الحضور والانصراف',
     'nav.settings': 'الإعدادات',
+    'nav.activity': 'السجل',
     'nav.admin': 'الإدارة',
     'nav.logout': 'تسجيل الخروج',
     'nav.home': 'الرئيسية',
@@ -269,8 +280,9 @@ export const common: DictPair = {
     'status.table.free': 'متاحة',
     'status.table.occupied': 'مشغولة',
     'status.table.reserved': 'محجوزة',
-    'status.table.paid': 'مدفوعة — اضغط للتفريغ',
-    'status.table.deferred': 'مؤجلة — اضغط للتفريغ',
+    'status.table.paid': 'مدفوعة — اضغط للإرسال للتنظيف',
+    'status.table.deferred': 'مؤجلة — اضغط للإرسال للتنظيف',
+    'status.table.dirty': 'تحتاج تنظيفًا',
 
     // table shapes
     'shape.square': 'مربعة',
@@ -366,5 +378,13 @@ export const common: DictPair = {
     'error.forbidden': 'ليست لديك صلاحية للقيام بهذا الإجراء',
     'error.notFound': 'غير موجود',
     'error.generic': 'فشل الطلب',
+
+    // مهلة الخمول (أجهزة مشتركة)
+    'idle.warningTitle': 'ما زلت موجودًا؟',
+    'idle.warningDesc':
+      'لم تكن نشطًا لفترة. حفاظًا على الأمان في الأجهزة المشتركة سيتم تسجيل خروجك خلال {seconds} ثانية.',
+    'idle.stay': 'البقاء مسجلاً',
+    'idle.logoutNow': 'تسجيل الخروج الآن',
+    'idle.signedOutToast': 'تم تسجيل الخروج بسبب الخمول',
   },
 }

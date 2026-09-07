@@ -6,6 +6,7 @@ import {
   Armchair,
   ArrowLeftRight,
   BadgeCheck,
+  Brush,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -137,14 +138,20 @@ export default function TableSelect({
   const sourceOrder = source ? openOrders.find((o) => o.id === source.orderId) ?? null : null
   const sourceLabel = source ? sourceOrder?.table?.name ?? t('common.takeaway') : null
 
-  // ── Clear table (paid/deferred → free) ────────────────────────────
+  // ── Manual table turnover (two clicks): paid/deferred → bus → amber
+  // 'dirty' (needs cleaning) → clean → free. Audit-logged server-side.
   const clearTableMutation = useMutation({
-    mutationFn: (vars: { id: number; name: string }) =>
+    mutationFn: (vars: { id: number; name: string; phase: 'bus' | 'clean' }) =>
       apiFetch<{ table: RestaurantTable }>(`/api/tables/${vars.id}/clear`, {
         method: 'POST',
+        body: { action: vars.phase },
       }),
     onSuccess: async (_data, vars) => {
-      toast.success(t('pos.tableClearedToast', { table: vars.name }))
+      toast.success(
+        vars.phase === 'bus'
+          ? t('pos.tableBussedToast', { table: vars.name })
+          : t('pos.tableCleanedToast', { table: vars.name }),
+      )
       setClearTarget(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
@@ -222,9 +229,10 @@ export default function TableSelect({
     setSeatSelection([])
   }
 
-  // Paid/deferred tables hold no open order — they await a cleanup click.
-  const isPaidOrDeferred = (t2: RestaurantTable) =>
-    t2.status === 'paid' || t2.status === 'deferred'
+  // Paid/deferred/dirty tables hold no open order — they await the manual
+  // bussing/cleaning clicks (amber turnover flow).
+  const isCleanupState = (t2: RestaurantTable) =>
+    t2.status === 'paid' || t2.status === 'deferred' || t2.status === 'dirty'
 
   const tableInteraction = (t2: RestaurantTable): TableInteraction => {
     if (!tool || busy) return busy ? 'ineligible' : 'normal'
@@ -234,9 +242,9 @@ export default function TableSelect({
     }
     if (tool === 'transfer') {
       if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
-      // Destination: free/reserved tables with no open order (paid/deferred
-      // tables await cleanup, they are not transfer destinations).
-      return t2.openOrderId == null && t2.status !== 'occupied' && !isPaidOrDeferred(t2)
+      // Destination: free/reserved tables with no open order (paid/deferred/
+      // dirty tables await their turnover clicks, they are not destinations).
+      return t2.openOrderId == null && t2.status !== 'occupied' && !isCleanupState(t2)
         ? 'eligible'
         : 'ineligible'
     }
@@ -273,7 +281,7 @@ export default function TableSelect({
         setSource({ orderId: t2.openOrderId })
         return
       }
-      if (t2.openOrderId != null || t2.status === 'occupied' || isPaidOrDeferred(t2)) return
+      if (t2.openOrderId != null || t2.status === 'occupied' || isCleanupState(t2)) return
       transferMutation.mutate({ orderId: source.orderId, tableId: t2.id, tableName: t2.name })
       return
     }
@@ -287,8 +295,9 @@ export default function TableSelect({
       mergeMutation.mutate({ sourceId: source.orderId, targetId: t2.openOrderId, targetLabel: t2.name })
       return
     }
-    // Normal mode — paid/deferred tiles are the tap-to-clear affordance.
-    if (isPaidOrDeferred(t2) && t2.openOrderId == null) {
+    // Normal mode — paid/deferred tiles open the bussing dialog (→ amber
+    // 'dirty'), dirty tiles the cleaning dialog (→ free).
+    if (isCleanupState(t2) && t2.openOrderId == null) {
       setClearTarget(t2)
       return
     }
@@ -352,6 +361,9 @@ export default function TableSelect({
     (tb) => tb.status === 'occupied' || tb.openOrderId != null,
   ).length
   const hallSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+  const hallDirtyCount = tables.filter(
+    (tb) => tb.status === 'dirty' && tb.openOrderId == null,
+  ).length
   const hasFreeTable = hallFreeCount > 0
   const seatSeats = seatSelection.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
 
@@ -501,6 +513,11 @@ export default function TableSelect({
               <span className="tabular-nums font-semibold text-amber-700">
                 {t('admin.hallStatsOccupied', { n: hallOccupiedCount })}
               </span>
+              {hallDirtyCount > 0 && (
+                <span className="tabular-nums font-semibold text-amber-600">
+                  {t('admin.hallStatsDirty', { n: hallDirtyCount })}
+                </span>
+              )}
               <span className="flex items-center gap-1 tabular-nums">
                 <Users className="size-3.5" aria-hidden />
                 {hallSeats} {t('common.seats')}
@@ -620,7 +637,8 @@ export default function TableSelect({
         </div>
       </div>
 
-      {/* ── Paid/deferred tap-to-clear confirmation ── */}
+      {/* ── Manual turnover dialogs: bussing (paid/deferred → amber) &
+          cleaning (dirty → free) — two separate confirmations ── */}
       <AlertDialog
         open={clearTarget != null}
         onOpenChange={(o) => {
@@ -630,14 +648,18 @@ export default function TableSelect({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t('pos.clearTableTitle', { table: clearTarget?.name ?? '' })}
+              {clearTarget?.status === 'dirty'
+                ? t('pos.cleanTableTitle', { table: clearTarget?.name ?? '' })
+                : t('pos.busTableTitle', { table: clearTarget?.name ?? '' })}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {clearTarget?.status === 'paid'
-                ? t('pos.clearTablePaidDesc')
-                : t('pos.clearTableDeferredDesc', {
-                    client: clearTarget?.deferredClientName ?? '—',
-                  })}
+              {clearTarget?.status === 'dirty'
+                ? t('pos.cleanTableDesc')
+                : clearTarget?.status === 'paid'
+                  ? t('pos.busTablePaidDesc')
+                  : t('pos.clearTableDeferredDesc', {
+                      client: clearTarget?.deferredClientName ?? '—',
+                    })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -645,17 +667,25 @@ export default function TableSelect({
               {t('common.cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
-              className="bg-emerald-600 text-white hover:bg-emerald-700"
+              className={cn(
+                clearTarget?.status === 'dirty'
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  : 'bg-amber-600 text-white hover:bg-amber-700',
+              )}
               disabled={clearTableMutation.isPending}
               onClick={(e) => {
                 e.preventDefault()
                 if (clearTarget) {
-                  clearTableMutation.mutate({ id: clearTarget.id, name: clearTarget.name })
+                  clearTableMutation.mutate({
+                    id: clearTarget.id,
+                    name: clearTarget.name,
+                    phase: clearTarget.status === 'dirty' ? 'clean' : 'bus',
+                  })
                 }
               }}
             >
               {clearTableMutation.isPending && <Loader2 className="size-4 animate-spin" />}{' '}
-              {t('pos.markFree')}
+              {clearTarget?.status === 'dirty' ? t('pos.markCleanedFree') : t('pos.sendToCleaning')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -679,9 +709,11 @@ function TableTile({
   const { t } = useI18n()
   const occupied = table.status === 'occupied' || table.openOrderId != null
   const reserved = table.status === 'reserved' && table.openOrderId == null
-  // Round5: bill settled (awaiting cleanup) / deferred check (client left).
+  // Round5/6: bill settled (awaiting bussing) / deferred check (client left)
+  // / dirty = bussed, amber, awaiting the cleaning click.
   const paid = table.status === 'paid' && table.openOrderId == null
   const deferred = table.status === 'deferred' && table.openOrderId == null
+  const dirty = table.status === 'dirty' && table.openOrderId == null
   // Round/oval silhouettes get extra horizontal padding so the centered
   // content stays inside the circle (overflow-hidden + truncation clip it).
   const isRound = table.shape === 'round' || table.shape === 'oval'
@@ -740,16 +772,18 @@ function TableTile({
             ? 'border-emerald-600 bg-emerald-600 text-white'
             : deferred
               ? 'border-violet-400 bg-violet-100 text-violet-900 ring-1 ring-violet-400'
-              : reserved
-                ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
-                : 'border-[#E2E2E0] bg-white text-stone-500',
+              : dirty
+                ? 'border-amber-500 bg-amber-200 text-amber-900 ring-2 ring-amber-400'
+                : reserved
+                  ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
+                  : 'border-[#E2E2E0] bg-white text-stone-500',
         interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
         interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
         selected && 'ring-2 ring-violet-600 ring-offset-1',
       )}
     >
       {/* FREE — clean white tile with capacity */}
-      {!occupied && !reserved && !paid && !deferred && (
+      {!occupied && !reserved && !paid && !deferred && !dirty && (
         <>
           <p className="max-w-full truncate text-base font-bold leading-tight text-stone-500">
             {table.name}
@@ -793,7 +827,7 @@ function TableTile({
         </>
       )}
 
-      {/* PAID — solid emerald, tap to clear */}
+      {/* PAID — solid emerald, tap to bus (→ amber cleaning) */}
       {paid && (
         <>
           <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
@@ -807,7 +841,7 @@ function TableTile({
         </>
       )}
 
-      {/* DEFERRED — violet, client name, tap to clear */}
+      {/* DEFERRED — violet, client name, tap to bus (→ amber cleaning) */}
       {deferred && (
         <>
           <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
@@ -820,6 +854,20 @@ function TableTile({
           </p>
           <p className="max-w-full truncate text-[10px] leading-tight text-violet-700/80">
             {t('pos.deferredHint', { client: table.deferredClientName ?? '—' })}
+          </p>
+        </>
+      )}
+
+      {/* DIRTY — strong amber, bussed & awaiting the cleaning click */}
+      {dirty && (
+        <>
+          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-600/40 bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+            <Brush className="size-3" aria-hidden />
+            {t('pos.tableDirtyBadge')}
+          </span>
+          <p className="max-w-full truncate text-[10px] font-semibold leading-tight text-amber-800/90">
+            {t('pos.dirtyHint')}
           </p>
         </>
       )}

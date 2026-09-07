@@ -80,7 +80,7 @@ export type RestaurantTable = {
   shape: 'square' | 'round' | 'rectangle' | 'oval' | string
   positionX: number
   positionY: number
-  status: 'free' | 'occupied' | 'reserved' | 'paid' | 'deferred' | string
+  status: 'free' | 'occupied' | 'reserved' | 'paid' | 'deferred' | 'dirty' | string
   active: boolean
   // polling extras (tables/status + floorplans)
   openOrderId?: number | null
@@ -217,4 +217,52 @@ export type NewPaymentPayload = {
   method: string
   amount: number
   reference?: string
+}
+
+// ─── Audit log ──────────────────────────────────────
+
+export type AuditLogEntry = {
+  id: number
+  userId: number | null
+  userName: string
+  action: string
+  entity: string
+  entityId: number | null
+  details: string | null
+  createdAt: string
+}
+
+export type AuditLogPage = {
+  logs: AuditLogEntry[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+// ─── Z-Report (end-of-day reconciliation) ───────────
+
+export type ZReport = {
+  date: string
+  ordersClosed: number
+  covers: number
+  grossSubtotal: number
+  discounts: number
+  vat: number
+  serviceTax: number
+  netTotal: number
+  avgCheck: number
+  cancelledCount: number
+  paymentsByMethod: { method: string; amount: number; count: number }[]
+  paymentsTotal: number
+  deferredSettled: number
+  deferredOutstanding: number
+  byWaiter: { userId: number | null; name: string; orders: number; net: number }[]
+}
+
+// ─── Backups ────────────────────────────────────────
+
+export type BackupInfo = {
+  name: string
+  sizeBytes: number
+  createdAt: string
 }

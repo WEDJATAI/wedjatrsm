@@ -30,6 +30,7 @@ export const PERMISSIONS = [
   'roles',
   'attendance',
   'settings',
+  'audit',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -48,6 +49,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   roles: 'Roles',
   attendance: 'Attendance',
   settings: 'Settings',
+  audit: 'Activity Log',
 }
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
@@ -85,14 +87,15 @@ export const ITEM_STATUS_LABELS: Record<string, string> = {
   served: 'Served',
 }
 
-export const TABLE_STATUSES = ['free', 'occupied', 'reserved', 'paid', 'deferred'] as const
+export const TABLE_STATUSES = ['free', 'occupied', 'reserved', 'paid', 'deferred', 'dirty'] as const
 export type TableStatus = (typeof TABLE_STATUSES)[number]
 export const TABLE_STATUS_LABELS: Record<string, string> = {
   free: 'Free',
   occupied: 'Occupied',
   reserved: 'Reserved',
-  paid: 'Paid — awaiting cleanup',
+  paid: 'Paid — awaiting bussing',
   deferred: 'Deferred check — client left',
+  dirty: 'Needs cleaning',
 }
 
 export const TABLE_SHAPES = ['square', 'round', 'rectangle', 'oval'] as const
@@ -141,3 +144,12 @@ export const MONEY_EPSILON = 0.02
 // Guests bounds for an order (number of people)
 export const MIN_GUESTS = 1
 export const MAX_GUESTS = 30
+
+// ─── Idle session timeout (shared POS/KDS terminals) ────────────────
+// After IDLE_WARN_AFTER_MS without input a warning dialog appears with
+// IDLE_LOGOUT_SECONDS to confirm; otherwise the session is ended.
+export const IDLE_WARN_AFTER_MS = 15 * 60 * 1000 // 15 minutes
+export const IDLE_LOGOUT_SECONDS = 60 // 1 minute countdown
+// Debug/E2E only (?idleTest=1 on the URL): 10s idle → 10s countdown.
+export const IDLE_TEST_WARN_MS = 10 * 1000
+export const IDLE_TEST_LOGOUT_SECONDS = 10

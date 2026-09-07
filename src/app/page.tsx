@@ -13,6 +13,7 @@ import { useAppSettings } from '@/lib/use-settings'
 
 import LoginView from '@/components/auth/login-view'
 import AppNavbar from '@/components/app-navbar'
+import { IdleLogoutWatcher } from '@/components/idle-logout-watcher'
 import PosView from '@/components/pos/pos-view'
 import KitchenView from '@/components/kitchen/kitchen-view'
 import DashboardView from '@/components/admin/dashboard-view'
@@ -184,6 +185,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         {content}
         {isAdminScreen && <AdminFooter />}
       </main>
+      {/* Idle session timeout (shared terminals) — 15 min warn + 60s countdown */}
+      <IdleLogoutWatcher onLogout={onLogout} />
     </div>
   )
 }

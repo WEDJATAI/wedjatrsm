@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Armchair,
   BadgeCheck,
+  Brush,
   Clock,
   DoorOpen,
   Hourglass,
@@ -94,7 +95,8 @@ function occupiedHeatClasses(mins: number): { surface: string; amount: string } 
 }
 
 /** Tile surface per live status: free = white, reserved = amber ring, occupied = duration heat,
- *  paid = settled (emerald), deferred = client left with an open check (violet). */
+ *  paid = settled (emerald), deferred = client left with an open check (violet),
+ *  dirty = bussed, awaiting the cleaning click (strong amber). */
 function tableSurfaceClasses(
   table: RestaurantTable,
   mins: number,
@@ -111,6 +113,11 @@ function tableSurfaceClasses(
   if (table.status === 'deferred')
     return {
       surface: 'bg-violet-100 border-violet-400 ring-1 ring-violet-400 text-violet-900',
+      amount: null,
+    }
+  if (table.status === 'dirty')
+    return {
+      surface: 'bg-amber-200 border-amber-500 ring-2 ring-amber-400 text-amber-900',
       amount: null,
     }
   // unknown status — neutral stone fallback (keeps tiles readable)
@@ -665,6 +672,7 @@ export default function FloorPlansView() {
                       const isOccupied = table.status === 'occupied'
                       const isPaid = table.status === 'paid'
                       const isDeferred = table.status === 'deferred'
+                      const isDirty = table.status === 'dirty'
                       const shape = table.shape ?? 'square'
                       const statusLabel = t(`status.table.${table.status}`)
                       return (
@@ -746,6 +754,11 @@ export default function FloorPlansView() {
                                   </span>
                                 ) : null}
                               </>
+                            ) : isDirty ? (
+                              <span className="flex items-center gap-1 px-1 text-[11px] font-medium leading-tight">
+                                <Brush className="size-4 shrink-0" aria-hidden />
+                                {t('status.table.dirty')}
+                              </span>
                             ) : (
                               <span className="flex items-center gap-1 text-xs text-stone-400">
                                 <Users className="size-3 shrink-0" aria-hidden />
@@ -845,12 +858,16 @@ export default function FloorPlansView() {
                   <SelectItem value="occupied" disabled>
                     {t('admin.occupiedAuto')}
                   </SelectItem>
-                  {/* paid / deferred are system-managed (cleared from the POS floor) — visible but not settable */}
+                  {/* paid / deferred / dirty are system-managed (set from the POS
+                      floor turnover flow) — visible but not settable */}
                   <SelectItem value="paid" disabled>
                     {t('status.table.paid')}
                   </SelectItem>
                   <SelectItem value="deferred" disabled>
                     {t('status.table.deferred')}
+                  </SelectItem>
+                  <SelectItem value="dirty" disabled>
+                    {t('status.table.dirty')}
                   </SelectItem>
                 </SelectContent>
               </Select>

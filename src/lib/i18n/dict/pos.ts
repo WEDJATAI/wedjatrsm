@@ -188,16 +188,29 @@ export const posDict: DictPair = {
     'pos.thankYou': 'Thank you for your visit!',
     'pos.soldBy': 'Served by',
 
-    // round5: paid/deferred tables + tap-to-clear
+    // round5/6: paid/deferred tables → manual two-click turnover (amber)
     'pos.clearTableTitle': 'Clear table {table}?',
-    'pos.clearTablePaidDesc': 'The bill was settled and the client has left. Mark the table as free and clean?',
-    'pos.clearTableDeferredDesc': 'The check was deferred to {client} and the table is empty. Mark it as free and clean?',
+    'pos.busTableTitle': 'Client left {table}?',
+    'pos.busTablePaidDesc':
+      'The bill was settled and the client has left. Send the table to cleaning? It will show amber until it is cleaned.',
+    'pos.clearTablePaidDesc': 'The bill was settled and the client has left.',
+    'pos.clearTableDeferredDesc':
+      'The check was deferred to {client} and the table is empty. Send it to cleaning? It will show amber until it is cleaned.',
+    'pos.sendToCleaning': 'Send to cleaning',
+    'pos.tableBussedToast': '{table} sent to cleaning',
+    'pos.cleanTableTitle': 'Is {table} cleaned?',
+    'pos.cleanTableDesc':
+      'The table has been bussed and cleaned. Mark it as free so new guests can be seated?',
+    'pos.markCleanedFree': 'Mark cleaned & free',
+    'pos.tableCleanedToast': '{table} is now clean and free',
     'pos.markFree': 'Mark free',
     'pos.tableClearedToast': '{table} is now free',
     'pos.tablePaidBadge': 'Paid',
     'pos.tableDeferredBadge': 'Deferred',
+    'pos.tableDirtyBadge': 'Cleaning',
+    'pos.dirtyHint': 'Needs cleaning — tap when done',
     'pos.paidHint': 'Paid — tap when the client leaves',
-    'pos.deferredHint': 'Deferred: {client} — tap when the table is cleared',
+    'pos.deferredHint': 'Deferred: {client} — tap when the client leaves',
 
     // round5: seat party across multiple tables (merge from the beginning)
     'pos.seatParty': 'Seat Party',
@@ -407,16 +420,29 @@ export const posDict: DictPair = {
     'pos.thankYou': 'شكراً لزيارتكم!',
     'pos.soldBy': 'بواسطة',
 
-    // round5: paid/deferred tables + tap-to-clear
+    // round5/6: paid/deferred tables → manual two-click turnover (amber)
     'pos.clearTableTitle': 'تفريغ الطاولة {table}؟',
-    'pos.clearTablePaidDesc': 'تمت تسوية الحساب ومغادرة العميل. هل تريد تعليم الطاولة كخالية ونظيفة؟',
-    'pos.clearTableDeferredDesc': 'تم تأجيل الحساب باسم {client} والطاولة فارغة. هل تريد تعليمها كخالية ونظيفة؟',
+    'pos.busTableTitle': 'غادر العميل {table}؟',
+    'pos.busTablePaidDesc':
+      'تمت تسوية الحساب ومغادرة العميل. هل تريد إرسال الطاولة للتنظيف؟ ستظهر بلون كهرماني حتى تنظف.',
+    'pos.clearTablePaidDesc': 'تمت تسوية الحساب ومغادرة العميل.',
+    'pos.clearTableDeferredDesc':
+      'تم تأجيل الحساب باسم {client} والطاولة فارغة. هل تريد إرسالها للتنظيف؟ ستظهر بلون كهرماني حتى تنظف.',
+    'pos.sendToCleaning': 'إرسال للتنظيف',
+    'pos.tableBussedToast': 'أُرسلت {table} للتنظيف',
+    'pos.cleanTableTitle': 'هل تم تنظيف {table}؟',
+    'pos.cleanTableDesc':
+      'تم تفريغ الطاولة وتنظيفها. هل تريد تعليمها كخالية لإخلاء مقاعد ضيوف جدد؟',
+    'pos.markCleanedFree': 'تعليم كنظيفة وخالية',
+    'pos.tableCleanedToast': '{table} نظيفة وخالية الآن',
     'pos.markFree': 'تعليم كخالية',
     'pos.tableClearedToast': 'أصبحت {table} خالية الآن',
     'pos.tablePaidBadge': 'مدفوعة',
     'pos.tableDeferredBadge': 'مؤجلة',
+    'pos.tableDirtyBadge': 'تنظيف',
+    'pos.dirtyHint': 'تحتاج تنظيفًا — اضغط عند الانتهاء',
     'pos.paidHint': 'مدفوعة — اضغط عند مغادرة العميل',
-    'pos.deferredHint': 'مؤجلة باسم {client} — اضغط بعد تفريغ الطاولة',
+    'pos.deferredHint': 'مؤجلة باسم {client} — اضغط عند مغادرة العميل',
 
     // round5: seat party across multiple tables (merge from the beginning)
     'pos.seatParty': 'جلوس مجموعة',

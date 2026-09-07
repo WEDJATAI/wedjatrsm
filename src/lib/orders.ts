@@ -176,8 +176,9 @@ export async function findOpenOrderOnTable(
 /**
  * Set every table of an order to a target status — each table only when
  * no OTHER open order still references it (as primary or extra table).
- * Tables that are already 'free' keep 'free' when the target is 'paid'
- * (a cleaned table is not re-dirtied by a later settlement).
+ * Tables that are already 'free' (cleaned) or 'dirty' (amber, bussed and
+ * awaiting the cleaning click) are never re-marked by a later settlement —
+ * the manual cleaning flow always moves forward.
  */
 export async function setTablesStatusForOrder(
   order: { id: number; tableId: number | null; extraTableIds: string | null },
@@ -192,8 +193,14 @@ export async function setTablesStatusForOrder(
       select: { status: true },
     })
     if (!table) continue
-    // never re-dirty a table that has already been cleaned ('free')
-    if (target === 'paid' && table.status === 'free') continue
+    // never re-dirty a table that has already been bussed ('dirty') or
+    // cleaned ('free') — later settlements keep the manual cleaning state
+    if (
+      (target === 'paid' || target === 'deferred') &&
+      (table.status === 'free' || table.status === 'dirty')
+    ) {
+      continue
+    }
     if (table.status === target) continue
     await db.restaurantTable.update({ where: { id: tableId }, data: { status: target } })
   }
@@ -441,8 +448,8 @@ export async function deductInventoryForOrder(orderId: number): Promise<void> {
  * Auto-close an order when fully paid: status 'paid' + closedAt, deduct
  * inventory (idempotent). Works for OPEN and DEFERRED orders — a deferred
  * check is settled by recording the remaining payments. After closing,
- * the order's tables become 'paid' (bill settled, awaiting the cleanup
- * click) unless they were already cleaned back to 'free'.
+ * the order's tables become 'paid' (bill settled, awaiting the bussing
+ * click) unless they were already bussed to 'dirty' or cleaned to 'free'.
  * Returns whether this call closed the order.
  */
 export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: boolean }> {
@@ -468,8 +475,9 @@ export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: 
 
 /**
  * Defer a check: order → status 'deferred' with the client's name. The
- * client leaves; the order's tables switch to 'deferred' (tap-to-clear)
- * so the check stays outstanding but the seating is vacated.
+ * client leaves; the order's tables switch to 'deferred' (tap to bus →
+ * amber 'dirty' → tap to clean → free) so the check stays outstanding
+ * but the seating is vacated.
  */
 export async function deferOrder(
   orderId: number,

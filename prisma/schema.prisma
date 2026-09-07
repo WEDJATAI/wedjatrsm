@@ -134,7 +134,7 @@ model RestaurantTable {
   shape      String     @default("square") // 'square' | 'round' | 'rectangle' | 'oval'
   positionX  Float      @default(50) @map("position_x") // percentage 0-100
   positionY  Float      @default(50) @map("position_y") // percentage 0-100
-  status     String     @default("free") // 'free' | 'occupied' | 'reserved' | 'paid' (bill settled, awaiting cleanup click) | 'deferred' (check deferred, client left)
+  status     String     @default("free") // 'free' | 'occupied' | 'reserved' | 'paid' (bill settled, awaiting bussing click) | 'deferred' (check deferred, client left) | 'dirty' (amber — bussed, awaiting the cleaned click)
   active     Boolean    @default(true)
   orders     Order[]
 
@@ -216,7 +216,27 @@ model RecipeComponent {
   @@map("recipe_components")
 }
 
-// ─── Inventory transactions (audit log) ─────────────────────────────
+// ─── Audit log (sensitive-action trail) ──────────────────────────────
+// Payments, defers, cancels, PIN item deletions, transfers/merges, table
+// bus/clean, settings & user/role changes. Denormalized userName snapshot
+// so rows stay readable even after user edits/deactivation.
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  userName  String   @map("user_name")
+  action    String // e.g. 'order.payment', 'table.bus', 'table.clean', 'order.itemDelete'
+  entity    String // 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory'
+  entityId  Int?     @map("entity_id")
+  details   String? // human-readable summary (EN codes stay stable)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ─── Inventory transactions (stock movements) ────────────────────────
 model InventoryTransaction {
   id             Int      @id @default(autoincrement())
   productId      Int      @map("product_id")
