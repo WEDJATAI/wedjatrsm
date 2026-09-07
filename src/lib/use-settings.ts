@@ -1,15 +1,15 @@
 'use client'
 
-// ─── App settings hook (restaurant name etc.) ───────────────────────
+// ─── App settings hook (restaurant names, etc.) ─────────────────────
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, fetcher } from '@/lib/api'
-import { RESTAURANT_NAME } from '@/lib/constants'
+import { RESTAURANT_NAME, RESTAURANT_NAME_AR } from '@/lib/constants'
 import type { AppSettings } from '@/lib/types'
 
 export const SETTINGS_QUERY_KEY = ['app-settings'] as const
 
-/** Read the live app settings (falls back to the constant while loading). */
+/** Read the live app settings (falls back to the constants while loading). */
 export function useAppSettings() {
   const query = useQuery({
     queryKey: SETTINGS_QUERY_KEY,
@@ -21,6 +21,8 @@ export function useAppSettings() {
     settings: query.data?.settings,
     /** live name when loaded, constant fallback otherwise */
     restaurantName: query.data?.settings.restaurantName ?? RESTAURANT_NAME,
+    /** live Arabic name when loaded (bilingual checks), constant fallback otherwise */
+    restaurantNameAr: query.data?.settings.restaurantNameAr ?? RESTAURANT_NAME_AR,
   }
 }
 

@@ -184,12 +184,28 @@ export async function GET(req: NextRequest) {
       byHour.push({ hour: h, revenue: round2(agg.revenue), orders: agg.orders })
     }
 
+    // Deferred (pay-later) checks created in the range — outstanding
+    // receivables tracked by client name; they are NOT revenue until paid.
+    const deferredOrders = await db.order.findMany({
+      where: { status: 'deferred', createdAt: { gte: rangeStart, lte: rangeEnd } },
+      select: { totalAmount: true, payments: { select: { amount: true } } },
+    })
+    let deferredOutstandingRaw = 0
+    for (const order of deferredOrders) {
+      const paid = order.payments.reduce((sum, p) => sum + p.amount, 0)
+      deferredOutstandingRaw += Math.max(0, order.totalAmount - paid)
+    }
+    const deferredOutstanding = round2(deferredOutstandingRaw)
+    const deferredCount = deferredOrders.length
+
     const report: SalesReport = {
       totalRevenue,
       totalOrders,
       avgOrderValue,
       totalGuests,
       avgCheckPerPerson,
+      deferredOutstanding,
+      deferredCount,
       byMethod,
       topProducts,
       byCategory,

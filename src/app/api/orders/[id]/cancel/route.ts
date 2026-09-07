@@ -7,6 +7,7 @@ import {
   ORDER_INCLUDE,
   freeTableIfUnused,
   getOrderOr404,
+  orderTableIds,
   parseId,
   serializeOrder,
   sessionUserId,
@@ -37,10 +38,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       include: ORDER_INCLUDE,
     })
 
-    // Release the table (only when no other open order uses it).
-    // Cancelled orders make NO inventory changes.
-    if (order.tableId != null) {
-      await freeTableIfUnused(order.tableId, orderId)
+    // Release EVERY seating table (primary + merged extras) — only when no
+    // other open order uses them. Cancelled orders make NO inventory changes.
+    for (const tableId of orderTableIds(order)) {
+      await freeTableIfUnused(tableId, orderId)
     }
 
     return NextResponse.json({ order: serializeOrder(updated) })

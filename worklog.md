@@ -692,3 +692,32 @@ Stage Summary:
 - TABLES (Odoo-like design): floor screen + floor-plan editor now render Odoo 17-style tiles — centered content, 4 silhouettes, soft shadows, and duration-heat backgrounds (emerald → amber → orange → rose as guests sit longer) with amount/guests/elapsed; both screens visually identical.
 - MENU IN ARABIC: the food menu itself is now bilingual — categories + dishes (incl. cart lines, KDS tickets, split-by-items chips, on-screen checks and printed thermal receipts) display Arabic names when the UI language is Arabic, with the English name as a small secondary reference line on tiles/rows; search matches English OR Arabic; admins manage each product's/category's Arabic name in the existing dialogs (all 39 seed products + 5 categories pre-translated).
 - Language toggle in the navbar now announces the target language; no essentials touched (auth, payments, transfer/merge, attendance, roles, reports all intact — re-verified login/logout, order create/send/cancel during E2E).
+
+---
+Task ID: R5-1 (foundation)
+Agent: main (Z.ai Code)
+Task: Round 5 foundation — 12% service tax, deferred payments (client name), paid/deferred tables with tap-to-clear, merged seating from the beginning (tableIds), PIN-gated item deletion, "Lilo Cafe and Restaurant" rebrand, settings API extensions, i18n keys for all three UI agents
+
+Work Log:
+- Phase 0: backups/custom-round5-start-20260907-195306.db + git 08638ea + tag round4-stable (never roll back; additive-only round).
+- prisma/schema.prisma: Order + serviceTaxAmount (0.12), clientName, extraTableIds (JSON array, merged seating); Table/Order status comments extended. db:push + generate — additive, data intact.
+- src/lib/constants.ts: SERVICE_TAX_RATE=0.12, TABLE_STATUSES + 'paid'/'deferred', ORDER_STATUSES + 'deferred', RESTAURANT_NAME='Lilo Cafe and Restaurant', RESTAURANT_NAME_AR='ليلو كافيه ومطعم', MAX_SEATING_TABLES=4, DELETE_PIN_KEY/DELETE_PIN_LENGTH.
+- src/lib/types.ts: Order + serviceTaxAmount/clientName/extraTableIds; RestaurantTable + openOrderMerged/deferredClientName/deferredOrderId; AppSettings + restaurantNameAr; SalesReport + deferredOutstanding/deferredCount.
+- src/lib/orders.ts: recomputeTotals now computes VAT(14%) + serviceTax(12%) + total; serializeOrder maps new fields; parseExtraTableIds/orderTableIds/findOpenOrderOnTable/setTablesStatusForOrder helpers; closeOrderIfFullyPaid accepts open+deferred → tables become 'paid' (never re-dirty a cleaned 'free' table); deferOrder(orderId, clientName); freeTableIfUnused extras-aware; serializeTablesWithOpenOrders attaches open-order extras to ALL seating tables (merged flag) + deferred client info on deferred tables.
+- APIs: POST /api/orders accepts tableIds[] (merged seating, ≤4, all free incl. extras check); GET /api/orders?status=deferred; PUT /api/orders/[id] removeItemIds now REQUIRES removePin (6-digit, checked against AppSetting 'deleteItemPin', 403 on wrong/missing); NEW POST /api/orders/[id]/defer {clientName}; NEW POST /api/tables/[id]/clear (paid/deferred → free); payments accepts deferred orders; transfer re-houses whole seating (frees primary+extras, clears extras, guards destination vs extras via findOpenOrderOnTable); merge frees all source seating tables; cancel frees primary+extras.
+- /api/settings: GET/PUT now manage restaurantName + restaurantNameAr (≤60 chars, '' clears) + deleteItemPin (exactly 6 digits) — admin/settings only.
+- /api/reports/sales: + deferredOutstanding + deferredCount (deferred checks in range; not revenue until settled).
+- src/lib/use-settings.ts: + restaurantNameAr.
+- src/lib/i18n: index exports bothLabels()/bilingualLabel() (EN+AR label pair for bilingual checks); dict/common + status.table.paid/deferred, status.order.deferred, money.serviceTax, settings.* (nameAr + deletePin keys); dict/pos + 40 keys (clearTable*, seatParty*, mergedBadge, deferred*, pin*); dict/admin + hallStats*/entrance + reports.deferred* — full en/ar parity.
+- scripts/round5-migrate.ts (run): restaurantName → "Lilo Cafe and Restaurant", restaurantNameAr → "ليلو كافيه ومطعم", deleteItemPin seeded '123456' (admin can change in Settings → Security).
+- Dev server restarted with fresh Prisma client (subshell setsid detach pattern: `(setsid bun run dev > /dev/null 2>&1 < /dev/null &)` — survives tool sessions).
+
+Verification (curl E2E, admin@rms.com):
+- Merged seating POST tableIds [15,10]: order 79, table 15 + extras [10], subtotal 345 → VAT 48.30 + service tax 41.40 → total 434.70; both tiles 'occupied' + openOrderMerged.
+- Defer: status 'deferred', clientName 'Ahmed Hassan'; both tables 'deferred' with deferredClientName; /api/orders?status=deferred lists it.
+- Settle: payments on deferred order → closed=True, status 'paid', inventory deducted; tables → 'paid'; POST /tables/{15,10}/clear → 'free'.
+- PIN deletion: no pin → 403 "A valid 6-digit PIN is required"; wrong pin → 403; correct pin → item removed, totals recomputed.
+- reports/sales returns deferredOutstanding/deferredCount. bunx tsc --noEmit → 0 errors.
+
+Stage Summary:
+- ALL round-5 backend capabilities live and verified. UI agents can consume: POST /api/orders {tableIds:[…]}, POST /api/orders/:id/defer {clientName}, POST /api/tables/:id/clear, PUT /api/orders/:id {removeItemIds, removePin}, GET /api/orders?status=deferred, PUT /api/settings {restaurantNameAr?, deleteItemPin?}; Order payloads carry serviceTaxAmount/clientName/extraTableIds; table polling carries openOrderMerged/deferredClientName/deferredOrderId. i18n keys ready in dict/pos + dict/common + dict/admin (exact key names in the round5 blocks). Dev server runs on :3000; tsc clean. NO deletions, NO rollback.

@@ -3,7 +3,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
-import { getOrderOr404, parseId, serializeOrder } from '@/lib/orders'
+import {
+  findOpenOrderOnTable,
+  getOrderOr404,
+  orderTableIds,
+  parseId,
+  serializeOrder,
+} from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -27,27 +33,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     // Target table must exist + be active, and host no OTHER open order
-    // (tables currently 'free' or 'reserved' are both acceptable targets).
+    // (as primary OR merged-seating extra table).
     const table = await db.restaurantTable.findUnique({ where: { id: tableId } })
     if (!table || !table.active) throw new ApiError('Table not found', 404)
-    const otherOpenOrder = await db.order.findFirst({
-      where: { tableId, status: 'open', id: { not: orderId } },
-      select: { id: true },
-    })
+    const otherOpenOrder = await findOpenOrderOnTable(tableId, orderId)
     if (otherOpenOrder) {
       throw new ApiError(`Table "${table.name}" already has an open order`, 400)
     }
 
-    const previousTableId = order.tableId
+    const previousTableIds = orderTableIds(order)
 
     await db.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: orderId }, data: { tableId } })
-      // Free the old table only when no other open order still references it
-      if (previousTableId != null && previousTableId !== tableId) {
-        const stillOpen = await tx.order.findFirst({
-          where: { tableId: previousTableId, status: 'open', id: { not: orderId } },
-          select: { id: true },
-        })
+      // The whole seating (primary + merged extra tables) re-houses at the
+      // single destination table: primary table moves, extras are released.
+      await tx.order.update({
+        where: { id: orderId },
+        data: { tableId, extraTableIds: null },
+      })
+      for (const previousTableId of previousTableIds) {
+        if (previousTableId === tableId) continue
+        const stillOpen = await findOpenOrderOnTable(previousTableId, orderId)
         if (!stillOpen) {
           await tx.restaurantTable.update({
             where: { id: previousTableId },

@@ -25,8 +25,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       include: { payments: true },
     })
     if (!order) throw new ApiError('Order not found', 404)
-    if (order.status !== 'open') {
-      throw new ApiError('Only open orders can receive payments', 400)
+    if (order.status !== 'open' && order.status !== 'deferred') {
+      throw new ApiError('Only open or deferred orders can receive payments', 400)
     }
 
     const body = await req.json().catch(() => {

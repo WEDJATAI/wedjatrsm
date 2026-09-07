@@ -40,6 +40,8 @@ export type AttendanceRecord = {
 
 export type AppSettings = {
   restaurantName: string
+  /** Arabic name printed on bilingual checks (falls back to the EN name) */
+  restaurantNameAr?: string
 }
 
 export type Category = {
@@ -78,7 +80,7 @@ export type RestaurantTable = {
   shape: 'square' | 'round' | 'rectangle' | 'oval' | string
   positionX: number
   positionY: number
-  status: 'free' | 'occupied' | 'reserved' | string
+  status: 'free' | 'occupied' | 'reserved' | 'paid' | 'deferred' | string
   active: boolean
   // polling extras (tables/status + floorplans)
   openOrderId?: number | null
@@ -86,6 +88,12 @@ export type RestaurantTable = {
   openOrderItemCount?: number | null
   openOrderSince?: string | null
   openOrderGuests?: number | null
+  /** true when this table is part of a multi-table (merged) seating */
+  openOrderMerged?: boolean
+  /** client name when the table holds a deferred (unpaid, client left) check */
+  deferredClientName?: string | null
+  /** order id of the deferred check still tied to this table (cleanup pending) */
+  deferredOrderId?: number | null
 }
 
 export type FloorPlan = {
@@ -124,11 +132,17 @@ export type Order = {
   table?: { id: number; name: string } | null
   userId: number | null
   user?: { id: number; name: string } | null
-  status: 'open' | 'paid' | 'cancelled' | 'merged' | string
+  status: 'open' | 'paid' | 'cancelled' | 'merged' | 'deferred' | string
   subtotalAmount: number
   totalAmount: number
   discountAmount: number
   taxAmount: number
+  /** 12% service tax (in addition to the 14% VAT) */
+  serviceTaxAmount: number
+  /** client name for deferred checks (pay later) */
+  clientName: string | null
+  /** extra table ids joined to this order (merged seating from the beginning) */
+  extraTableIds: number[]
   paidAmount: number
   remainingAmount: number
   guests: number
@@ -174,6 +188,9 @@ export type SalesReport = {
   avgOrderValue: number
   totalGuests: number
   avgCheckPerPerson: number
+  /** total still outstanding on deferred (pay-later) checks */
+  deferredOutstanding: number
+  deferredCount: number
   byMethod: { method: string; amount: number; count: number }[]
   topProducts: { productId: number; name: string; quantity: number; revenue: number }[]
   byCategory: { categoryId: number | null; name: string; revenue: number; quantity: number }[]

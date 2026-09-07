@@ -45,6 +45,21 @@ export function localizedName(
   return name
 }
 
+/** The label for a dictionary key in BOTH languages — used by the bilingual
+ *  (Arabic + English) printed checks that always show both languages. */
+export function bothLabels(key: string): { en: string; ar: string } {
+  return {
+    en: FULL_DICT.en[key] ?? key.split('.').pop() ?? key,
+    ar: FULL_DICT.ar[key] ?? FULL_DICT.en[key] ?? key.split('.').pop() ?? key,
+  }
+}
+
+/** A single "English · Arabic" combined label for bilingual checks. */
+export function bilingualLabel(key: string): string {
+  const { en, ar } = bothLabels(key)
+  return en === ar ? en : `${en} · ${ar}`
+}
+
 const LANG_STORAGE_KEY = 'rms_lang'
 const LANG_EVENT = 'rms-lang-change'
 

@@ -6,7 +6,7 @@
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, type SessionPayload } from '@/lib/auth'
-import { COURSES, MONEY_EPSILON, TAX_RATE } from '@/lib/constants'
+import { COURSES, MONEY_EPSILON, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import type { FloorPlan, Order, OrderItem, Payment, RestaurantTable } from '@/lib/types'
 
 /** Round a number to 2 decimal places (money persistence boundary). */
@@ -104,6 +104,9 @@ export function serializeOrder(order: OrderWithRelations): Order {
     totalAmount: total,
     discountAmount: round2(order.discountAmount),
     taxAmount: round2(order.taxAmount),
+    serviceTaxAmount: round2(order.serviceTaxAmount),
+    clientName: order.clientName,
+    extraTableIds: parseExtraTableIds(order.extraTableIds),
     paidAmount: round2(paidAmount),
     remainingAmount: round2(total - paidAmount),
     guests: order.guests,
@@ -121,10 +124,87 @@ export async function getOrderOr404(orderId: number): Promise<OrderWithRelations
   return order
 }
 
+// ─── Merged seating (multi-table orders) ───────────────────────────
+
+/** Parse the JSON extraTableIds column into a clean id list. */
+export function parseExtraTableIds(raw: string | null | undefined): number[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0)
+  } catch {
+    return []
+  }
+}
+
+/** All table ids bound to an order: primary tableId + extraTableIds. */
+export function orderTableIds(order: { tableId: number | null; extraTableIds: string | null }): number[] {
+  const ids: number[] = []
+  if (order.tableId != null) ids.push(order.tableId)
+  for (const id of parseExtraTableIds(order.extraTableIds)) {
+    if (!ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * Find an OPEN order that references the table — either as its primary
+ * table OR as one of its merged-seating extra tables. Used to guard
+ * transfer/destination tables and table release logic.
+ */
+export async function findOpenOrderOnTable(
+  tableId: number,
+  excludeOrderId?: number,
+): Promise<{ id: number } | null> {
+  const candidates = await db.order.findMany({
+    where: {
+      status: 'open',
+      OR: [{ tableId }, { extraTableIds: { not: null } }],
+    },
+    select: { id: true, tableId: true, extraTableIds: true },
+  })
+  for (const order of candidates) {
+    if (excludeOrderId != null && order.id === excludeOrderId) continue
+    if (orderTableIds(order).includes(tableId)) return { id: order.id }
+  }
+  return null
+}
+
+/**
+ * Set every table of an order to a target status — each table only when
+ * no OTHER open order still references it (as primary or extra table).
+ * Tables that are already 'free' keep 'free' when the target is 'paid'
+ * (a cleaned table is not re-dirtied by a later settlement).
+ */
+export async function setTablesStatusForOrder(
+  order: { id: number; tableId: number | null; extraTableIds: string | null },
+  target: 'free' | 'paid' | 'deferred' | 'occupied',
+): Promise<void> {
+  const tableIds = orderTableIds(order)
+  for (const tableId of tableIds) {
+    const otherOpen = await findOpenOrderOnTable(tableId, order.id)
+    if (otherOpen) continue
+    const table = await db.restaurantTable.findUnique({
+      where: { id: tableId },
+      select: { status: true },
+    })
+    if (!table) continue
+    // never re-dirty a table that has already been cleaned ('free')
+    if (target === 'paid' && table.status === 'free') continue
+    if (table.status === target) continue
+    await db.restaurantTable.update({ where: { id: tableId }, data: { status: target } })
+  }
+}
+
 /**
  * Recompute an order's money fields from its current items:
  * subtotal = Σ qty × unitPrice, discount clamped to [0, subtotal],
- * tax = (subtotal − discount) × TAX_RATE, total = subtotal − discount + tax.
+ * VAT = (subtotal − discount) × TAX_RATE (14%),
+ * service tax = (subtotal − discount) × SERVICE_TAX_RATE (12%),
+ * total = subtotal − discount + VAT + service tax.
  * Persists the result and returns the serialized order.
  */
 export async function recomputeTotals(orderId: number): Promise<Order> {
@@ -134,14 +214,17 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
     order.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
   )
   const discount = Math.min(Math.max(order.discountAmount, 0), subtotal)
-  const tax = round2((subtotal - discount) * TAX_RATE)
-  const total = round2(subtotal - discount + tax)
+  const base = round2(subtotal - discount)
+  const tax = round2(base * TAX_RATE)
+  const serviceTax = round2(base * SERVICE_TAX_RATE)
+  const total = round2(base + tax + serviceTax)
   const updated = await db.order.update({
     where: { id: orderId },
     data: {
       subtotalAmount: subtotal,
       discountAmount: round2(discount),
       taxAmount: tax,
+      serviceTaxAmount: serviceTax,
       totalAmount: total,
     },
     include: ORDER_INCLUDE,
@@ -356,8 +439,11 @@ export async function deductInventoryForOrder(orderId: number): Promise<void> {
 
 /**
  * Auto-close an order when fully paid: status 'paid' + closedAt, deduct
- * inventory (idempotent) and free its table when no other open order
- * references it. Returns whether this call closed the order.
+ * inventory (idempotent). Works for OPEN and DEFERRED orders — a deferred
+ * check is settled by recording the remaining payments. After closing,
+ * the order's tables become 'paid' (bill settled, awaiting the cleanup
+ * click) unless they were already cleaned back to 'free'.
+ * Returns whether this call closed the order.
  */
 export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: boolean }> {
   const order = await db.order.findUnique({
@@ -365,7 +451,7 @@ export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: 
     include: { payments: true },
   })
   if (!order) throw new ApiError('Order not found', 404)
-  if (order.status !== 'open') return { closed: false }
+  if (order.status !== 'open' && order.status !== 'deferred') return { closed: false }
 
   const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
   if (paidAmount < order.totalAmount - MONEY_EPSILON) return { closed: false }
@@ -376,27 +462,41 @@ export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: 
   })
   await deductInventoryForOrder(orderId)
 
-  if (order.tableId != null) {
-    const otherOpenOrder = await db.order.findFirst({
-      where: { tableId: order.tableId, status: 'open', id: { not: orderId } },
-      select: { id: true },
-    })
-    if (!otherOpenOrder) {
-      await db.restaurantTable.update({
-        where: { id: order.tableId },
-        data: { status: 'free' },
-      })
-    }
-  }
+  await setTablesStatusForOrder(order, 'paid')
   return { closed: true }
 }
 
-/** Free a table if no other open order references it (used on cancel). */
-export async function freeTableIfUnused(tableId: number, excludeOrderId?: number): Promise<void> {
-  const otherOpenOrder = await db.order.findFirst({
-    where: { tableId, status: 'open', id: { not: excludeOrderId ?? -1 } },
-    select: { id: true },
+/**
+ * Defer a check: order → status 'deferred' with the client's name. The
+ * client leaves; the order's tables switch to 'deferred' (tap-to-clear)
+ * so the check stays outstanding but the seating is vacated.
+ */
+export async function deferOrder(
+  orderId: number,
+  clientName: string,
+): Promise<OrderWithRelations> {
+  const order = await db.order.findUnique({
+    where: { id: orderId },
+    include: { items: { select: { id: true } } },
   })
+  if (!order) throw new ApiError('Order not found', 404)
+  if (order.status !== 'open') {
+    throw new ApiError('Only open orders can be deferred', 400)
+  }
+  if (order.items.length === 0) {
+    throw new ApiError('Cannot defer an empty order', 400)
+  }
+  const updated = await db.order.update({
+    where: { id: orderId },
+    data: { status: 'deferred', clientName },
+  })
+  await setTablesStatusForOrder(updated, 'deferred')
+  return db.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE })
+}
+
+/** Free a table if no other open order references it (primary or extra). */
+export async function freeTableIfUnused(tableId: number, excludeOrderId?: number): Promise<void> {
+  const otherOpenOrder = await findOpenOrderOnTable(tableId, excludeOrderId)
   if (!otherOpenOrder) {
     await db.restaurantTable.update({ where: { id: tableId }, data: { status: 'free' } })
   }
@@ -431,34 +531,95 @@ export function serializeTable(table: TableRow): RestaurantTable {
 }
 
 /**
- * Serialize tables with POS polling extras: for each table with an open
- * order attach openOrderId, openOrderTotal, openOrderItemCount and
- * openOrderSince, and force live status 'occupied'. Only ONE query for
- * all open orders is issued.
+ * Serialize tables with POS polling extras. For every table bound to an
+ * OPEN order (primary OR merged-seating extra table) attach openOrderId,
+ * openOrderTotal, openOrderItemCount, openOrderSince, openOrderGuests and
+ * openOrderMerged, and force live status 'occupied'. Tables holding a
+ * DEFERRED check (status 'deferred') additionally get deferredClientName
+ * + deferredOrderId so the floor can show who owes the deferred bill.
+ * Open + deferred orders are fetched in TWO queries (tables referenced
+ * directly or via extraTableIds, parsed in memory).
  */
 export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise<RestaurantTable[]> {
   if (tables.length === 0) return []
-  const openOrders = await db.order.findMany({
-    where: { status: 'open', tableId: { in: tables.map((t) => t.id) } },
-    orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      tableId: true,
-      totalAmount: true,
-      guests: true,
-      createdAt: true,
-      items: { select: { id: true, quantity: true, unitPrice: true } },
-    },
-  })
+  const tableIds = tables.map((t) => t.id)
+  const [openOrders, deferredOrders] = await Promise.all([
+    db.order.findMany({
+      where: {
+        status: 'open',
+        OR: [{ tableId: { in: tableIds } }, { extraTableIds: { not: null } }],
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        tableId: true,
+        totalAmount: true,
+        guests: true,
+        createdAt: true,
+        extraTableIds: true,
+        items: { select: { id: true, quantity: true, unitPrice: true } },
+      },
+    }),
+    db.order.findMany({
+      where: {
+        status: 'deferred',
+        OR: [{ tableId: { in: tableIds } }, { extraTableIds: { not: null } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        tableId: true,
+        clientName: true,
+        extraTableIds: true,
+        totalAmount: true,
+        payments: { select: { amount: true } },
+      },
+    }),
+  ])
 
-  const openOrderByTable = new Map<number, (typeof openOrders)[number]>()
+  // table id → first open order bound to it (primary or extra table)
+  const openOrderByTable = new Map<
+    number,
+    (typeof openOrders)[number] & { merged: boolean }
+  >()
   for (const order of openOrders) {
-    if (order.tableId == null) continue
-    if (!openOrderByTable.has(order.tableId)) openOrderByTable.set(order.tableId, order)
+    const ids = orderTableIds(order)
+    const merged = ids.length > 1
+    for (const id of ids) {
+      if (!openOrderByTable.has(id)) openOrderByTable.set(id, { ...order, merged })
+    }
+  }
+
+  // table id → newest deferred order bound to it (for 'deferred' tables)
+  const deferredOrderByTable = new Map<
+    number,
+    { id: number; clientName: string | null; remaining: number }
+  >()
+  for (const order of deferredOrders) {
+    const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
+    const info = {
+      id: order.id,
+      clientName: order.clientName,
+      remaining: round2(order.totalAmount - paidAmount),
+    }
+    for (const id of orderTableIds(order)) {
+      if (!deferredOrderByTable.has(id)) deferredOrderByTable.set(id, info)
+    }
   }
 
   return tables.map((table) => {
     const base = serializeTable(table)
+    if (base.status === 'deferred') {
+      const deferred = deferredOrderByTable.get(table.id)
+      if (deferred) {
+        return {
+          ...base,
+          deferredClientName: deferred.clientName,
+          deferredOrderId: deferred.id,
+        }
+      }
+      return base
+    }
     const open = openOrderByTable.get(table.id)
     if (!open) return base
     const itemCount = open.items.reduce((sum, item) => sum + item.quantity, 0)
@@ -470,6 +631,7 @@ export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise
       openOrderItemCount: round2(itemCount),
       openOrderSince: open.createdAt.toISOString(),
       openOrderGuests: open.guests,
+      openOrderMerged: open.merged,
     }
   })
 }

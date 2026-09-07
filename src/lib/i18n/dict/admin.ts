@@ -373,6 +373,14 @@ export const adminDict: DictPair = {
     'admin.noDishesAvailable': 'No dishes available — create sellable products first.',
     'admin.qtyAria': 'Quantity of {name} per unit',
     'admin.removeAria': 'Remove {name}',
+    // round5: hall design + reports deferred outstanding
+    'admin.hallStatsTables': '{n} table(s)',
+    'admin.hallStatsFree': '{n} free',
+    'admin.hallStatsOccupied': '{n} occupied',
+    'admin.hallEntrance': 'Entrance',
+    'reports.deferredOutstanding': 'Deferred checks outstanding',
+    'reports.deferredCount': '{n} deferred check(s)',
+    'reports.deferredHint': 'Pay-later checks tracked by client name — not revenue until settled.',
   },
   ar: {
     // ── generic admin strings ──
@@ -734,5 +742,12 @@ export const adminDict: DictPair = {
     'admin.noDishesAvailable': 'لا توجد أطباق متاحة — أنشئ منتجات قابلة للبيع أولاً.',
     'admin.qtyAria': 'كمية {name} لكل وحدة',
     'admin.removeAria': 'إزالة {name}',
-  },
-}
+    // round5: hall design + reports deferred outstanding
+    'admin.hallStatsTables': '{n} طاولة/طاولات',
+    'admin.hallStatsFree': '{n} خالية',
+    'admin.hallStatsOccupied': '{n} مشغولة',
+    'admin.hallEntrance': 'المدخل',
+    'reports.deferredOutstanding': 'الحسابات المؤجلة المستحقة',
+    'reports.deferredCount': '{n} حساب مؤجل',
+    'reports.deferredHint': 'حسابات مؤجلة باسم العميل — لا تُحسب ضمن الإيرادات حتى التسوية.',
+  }}

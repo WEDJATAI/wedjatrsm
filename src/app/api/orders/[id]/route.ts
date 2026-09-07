@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
-import { COURSES } from '@/lib/constants'
+import { COURSES, DELETE_PIN_KEY } from '@/lib/constants'
 import {
   checkStockAvailability,
   getOrderOr404,
@@ -64,7 +64,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       })
     }
 
-    // Remove items (must belong to this order)
+    // Remove items (must belong to this order) — PIN-gated: the admin sets a
+    // 6-digit PIN in Settings; anyone (any role) may delete only with the
+    // correct PIN. The PIN is verified against AppSetting 'deleteItemPin'.
     if (removeItemIds != null) {
       if (!Array.isArray(removeItemIds)) {
         throw new ApiError('removeItemIds must be an array of item ids', 400)
@@ -74,6 +76,13 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         throw new ApiError('removeItemIds contains an invalid item id', 400)
       }
       if (ids.length > 0) {
+        if (typeof body?.removePin !== 'string' || !/^\d{6}$/.test(body.removePin)) {
+          throw new ApiError('A valid 6-digit PIN is required to remove items', 403)
+        }
+        const pinRow = await db.appSetting.findUnique({ where: { key: DELETE_PIN_KEY } })
+        if (!pinRow || pinRow.value !== body.removePin) {
+          throw new ApiError('Wrong PIN — item removal denied', 403)
+        }
         await db.orderItem.deleteMany({ where: { id: { in: ids }, orderId } })
       }
     }

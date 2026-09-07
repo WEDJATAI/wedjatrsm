@@ -1,6 +1,7 @@
 // ─── Shared RMS constants ───────────────────────────────────────────
 
 export const TAX_RATE = Number(process.env.TAX_RATE ?? 0.14) // 14% VAT (Egypt)
+export const SERVICE_TAX_RATE = Number(process.env.SERVICE_TAX_RATE ?? 0.12) // 12% service tax (Egypt)
 
 // ─── Roles ──────────────────────────────────────────────────────────
 // 'custom' users get their module permissions from a CustomRole record (roleId).
@@ -84,12 +85,14 @@ export const ITEM_STATUS_LABELS: Record<string, string> = {
   served: 'Served',
 }
 
-export const TABLE_STATUSES = ['free', 'occupied', 'reserved'] as const
+export const TABLE_STATUSES = ['free', 'occupied', 'reserved', 'paid', 'deferred'] as const
 export type TableStatus = (typeof TABLE_STATUSES)[number]
 export const TABLE_STATUS_LABELS: Record<string, string> = {
   free: 'Free',
   occupied: 'Occupied',
   reserved: 'Reserved',
+  paid: 'Paid — awaiting cleanup',
+  deferred: 'Deferred check — client left',
 }
 
 export const TABLE_SHAPES = ['square', 'round', 'rectangle', 'oval'] as const
@@ -101,12 +104,13 @@ export const TABLE_SHAPE_LABELS: Record<string, string> = {
   oval: 'Oval',
 }
 
-export const ORDER_STATUSES = ['open', 'paid', 'cancelled', 'merged'] as const
+export const ORDER_STATUSES = ['open', 'paid', 'cancelled', 'merged', 'deferred'] as const
 export const ORDER_STATUS_LABELS: Record<string, string> = {
   open: 'Open',
   paid: 'Paid',
   cancelled: 'Cancelled',
   merged: 'Merged',
+  deferred: 'Deferred',
 }
 export const INVENTORY_REASONS = ['purchase', 'adjustment', 'waste', 'sale'] as const
 export const INVENTORY_REASON_LABELS: Record<string, string> = {
@@ -117,7 +121,15 @@ export const INVENTORY_REASON_LABELS: Record<string, string> = {
 }
 
 // Restaurant identity (fallback — the live name is editable in Settings: AppSetting.restaurantName)
-export const RESTAURANT_NAME = 'Saffron Table'
+export const RESTAURANT_NAME = 'Lilo Cafe and Restaurant'
+export const RESTAURANT_NAME_AR = 'ليلو كافيه ومطعم' // Arabic name printed on bilingual checks
+
+// Merged seating (party spanning multiple tables) bounds
+export const MAX_SEATING_TABLES = 4
+
+// Item-deletion PIN (admin-set AppSetting 'deleteItemPin')
+export const DELETE_PIN_KEY = 'deleteItemPin'
+export const DELETE_PIN_LENGTH = 6
 
 // Employee check-in
 export const PIN_LENGTH = 6 // check-in PINs are 6 digits

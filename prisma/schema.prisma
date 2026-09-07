@@ -134,7 +134,7 @@ model RestaurantTable {
   shape      String     @default("square") // 'square' | 'round' | 'rectangle' | 'oval'
   positionX  Float      @default(50) @map("position_x") // percentage 0-100
   positionY  Float      @default(50) @map("position_y") // percentage 0-100
-  status     String     @default("free") // 'free' | 'occupied' | 'reserved'
+  status     String     @default("free") // 'free' | 'occupied' | 'reserved' | 'paid' (bill settled, awaiting cleanup click) | 'deferred' (check deferred, client left)
   active     Boolean    @default(true)
   orders     Order[]
 
@@ -149,12 +149,15 @@ model Order {
   table          RestaurantTable?   @relation(fields: [tableId], references: [id])
   userId         Int?               @map("user_id")
   user           User?              @relation(fields: [userId], references: [id])
-  status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a table merge)
+  status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a merge) | 'deferred' (client pays later)
   guests         Int                @default(1) // number of people seated on this order
   subtotalAmount Float              @default(0) @map("subtotal_amount")
   totalAmount    Float              @default(0) @map("total_amount")
   discountAmount Float              @default(0) @map("discount_amount")
-  taxAmount      Float              @default(0) @map("tax_amount")
+  taxAmount      Float              @default(0) @map("tax_amount") // 14% VAT
+  serviceTaxAmount Float            @default(0) @map("service_tax_amount") // 12% service tax (Egypt)
+  clientName     String?            @map("client_name") // deferred-check client name
+  extraTableIds  String?            @map("extra_table_ids") // JSON array of extra table ids (merged seating from the beginning)
   createdAt      DateTime           @default(now()) @map("created_at")
   closedAt       DateTime?          @map("closed_at")
   items          OrderItem[]

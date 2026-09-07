@@ -187,6 +187,49 @@ export const posDict: DictPair = {
     'pos.emptyCart': 'No items yet',
     'pos.thankYou': 'Thank you for your visit!',
     'pos.soldBy': 'Served by',
+
+    // round5: paid/deferred tables + tap-to-clear
+    'pos.clearTableTitle': 'Clear table {table}?',
+    'pos.clearTablePaidDesc': 'The bill was settled and the client has left. Mark the table as free and clean?',
+    'pos.clearTableDeferredDesc': 'The check was deferred to {client} and the table is empty. Mark it as free and clean?',
+    'pos.markFree': 'Mark free',
+    'pos.tableClearedToast': '{table} is now free',
+    'pos.tablePaidBadge': 'Paid',
+    'pos.tableDeferredBadge': 'Deferred',
+    'pos.paidHint': 'Paid — tap when the client leaves',
+    'pos.deferredHint': 'Deferred: {client} — tap when the table is cleared',
+
+    // round5: seat party across multiple tables (merge from the beginning)
+    'pos.seatParty': 'Seat Party',
+    'pos.seatPick': 'Seat Party — tap the free tables for this party (up to 4)',
+    'pos.seatTables': '{n} table(s) · {seats} seats',
+    'pos.seatContinue': 'Continue',
+    'pos.seatNeedOne': 'Select at least one table',
+    'pos.seatCancel': 'Cancel seating selection',
+    'pos.mergedBadge': 'Merged',
+    'pos.mergedTablesBadge': '+{n} table(s)',
+    'pos.seatedToast': 'Party seated across {n} tables',
+
+    // round5: deferred checks (pay later, tracked by client name)
+    'pos.deferredChecks': 'Deferred checks',
+    'pos.deferredChip': 'Deferred',
+    'pos.deferredSettleHint': 'Deferred check — settle the payment',
+    'pos.deferredButton': 'Defer payment',
+    'pos.deferredTitle': 'Defer payment',
+    'pos.deferredDesc': 'The client will pay later. The check stays open under the client name and the table is released.',
+    'pos.deferredNameLabel': 'Client name',
+    'pos.deferredNamePlaceholder': 'e.g. Ahmed Hassan',
+    'pos.deferredNameRequired': 'Client name is required',
+    'pos.deferredToast': 'Check #{order} deferred for {client}',
+    'pos.deferredStamp': 'DEFERRED',
+    'pos.deferredClientLabel': 'Client',
+
+    // round5: PIN-gated item deletion
+    'pos.pinTitle': 'PIN required',
+    'pos.pinDesc': 'Enter the 6-digit PIN to remove {name} from the order.',
+    'pos.pinPlaceholder': '6-digit PIN',
+    'pos.pinConfirm': 'Remove item',
+    'pos.pinWrong': 'Wrong PIN',
   },
   ar: {
     // floor / tables
@@ -363,5 +406,48 @@ export const posDict: DictPair = {
     'pos.emptyCart': 'لا توجد أصناف بعد',
     'pos.thankYou': 'شكراً لزيارتكم!',
     'pos.soldBy': 'بواسطة',
+
+    // round5: paid/deferred tables + tap-to-clear
+    'pos.clearTableTitle': 'تفريغ الطاولة {table}؟',
+    'pos.clearTablePaidDesc': 'تمت تسوية الحساب ومغادرة العميل. هل تريد تعليم الطاولة كخالية ونظيفة؟',
+    'pos.clearTableDeferredDesc': 'تم تأجيل الحساب باسم {client} والطاولة فارغة. هل تريد تعليمها كخالية ونظيفة؟',
+    'pos.markFree': 'تعليم كخالية',
+    'pos.tableClearedToast': 'أصبحت {table} خالية الآن',
+    'pos.tablePaidBadge': 'مدفوعة',
+    'pos.tableDeferredBadge': 'مؤجلة',
+    'pos.paidHint': 'مدفوعة — اضغط عند مغادرة العميل',
+    'pos.deferredHint': 'مؤجلة باسم {client} — اضغط بعد تفريغ الطاولة',
+
+    // round5: seat party across multiple tables (merge from the beginning)
+    'pos.seatParty': 'جلوس مجموعة',
+    'pos.seatPick': 'جلوس مجموعة — اضغط على الطاولات الخالية لهذه المجموعة (حتى 4 طاولات)',
+    'pos.seatTables': '{n} طاولة/طاولات · {seats} مقاعد',
+    'pos.seatContinue': 'متابعة',
+    'pos.seatNeedOne': 'اختر طاولة واحدة على الأقل',
+    'pos.seatCancel': 'إلغاء اختيار الجلوس',
+    'pos.mergedBadge': 'مدمجة',
+    'pos.mergedTablesBadge': '+{n} طاولة/طاولات',
+    'pos.seatedToast': 'جلست المجموعة على {n} طاولات',
+
+    // round5: deferred checks (pay later, tracked by client name)
+    'pos.deferredChecks': 'الحسابات المؤجلة',
+    'pos.deferredChip': 'مؤجل',
+    'pos.deferredSettleHint': 'حساب مؤجل — تسوية الدفع',
+    'pos.deferredButton': 'تأجيل الدفع',
+    'pos.deferredTitle': 'تأجيل الدفع',
+    'pos.deferredDesc': 'سيدفع العميل لاحقًا. يبقى الحساب مفتوحًا باسم العميل مع تحرير الطاولة.',
+    'pos.deferredNameLabel': 'اسم العميل',
+    'pos.deferredNamePlaceholder': 'مثال: أحمد حسن',
+    'pos.deferredNameRequired': 'اسم العميل مطلوب',
+    'pos.deferredToast': 'تم تأجيل الحساب #{order} باسم {client}',
+    'pos.deferredStamp': 'مؤجل',
+    'pos.deferredClientLabel': 'العميل',
+
+    // round5: PIN-gated item deletion
+    'pos.pinTitle': 'الرمز مطلوب',
+    'pos.pinDesc': 'أدخل الرمز المكوّن من 6 أرقام لإزالة {name} من الطلب.',
+    'pos.pinPlaceholder': 'رمز من 6 أرقام',
+    'pos.pinConfirm': 'إزالة العنصر',
+    'pos.pinWrong': 'رمز غير صحيح',
   },
 }

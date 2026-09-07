@@ -88,6 +88,8 @@ export const common: DictPair = {
     'status.table.free': 'Free',
     'status.table.occupied': 'Occupied',
     'status.table.reserved': 'Reserved',
+    'status.table.paid': 'Paid — tap to clear',
+    'status.table.deferred': 'Deferred — tap to clear',
 
     // table shapes
     'shape.square': 'Square',
@@ -106,6 +108,7 @@ export const common: DictPair = {
     'status.order.paid': 'Paid',
     'status.order.cancelled': 'Cancelled',
     'status.order.merged': 'Merged',
+    'status.order.deferred': 'Deferred',
 
     // payment methods
     'status.payment.cash': 'Cash',
@@ -128,6 +131,7 @@ export const common: DictPair = {
     'money.subtotal': 'Subtotal',
     'money.discount': 'Discount',
     'money.tax': 'VAT (14%)',
+    'money.serviceTax': 'Service tax (12%)',
     'money.total': 'Total',
     'money.paid': 'Paid',
     'money.remaining': 'Remaining',
@@ -166,6 +170,13 @@ export const common: DictPair = {
 
     // settings
     'settings.restaurantName': 'Restaurant name',
+    'settings.restaurantNameAr': 'Restaurant name (Arabic)',
+    'settings.restaurantNameArHint': 'Printed on the bilingual Arabic/English checks',
+    'settings.security': 'Security',
+    'settings.deletePin': 'Item-deletion PIN',
+    'settings.deletePinHint': '6 digits, set by the admin. Required to remove items from any order — any staff member may delete with the correct PIN.',
+    'settings.deletePinInvalid': 'PIN must be exactly 6 digits',
+    'settings.deletePinSaved': 'Item-deletion PIN updated',
     'settings.profile': 'Restaurant profile',
     'settings.saved': 'Settings saved',
 
@@ -258,6 +269,8 @@ export const common: DictPair = {
     'status.table.free': 'متاحة',
     'status.table.occupied': 'مشغولة',
     'status.table.reserved': 'محجوزة',
+    'status.table.paid': 'مدفوعة — اضغط للتفريغ',
+    'status.table.deferred': 'مؤجلة — اضغط للتفريغ',
 
     // table shapes
     'shape.square': 'مربعة',
@@ -276,6 +289,7 @@ export const common: DictPair = {
     'status.order.paid': 'مدفوع',
     'status.order.cancelled': 'ملغي',
     'status.order.merged': 'مدمج',
+    'status.order.deferred': 'مؤجل',
 
     // payment methods
     'status.payment.cash': 'نقدي',
@@ -298,6 +312,7 @@ export const common: DictPair = {
     'money.subtotal': 'المجموع الفرعي',
     'money.discount': 'الخصم',
     'money.tax': 'ضريبة القيمة المضافة (14%)',
+    'money.serviceTax': 'ضريبة الخدمة (12%)',
     'money.total': 'الإجمالي',
     'money.paid': 'المدفوع',
     'money.remaining': 'المتبقي',
@@ -336,6 +351,13 @@ export const common: DictPair = {
 
     // settings
     'settings.restaurantName': 'اسم المطعم',
+    'settings.restaurantNameAr': 'اسم المطعم (بالعربية)',
+    'settings.restaurantNameArHint': 'يُطبع على الحسابات ثنائية اللغة (عربي/إنجليزي)',
+    'settings.security': 'الأمان',
+    'settings.deletePin': 'رمز حذف العناصر',
+    'settings.deletePinHint': '6 أرقام يحددها المدير. مطلوب لإزالة أي عنصر من الطلب — يمكن لأي موظف الحذف بإدخال الرمز الصحيح.',
+    'settings.deletePinInvalid': 'يجب أن يتكون الرمز من 6 أرقام بالضبط',
+    'settings.deletePinSaved': 'تم تحديث رمز حذف العناصر',
     'settings.profile': 'بيانات المطعم',
     'settings.saved': 'تم حفظ الإعدادات',
 

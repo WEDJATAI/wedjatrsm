@@ -5,7 +5,9 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import {
   closeOrderIfFullyPaid,
+  findOpenOrderOnTable,
   getOrderOr404,
+  orderTableIds,
   parseId,
   recomputeTotals,
   serializeOrder,
@@ -57,33 +59,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await tx.order.update({ where: { id: target.id }, data: { tableId: targetTableId } })
       }
 
-      // 3) Source order is consumed: 'merged' + closed, detached from its table
+      // 3) Source order is consumed: 'merged' + closed, detached from its
+      //    tables (primary + merged-seating extras are all released below)
       await tx.order.update({
         where: { id: source.id },
-        data: { status: 'merged', closedAt: new Date(), tableId: null },
+        data: { status: 'merged', closedAt: new Date(), tableId: null, extraTableIds: null },
       })
 
-      // 4) Table statuses: free the source table when no open order remains
-      //    on it (the target may have adopted it); keep the target's table
-      //    occupied.
-      if (source.tableId != null) {
-        const openOnSourceTable = await tx.order.findFirst({
-          where: { tableId: source.tableId, status: 'open' },
-          select: { id: true },
-        })
+      // 4) Table statuses: free EVERY source seating table (primary +
+      //    extras) when no open order remains on it; keep the target's
+      //    table occupied.
+      for (const sourceTableId of orderTableIds(source)) {
+        const openOnSourceTable = await findOpenOrderOnTable(sourceTableId)
         if (!openOnSourceTable) {
           await tx.restaurantTable.update({
-            where: { id: source.tableId },
+            where: { id: sourceTableId },
             data: { status: 'free' },
           })
         } else {
           await tx.restaurantTable.update({
-            where: { id: source.tableId },
+            where: { id: sourceTableId },
             data: { status: 'occupied' },
           })
         }
       }
-      if (targetTableId != null && targetTableId !== source.tableId) {
+      if (targetTableId != null && !orderTableIds(source).includes(targetTableId)) {
         await tx.restaurantTable.update({
           where: { id: targetTableId },
           data: { status: 'occupied' },
