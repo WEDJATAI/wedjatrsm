@@ -5,13 +5,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { getOrderOr404, parseId, recomputeTotals, serializeOrder } from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const sourceId = parseId(id, 'order id')
 
@@ -48,9 +49,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     // Every requested item must exist AND belong to the source order
+    // (name + quantity are selected for the audit summary — read-only)
     const items = await db.orderItem.findMany({
       where: { id: { in: itemIds } },
-      select: { id: true, orderId: true },
+      select: {
+        id: true,
+        orderId: true,
+        quantity: true,
+        product: { select: { name: true } },
+      },
     })
     const itemById = new Map(items.map((item) => [item.id, item]))
     for (const itemId of itemIds) {
@@ -75,6 +82,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
     const sourceOrder = await getOrderOr404(sourceId)
     const targetOrder = await getOrderOr404(targetOrderId)
+
+    const itemSummary = items
+      .map(
+        (item) =>
+          `${item.quantity}× ${item.product?.name ?? `item ${item.id}`}`,
+      )
+      .join(', ')
+    await logAudit({
+      user,
+      action: 'order.itemTransfer',
+      entity: 'order',
+      entityId: sourceId,
+      details: `${itemSummary} moved from order #${sourceId} to order #${targetOrderId}`,
+    })
+
     return NextResponse.json({
       source: serializeOrder(sourceOrder),
       target: serializeOrder(targetOrder),

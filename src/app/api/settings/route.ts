@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { DELETE_PIN_KEY, DELETE_PIN_LENGTH, RESTAURANT_NAME, RESTAURANT_NAME_AR } from '@/lib/constants'
 
 // Editable app settings (upserted by key). Falls back to the constants
@@ -40,8 +41,12 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'settings'])
+    const user = await requireAuth(req, ['admin', 'settings'])
     const body = await readBody(req)
+
+    // keys actually persisted in this request (audit summary — VALUES are
+    // never logged: the PIN and names stay write-only / non-sensitive keys)
+    const changedKeys: string[] = []
 
     // ── Restaurant name (English) ──
     if (body.restaurantName !== undefined) {
@@ -57,6 +62,7 @@ export async function PUT(req: NextRequest) {
         update: { value: restaurantName },
         create: { key: RESTAURANT_NAME_KEY, value: restaurantName },
       })
+      changedKeys.push('restaurantName')
     }
 
     // ── Restaurant name (Arabic — printed on bilingual checks) ──
@@ -74,6 +80,7 @@ export async function PUT(req: NextRequest) {
         update: { value: restaurantNameAr },
         create: { key: RESTAURANT_NAME_AR_KEY, value: restaurantNameAr },
       })
+      changedKeys.push('restaurantNameAr')
     }
 
     // ── Item-deletion PIN (6 digits, admin-set, usable by any staff) ──
@@ -89,6 +96,17 @@ export async function PUT(req: NextRequest) {
         where: { key: DELETE_PIN_KEY },
         update: { value: pin },
         create: { key: DELETE_PIN_KEY, value: pin },
+      })
+      changedKeys.push('deleteItemPin')
+    }
+
+    if (changedKeys.length > 0) {
+      await logAudit({
+        user,
+        action: 'settings.update',
+        entity: 'settings',
+        entityId: null,
+        details: `Updated keys: ${changedKeys.join(', ')}`,
       })
     }
 

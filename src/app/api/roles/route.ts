@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { PERMISSIONS } from '@/lib/constants'
 
 type RoleRowWithCount = {
@@ -79,7 +80,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'roles'])
+    const user = await requireAuth(req, ['admin', 'roles'])
     const body = await readBody(req)
 
     const name = parseName(body.name)
@@ -90,7 +91,17 @@ export async function POST(req: NextRequest) {
         data: { name, permissions: permissions.join(',') },
         include: { _count: { select: { users: true } } },
       })
-      return NextResponse.json({ role: serializeRole(role) })
+      const serialized = serializeRole(role)
+
+      await logAudit({
+        user,
+        action: 'role.create',
+        entity: 'role',
+        entityId: serialized.id,
+        details: `Created role ${serialized.name} (permissions: ${serialized.permissions.join(', ')})`,
+      })
+
+      return NextResponse.json({ role: serialized })
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

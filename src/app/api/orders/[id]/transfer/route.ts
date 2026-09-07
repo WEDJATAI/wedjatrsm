@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import {
   findOpenOrderOnTable,
   getOrderOr404,
@@ -15,7 +16,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 
@@ -67,7 +68,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     })
 
     const fresh = await getOrderOr404(orderId)
-    return NextResponse.json({ order: serializeOrder(fresh) })
+    const serialized = serializeOrder(fresh)
+
+    await logAudit({
+      user,
+      action: 'order.transfer',
+      entity: 'order',
+      entityId: orderId,
+      details: `Order #${orderId} moved from ${
+        order.table ? `table ${order.table.name}` : 'takeaway'
+      } to table ${table.name}`,
+    })
+
+    return NextResponse.json({ order: serialized })
   } catch (err) {
     return errorResponse(err)
   }

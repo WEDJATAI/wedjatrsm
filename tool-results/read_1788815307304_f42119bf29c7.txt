@@ -1,0 +1,854 @@
+     1→'use client'
+     2→
+     3→import { useMemo, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  Armchair,
+     7→  ArrowLeftRight,
+     8→  BadgeCheck,
+     9→  Check,
+    10→  ChevronLeft,
+    11→  ChevronRight,
+    12→  Clock,
+    13→  Combine,
+    14→  DoorOpen,
+    15→  Hourglass,
+    16→  Loader2,
+    17→  MapPin,
+    18→  Plus,
+    19→  ShoppingBag,
+    20→  Users,
+    21→  X,
+    22→} from 'lucide-react'
+    23→import { toast } from 'sonner'
+    24→
+    25→import {
+    26→  AlertDialog,
+    27→  AlertDialogAction,
+    28→  AlertDialogCancel,
+    29→  AlertDialogContent,
+    30→  AlertDialogDescription,
+    31→  AlertDialogFooter,
+    32→  AlertDialogHeader,
+    33→  AlertDialogTitle,
+    34→} from '@/components/ui/alert-dialog'
+    35→import { Button } from '@/components/ui/button'
+    36→import { Skeleton } from '@/components/ui/skeleton'
+    37→import { apiFetch, fetcher } from '@/lib/api'
+    38→import { MAX_SEATING_TABLES } from '@/lib/constants'
+    39→import { elapsedSince, formatCurrency } from '@/lib/format'
+    40→import { useI18n } from '@/lib/i18n'
+    41→import { cn } from '@/lib/utils'
+    42→import type { FloorPlan, Order, RestaurantTable } from '@/lib/types'
+    43→
+    44→type TableSelectProps = {
+    45→  onSelectTable: (table: RestaurantTable) => void
+    46→  onTakeaway: () => void
+    47→  onOpenTakeawayOrder: (order: Order) => void
+    48→  /** When set, start directly in transfer step 2 (destination selection) for this order. */
+    49→  transferOrderId?: number | null
+    50→  /** Called after a transfer completes (pos-view resets its order screen state). */
+    51→  onTransferDone?: () => void
+    52→  /** Seat Party tool result — the free tables selected for the party, in
+    53→   *  selection order (primary table first). TableSelect exits the tool itself. */
+    54→  onSeatParty: (tables: RestaurantTable[]) => void
+    55→  /** Deferred-check chip clicked — pos-view opens the payment modal to settle it. */
+    56→  onSettleDeferred: (order: Order) => void
+    57→}
+    58→
+    59→type ToolKind = 'transfer' | 'merge' | 'seat'
+    60→type SourcePick = { orderId: number }
+    61→
+    62→type TableInteraction = 'normal' | 'eligible' | 'ineligible'
+    63→
+    64→/** Per-shape tile silhouette classes — Odoo 17-style tiles. The floor grid
+    65→ *  keeps its responsive layout (tiles fill the grid cell width); only the
+    66→ *  silhouette changes (square/round/rectangle/oval). The admin floor-plan
+    67→ *  editor mirrors these exact strings. */
+    68→const SHAPE_TILE_CLASSES: Record<string, string> = {
+    69→  square: 'aspect-square rounded-2xl',
+    70→  round: 'aspect-square rounded-full',
+    71→  rectangle: 'h-24 rounded-2xl',
+    72→  oval: 'h-24 rounded-full',
+    73→}
+    74→
+    75→function shapeClasses(shape: string): string {
+    76→  return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+    77→}
+    78→
+    79→export default function TableSelect({
+    80→  onSelectTable,
+    81→  onTakeaway,
+    82→  onOpenTakeawayOrder,
+    83→  transferOrderId,
+    84→  onTransferDone,
+    85→  onSeatParty,
+    86→  onSettleDeferred,
+    87→}: TableSelectProps) {
+    88→  const queryClient = useQueryClient()
+    89→  const { t } = useI18n()
+    90→
+    91→  const [floorIdx, setFloorIdx] = useState(0)
+    92→  // When pos-view passes transferOrderId (Transfer clicked on the order
+    93→  // screen), this component mounts fresh in transfer step 2 (destination
+    94→  // selection) — pos-view only sets it right before switching to tables view,
+    95→  // so mount-time initialization is sufficient.
+    96→  const [tool, setTool] = useState<ToolKind | null>(transferOrderId != null ? 'transfer' : null)
+    97→  const [source, setSource] = useState<SourcePick | null>(
+    98→    transferOrderId != null ? { orderId: transferOrderId } : null,
+    99→  )
+   100→  // Seat Party: the free tables tapped so far, in selection order (the first
+   101→  // one becomes the primary table of the merged seating).
+   102→  const [seatSelection, setSeatSelection] = useState<RestaurantTable[]>([])
+   103→  // Paid/deferred tile tap-to-clear confirmation dialog target.
+   104→  const [clearTarget, setClearTarget] = useState<RestaurantTable | null>(null)
+   105→
+   106→  const { data: floorPlanData, isLoading } = useQuery({
+   107→    queryKey: ['floorplans'],
+   108→    queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
+   109→    refetchInterval: 3000, // LIVE table statuses
+   110→  })
+   111→
+   112→  const { data: openOrdersData } = useQuery({
+   113→    queryKey: ['orders', 'open'],
+   114→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   115→    refetchInterval: 3000,
+   116→  })
+   117→
+   118→  // Outstanding deferred checks (client left, payment pending) — settle chips.
+   119→  const { data: deferredOrdersData } = useQuery({
+   120→    queryKey: ['orders', 'deferred'],
+   121→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=deferred'),
+   122→    refetchInterval: 3000,
+   123→    enabled: !tool,
+   124→  })
+   125→
+   126→  const floorPlans = floorPlanData?.floorPlans ?? []
+   127→  const openOrders = openOrdersData?.orders ?? []
+   128→  const deferredOrders = deferredOrdersData?.orders ?? []
+   129→  const takeawayOrders = useMemo(
+   130→    () => openOrders.filter((o) => o.tableId === null),
+   131→    [openOrders],
+   132→  )
+   133→
+   134→  const idx = floorPlans.length > 0 ? Math.min(floorIdx, floorPlans.length - 1) : 0
+   135→  const plan = floorPlans[idx] ?? null
+   136→
+   137→  const sourceOrder = source ? openOrders.find((o) => o.id === source.orderId) ?? null : null
+   138→  const sourceLabel = source ? sourceOrder?.table?.name ?? t('common.takeaway') : null
+   139→
+   140→  // ── Clear table (paid/deferred → free) ────────────────────────────
+   141→  const clearTableMutation = useMutation({
+   142→    mutationFn: (vars: { id: number; name: string }) =>
+   143→      apiFetch<{ table: RestaurantTable }>(`/api/tables/${vars.id}/clear`, {
+   144→        method: 'POST',
+   145→      }),
+   146→    onSuccess: async (_data, vars) => {
+   147→      toast.success(t('pos.tableClearedToast', { table: vars.name }))
+   148→      setClearTarget(null)
+   149→      await Promise.all([
+   150→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   151→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   152→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   153→      ])
+   154→    },
+   155→    onError: (err: Error) => toast.error(err.message),
+   156→  })
+   157→
+   158→  // ── Transfer & merge mutations ───────────────────────────────────
+   159→  const invalidateAfterMove = async (...orderIds: number[]) => {
+   160→    await Promise.all([
+   161→      queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   162→      queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   163→      queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   164→      queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   165→      ...orderIds.map((id) => queryClient.invalidateQueries({ queryKey: ['pos-order', id] })),
+   166→    ])
+   167→  }
+   168→
+   169→  const transferMutation = useMutation({
+   170→    mutationFn: (vars: { orderId: number; tableId: number; tableName: string }) =>
+   171→      apiFetch<{ order: Order }>(`/api/orders/${vars.orderId}/transfer`, {
+   172→        method: 'POST',
+   173→        body: { tableId: vars.tableId },
+   174→      }),
+   175→    onSuccess: async (_data, vars) => {
+   176→      toast.success(t('pos.transferToast', { order: vars.orderId, table: vars.tableName }))
+   177→      await invalidateAfterMove(vars.orderId)
+   178→      exitTool()
+   179→      onTransferDone?.()
+   180→    },
+   181→    onError: (err: Error) => toast.error(err.message),
+   182→  })
+   183→
+   184→  const mergeMutation = useMutation({
+   185→    mutationFn: (vars: { sourceId: number; targetId: number; targetLabel: string }) =>
+   186→      apiFetch<{ order: Order }>(`/api/orders/${vars.targetId}/merge`, {
+   187→        method: 'POST',
+   188→        body: { sourceOrderId: vars.sourceId },
+   189→      }),
+   190→    onSuccess: async (_data, vars) => {
+   191→      toast.success(t('pos.mergeToast', { table: vars.targetLabel }))
+   192→      await invalidateAfterMove(vars.sourceId, vars.targetId)
+   193→      exitTool()
+   194→    },
+   195→    onError: (err: Error) => toast.error(err.message),
+   196→  })
+   197→
+   198→  const busy = transferMutation.isPending || mergeMutation.isPending
+   199→
+   200→  // ── Tool mode helpers ────────────────────────────────────────────
+   201→  const exitTool = () => {
+   202→    setTool(null)
+   203→    setSource(null)
+   204→    setSeatSelection([])
+   205→  }
+   206→
+   207→  const startTransferTool = () => {
+   208→    setTool('transfer')
+   209→    setSource(null)
+   210→    setSeatSelection([])
+   211→  }
+   212→
+   213→  const startMergeTool = () => {
+   214→    setTool('merge')
+   215→    setSource(null)
+   216→    setSeatSelection([])
+   217→  }
+   218→
+   219→  const startSeatTool = () => {
+   220→    setTool('seat')
+   221→    setSource(null)
+   222→    setSeatSelection([])
+   223→  }
+   224→
+   225→  // Paid/deferred tables hold no open order — they await a cleanup click.
+   226→  const isPaidOrDeferred = (t2: RestaurantTable) =>
+   227→    t2.status === 'paid' || t2.status === 'deferred'
+   228→
+   229→  const tableInteraction = (t2: RestaurantTable): TableInteraction => {
+   230→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   231→    if (tool === 'seat') {
+   232→      // Only free tables can host a new party.
+   233→      return t2.status === 'free' && t2.openOrderId == null ? 'normal' : 'ineligible'
+   234→    }
+   235→    if (tool === 'transfer') {
+   236→      if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   237→      // Destination: free/reserved tables with no open order (paid/deferred
+   238→      // tables await cleanup, they are not transfer destinations).
+   239→      return t2.openOrderId == null && t2.status !== 'occupied' && !isPaidOrDeferred(t2)
+   240→        ? 'eligible'
+   241→        : 'ineligible'
+   242→    }
+   243→    // Merge: source = any occupied table; target = another open order's table.
+   244→    if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   245→    return t2.openOrderId != null && t2.openOrderId !== source.orderId ? 'eligible' : 'ineligible'
+   246→  }
+   247→
+   248→  const takeawayInteraction = (o: Order): TableInteraction => {
+   249→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   250→    if (tool === 'seat') return 'ineligible'
+   251→    if (tool === 'transfer') {
+   252→      // Takeaway orders are valid transfer sources, never destinations.
+   253→      return source == null ? 'eligible' : 'ineligible'
+   254→    }
+   255→    if (source == null) return 'eligible'
+   256→    return o.id !== source.orderId ? 'eligible' : 'ineligible'
+   257→  }
+   258→
+   259→  const handleTableClick = (t2: RestaurantTable) => {
+   260→    if (busy) return
+   261→    if (tool === 'seat') {
+   262→      if (t2.status !== 'free' || t2.openOrderId != null) return
+   263→      setSeatSelection((prev) => {
+   264→        if (prev.some((s) => s.id === t2.id)) return prev.filter((s) => s.id !== t2.id)
+   265→        if (prev.length >= MAX_SEATING_TABLES) return prev // max 4 tables per seating
+   266→        return [...prev, t2]
+   267→      })
+   268→      return
+   269→    }
+   270→    if (tool === 'transfer') {
+   271→      if (source == null) {
+   272→        if (t2.openOrderId == null) return
+   273→        setSource({ orderId: t2.openOrderId })
+   274→        return
+   275→      }
+   276→      if (t2.openOrderId != null || t2.status === 'occupied' || isPaidOrDeferred(t2)) return
+   277→      transferMutation.mutate({ orderId: source.orderId, tableId: t2.id, tableName: t2.name })
+   278→      return
+   279→    }
+   280→    if (tool === 'merge') {
+   281→      if (source == null) {
+   282→        if (t2.openOrderId == null) return
+   283→        setSource({ orderId: t2.openOrderId })
+   284→        return
+   285→      }
+   286→      if (t2.openOrderId == null || t2.openOrderId === source.orderId) return
+   287→      mergeMutation.mutate({ sourceId: source.orderId, targetId: t2.openOrderId, targetLabel: t2.name })
+   288→      return
+   289→    }
+   290→    // Normal mode — paid/deferred tiles are the tap-to-clear affordance.
+   291→    if (isPaidOrDeferred(t2) && t2.openOrderId == null) {
+   292→      setClearTarget(t2)
+   293→      return
+   294→    }
+   295→    onSelectTable(t2)
+   296→  }
+   297→
+   298→  const handleTakeawayClick = (o: Order) => {
+   299→    if (busy) return
+   300→    if (tool === 'seat') return
+   301→    if (tool === 'transfer') {
+   302→      if (source == null) setSource({ orderId: o.id })
+   303→      return
+   304→    }
+   305→    if (tool === 'merge') {
+   306→      if (source == null) {
+   307→        setSource({ orderId: o.id })
+   308→      } else if (o.id !== source.orderId) {
+   309→        mergeMutation.mutate({
+   310→          sourceId: source.orderId,
+   311→          targetId: o.id,
+   312→          targetLabel: t('common.takeaway'),
+   313→        })
+   314→      }
+   315→      return
+   316→    }
+   317→    onOpenTakeawayOrder(o)
+   318→  }
+   319→
+   320→  // Seat Party: hand the selection (in order) to pos-view, then exit the tool.
+   321→  const continueSeat = () => {
+   322→    if (seatSelection.length === 0) return
+   323→    const selected = seatSelection
+   324→    exitTool()
+   325→    onSeatParty(selected)
+   326→  }
+   327→
+   328→  // ── Banner text (transfer/merge — seat has its own banner) ────────
+   329→  const bannerText = busy
+   330→    ? tool === 'transfer'
+   331→      ? t('pos.transferring')
+   332→      : t('pos.merging')
+   333→    : tool === 'transfer'
+   334→      ? source
+   335→        ? sourceLabel
+   336→          ? t('pos.transferDest', { order: source.orderId, label: sourceLabel })
+   337→          : t('pos.transferDestNoLabel', { order: source.orderId })
+   338→        : t('pos.transferPick')
+   339→      : source
+   340→        ? t('pos.mergeTarget', {
+   341→            source: sourceLabel ?? `#${source.orderId}`,
+   342→          })
+   343→        : t('pos.mergePick')
+   344→
+   345→  const tables = plan?.tables ?? []
+   346→
+   347→  // ── Hall stats (current floor) + Seat Party availability ─────────
+   348→  const hallFreeCount = tables.filter(
+   349→    (tb) => tb.status === 'free' && tb.openOrderId == null,
+   350→  ).length
+   351→  const hallOccupiedCount = tables.filter(
+   352→    (tb) => tb.status === 'occupied' || tb.openOrderId != null,
+   353→  ).length
+   354→  const hallSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   355→  const hasFreeTable = hallFreeCount > 0
+   356→  const seatSeats = seatSelection.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   357→
+   358→  return (
+   359→    <div className="rms-scroll h-full overflow-y-auto">
+   360→      <div className="mx-auto flex w-full max-w-6xl flex-col">
+   361→        {/* ── Control bar ── */}
+   362→        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E2E0] bg-white px-4 py-3">
+   363→          {/* Floor switcher */}
+   364→          <div className="flex items-center gap-2">
+   365→            <Button
+   366→              variant="outline"
+   367→              size="icon"
+   368→              className="h-11 w-11 rounded-xl"
+   369→              disabled={idx <= 0}
+   370→              onClick={() => setFloorIdx(idx - 1)}
+   371→              aria-label={t('pos.prevFloor')}
+   372→            >
+   373→              <ChevronLeft className="size-5 rtl:rotate-180" />
+   374→            </Button>
+   375→            <span className="min-w-[110px] text-center text-lg font-bold">
+   376→              {plan?.name ?? t('pos.floors')}
+   377→            </span>
+   378→            <Button
+   379→              variant="outline"
+   380→              size="icon"
+   381→              className="h-11 w-11 rounded-xl"
+   382→              disabled={idx >= floorPlans.length - 1}
+   383→              onClick={() => setFloorIdx(idx + 1)}
+   384→              aria-label={t('pos.nextFloor')}
+   385→            >
+   386→              <ChevronRight className="size-5 rtl:rotate-180" />
+   387→            </Button>
+   388→          </div>
+   389→
+   390→          {/* Actions */}
+   391→          <div className="flex flex-wrap items-center gap-2">
+   392→            <Button
+   393→              variant="outline"
+   394→              className="h-11 rounded-xl"
+   395→              disabled={openOrders.length === 0 || !!tool}
+   396→              onClick={startTransferTool}
+   397→            >
+   398→              <ArrowLeftRight className="text-[#714B67]" />
+   399→              <span className="hidden sm:inline">{t('pos.transfer')}</span>
+   400→            </Button>
+   401→            <Button
+   402→              variant="outline"
+   403→              className="h-11 rounded-xl"
+   404→              disabled={openOrders.length < 2 || !!tool}
+   405→              onClick={startMergeTool}
+   406→            >
+   407→              <Combine className="text-[#714B67]" />
+   408→              <span className="hidden sm:inline">{t('pos.merge')}</span>
+   409→            </Button>
+   410→            <Button
+   411→              variant="outline"
+   412→              className="h-11 rounded-xl border-violet-400 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   413→              disabled={!hasFreeTable || !!tool}
+   414→              onClick={startSeatTool}
+   415→              title={t('pos.seatParty')}
+   416→            >
+   417→              <Armchair className="text-violet-700" />
+   418→              <span className="hidden sm:inline">{t('pos.seatParty')}</span>
+   419→            </Button>
+   420→            <Button
+   421→              className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+   422→              disabled={!!tool}
+   423→              onClick={onTakeaway}
+   424→            >
+   425→              <Plus /> {t('pos.newTakeaway')}
+   426→            </Button>
+   427→          </div>
+   428→        </div>
+   429→
+   430→        {/* ── Seat Party banner (violet) ── */}
+   431→        {tool === 'seat' ? (
+   432→          <div
+   433→            className="flex flex-wrap items-center gap-2 bg-violet-600 px-4 py-3 text-white sm:gap-3"
+   434→            role="status"
+   435→          >
+   436→            <Armchair className="size-5 shrink-0" aria-hidden />
+   437→            <div className="min-w-0 flex-1">
+   438→              <p className="text-sm font-semibold">{t('pos.seatPick')}</p>
+   439→              <p className="text-xs font-medium tabular-nums text-white/80">
+   440→                {t('pos.seatTables', { n: seatSelection.length, seats: seatSeats })}
+   441→              </p>
+   442→            </div>
+   443→            <Button
+   444→              className="h-11 shrink-0 rounded-xl bg-white px-4 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   445→              disabled={seatSelection.length === 0}
+   446→              onClick={continueSeat}
+   447→              title={seatSelection.length === 0 ? t('pos.seatNeedOne') : t('pos.seatContinue')}
+   448→            >
+   449→              {t('pos.seatContinue')}
+   450→            </Button>
+   451→            <Button
+   452→              variant="ghost"
+   453→              size="icon"
+   454→              className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   455→              onClick={exitTool}
+   456→              aria-label={t('pos.seatCancel')}
+   457→              title={t('common.cancel')}
+   458→            >
+   459→              <X className="size-5" />
+   460→            </Button>
+   461→          </div>
+   462→        ) : (
+   463→          /* ── Transfer/merge banner ── */
+   464→          tool && (
+   465→            <div
+   466→              className="flex items-center gap-3 bg-[#714B67] px-4 py-3 text-white"
+   467→              role="status"
+   468→            >
+   469→              {busy ? (
+   470→                <Loader2 className="size-5 shrink-0 animate-spin" aria-hidden />
+   471→              ) : tool === 'transfer' ? (
+   472→                <ArrowLeftRight className="size-5 shrink-0" aria-hidden />
+   473→              ) : (
+   474→                <Combine className="size-5 shrink-0" aria-hidden />
+   475→              )}
+   476→              <p className="min-w-0 flex-1 text-sm font-semibold">{bannerText}</p>
+   477→              <Button
+   478→                variant="ghost"
+   479→                size="icon"
+   480→                className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   481→                onClick={exitTool}
+   482→                disabled={busy}
+   483→                aria-label={t('pos.cancelTool')}
+   484→                title={t('common.cancel')}
+   485→              >
+   486→                <X className="size-5" />
+   487→              </Button>
+   488→            </div>
+   489→          )
+   490→        )}
+   491→
+   492→        {/* ── Hall panel: tables grid + takeaway + deferred checks ── */}
+   493→        <div className="p-4 sm:p-6">
+   494→          <div className="relative rounded-2xl border border-[#E2E2E0] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] p-4 sm:p-6">
+   495→            {/* Hall stats bar — current floor */}
+   496→            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-stone-500">
+   497→              <span className="tabular-nums">{t('admin.hallStatsTables', { n: tables.length })}</span>
+   498→              <span className="tabular-nums font-semibold text-emerald-700">
+   499→                {t('admin.hallStatsFree', { n: hallFreeCount })}
+   500→              </span>
+   501→              <span className="tabular-nums font-semibold text-amber-700">
+   502→                {t('admin.hallStatsOccupied', { n: hallOccupiedCount })}
+   503→              </span>
+   504→              <span className="flex items-center gap-1 tabular-nums">
+   505→                <Users className="size-3.5" aria-hidden />
+   506→                {hallSeats} {t('common.seats')}
+   507→              </span>
+   508→            </div>
+   509→
+   510→            {isLoading ? (
+   511→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   512→                {Array.from({ length: 8 }, (_, i) => (
+   513→                  <Skeleton key={i} className="aspect-square rounded-2xl" />
+   514→                ))}
+   515→              </div>
+   516→            ) : floorPlans.length === 0 ? (
+   517→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   518→                <MapPin className="size-8 opacity-40" />
+   519→                <p className="text-sm">{t('pos.noTables')}</p>
+   520→              </div>
+   521→            ) : tables.length === 0 ? (
+   522→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   523→                <MapPin className="size-8 opacity-40" />
+   524→                <p className="text-sm">{t('pos.noTablesFloor')}</p>
+   525→              </div>
+   526→            ) : (
+   527→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   528→                {tables.map((t2) => (
+   529→                  <TableTile
+   530→                    key={t2.id}
+   531→                    table={t2}
+   532→                    interaction={tableInteraction(t2)}
+   533→                    selected={tool === 'seat' && seatSelection.some((s) => s.id === t2.id)}
+   534→                    onClick={() => handleTableClick(t2)}
+   535→                  />
+   536→                ))}
+   537→              </div>
+   538→            )}
+   539→
+   540→            {(takeawayOrders.length > 0 || deferredOrders.length > 0) && (
+   541→              <div className="mt-6 space-y-6 pb-2">
+   542→                {/* ── Open takeaway orders ── */}
+   543→                {takeawayOrders.length > 0 && (
+   544→                  <section>
+   545→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-stone-500">
+   546→                      <ShoppingBag className="size-4" /> {t('pos.openTakeaways')}
+   547→                    </h3>
+   548→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   549→                      {takeawayOrders.map((o) => {
+   550→                        const interaction = takeawayInteraction(o)
+   551→                        return (
+   552→                          <button
+   553→                            key={o.id}
+   554→                            type="button"
+   555→                            disabled={interaction === 'ineligible'}
+   556→                            onClick={() => handleTakeawayClick(o)}
+   557→                            className={cn(
+   558→                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#E2E2E0] bg-white px-4 shadow-sm transition active:scale-95',
+   559→                              interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   560→                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   561→                            )}
+   562→                          >
+   563→                            <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
+   564→                            <span className="text-sm font-semibold">#{o.id}</span>
+   565→                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+   566→                              {formatCurrency(o.remainingAmount)}
+   567→                            </span>
+   568→                            <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
+   569→                          </button>
+   570→                        )
+   571→                      })}
+   572→                    </div>
+   573→                  </section>
+   574→                )}
+   575→
+   576→                {/* ── Deferred checks (pay later, settle via chip) ── */}
+   577→                {deferredOrders.length > 0 && (
+   578→                  <section>
+   579→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-violet-700">
+   580→                      <Hourglass className="size-4" aria-hidden /> {t('pos.deferredChecks')}
+   581→                    </h3>
+   582→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   583→                      {deferredOrders.map((o) => (
+   584→                        <button
+   585→                          key={o.id}
+   586→                          type="button"
+   587→                          disabled={!!tool}
+   588→                          onClick={() => onSettleDeferred(o)}
+   589→                          title={t('pos.deferredSettleHint')}
+   590→                          className="flex h-11 shrink-0 items-center gap-2 rounded-full border border-violet-300 bg-violet-50 px-4 text-violet-900 shadow-sm transition hover:ring-2 hover:ring-violet-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+   591→                        >
+   592→                          <Hourglass className="size-4 text-violet-500" aria-hidden />
+   593→                          <span className="text-sm font-semibold">#{o.id}</span>
+   594→                          <span className="max-w-[110px] truncate text-sm">{o.clientName}</span>
+   595→                          {o.table?.name && (
+   596→                            <span className="text-xs text-violet-700/70">{o.table.name}</span>
+   597→                          )}
+   598→                          <span className="text-sm font-bold tabular-nums text-violet-700">
+   599→                            {formatCurrency(o.remainingAmount)}
+   600→                          </span>
+   601→                          <span className="rounded-full border border-violet-300 bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-600">
+   602→                            {t('pos.deferredChip')}
+   603→                          </span>
+   604→                        </button>
+   605→                      ))}
+   606→                    </div>
+   607→                  </section>
+   608→                )}
+   609→              </div>
+   610→            )}
+   611→
+   612→            {/* Entrance marker — centered on the panel's bottom border */}
+   613→            <div className="absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 shadow-sm">
+   614→              <DoorOpen className="size-3.5 text-stone-400" aria-hidden />
+   615→              <span className="whitespace-nowrap text-[11px] font-medium text-stone-400">
+   616→                {t('admin.hallEntrance')}
+   617→              </span>
+   618→            </div>
+   619→          </div>
+   620→        </div>
+   621→      </div>
+   622→
+   623→      {/* ── Paid/deferred tap-to-clear confirmation ── */}
+   624→      <AlertDialog
+   625→        open={clearTarget != null}
+   626→        onOpenChange={(o) => {
+   627→          if (!o && !clearTableMutation.isPending) setClearTarget(null)
+   628→        }}
+   629→      >
+   630→        <AlertDialogContent>
+   631→          <AlertDialogHeader>
+   632→            <AlertDialogTitle>
+   633→              {t('pos.clearTableTitle', { table: clearTarget?.name ?? '' })}
+   634→            </AlertDialogTitle>
+   635→            <AlertDialogDescription>
+   636→              {clearTarget?.status === 'paid'
+   637→                ? t('pos.clearTablePaidDesc')
+   638→                : t('pos.clearTableDeferredDesc', {
+   639→                    client: clearTarget?.deferredClientName ?? '—',
+   640→                  })}
+   641→            </AlertDialogDescription>
+   642→          </AlertDialogHeader>
+   643→          <AlertDialogFooter>
+   644→            <AlertDialogCancel disabled={clearTableMutation.isPending}>
+   645→              {t('common.cancel')}
+   646→            </AlertDialogCancel>
+   647→            <AlertDialogAction
+   648→              className="bg-emerald-600 text-white hover:bg-emerald-700"
+   649→              disabled={clearTableMutation.isPending}
+   650→              onClick={(e) => {
+   651→                e.preventDefault()
+   652→                if (clearTarget) {
+   653→                  clearTableMutation.mutate({ id: clearTarget.id, name: clearTarget.name })
+   654→                }
+   655→              }}
+   656→            >
+   657→              {clearTableMutation.isPending && <Loader2 className="size-4 animate-spin" />}{' '}
+   658→              {t('pos.markFree')}
+   659→            </AlertDialogAction>
+   660→          </AlertDialogFooter>
+   661→        </AlertDialogContent>
+   662→      </AlertDialog>
+   663→    </div>
+   664→  )
+   665→}
+   666→
+   667→function TableTile({
+   668→  table,
+   669→  interaction,
+   670→  selected,
+   671→  onClick,
+   672→}: {
+   673→  table: RestaurantTable
+   674→  interaction: TableInteraction
+   675→  /** Seat Party: this free table is part of the current selection. */
+   676→  selected?: boolean
+   677→  onClick: () => void
+   678→}) {
+   679→  const { t } = useI18n()
+   680→  const occupied = table.status === 'occupied' || table.openOrderId != null
+   681→  const reserved = table.status === 'reserved' && table.openOrderId == null
+   682→  // Round5: bill settled (awaiting cleanup) / deferred check (client left).
+   683→  const paid = table.status === 'paid' && table.openOrderId == null
+   684→  const deferred = table.status === 'deferred' && table.openOrderId == null
+   685→  // Round/oval silhouettes get extra horizontal padding so the centered
+   686→  // content stays inside the circle (overflow-hidden + truncation clip it).
+   687→  const isRound = table.shape === 'round' || table.shape === 'oval'
+   688→  // Corner badges: on circles the top corner is clipped by the silhouette,
+   689→  // so they sit at the top-center edge instead.
+   690→  const cornerBadgePos = isRound ? 'left-1/2 top-1 -translate-x-1/2' : 'end-1 top-1'
+   691→
+   692→  // Odoo duration "heat": occupied tables tint by how long guests are seated.
+   693→  const mins =
+   694→    occupied && table.openOrderSince
+   695→      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+   696→      : 0
+   697→
+   698→  const heat = occupied
+   699→    ? mins < 15
+   700→      ? {
+   701→          tile: 'border-emerald-200 bg-emerald-50',
+   702→          text: 'text-emerald-900',
+   703→          amount: 'text-emerald-700',
+   704→          meta: 'text-emerald-600',
+   705→        }
+   706→      : mins < 45
+   707→        ? {
+   708→            tile: 'border-amber-200 bg-amber-50',
+   709→            text: 'text-amber-900',
+   710→            amount: 'text-amber-700',
+   711→            meta: 'text-amber-600',
+   712→          }
+   713→        : mins < 90
+   714→          ? {
+   715→              tile: 'border-orange-300 bg-orange-100',
+   716→              text: 'text-orange-900',
+   717→              amount: 'text-orange-700',
+   718→              meta: 'text-orange-600',
+   719→            }
+   720→          : {
+   721→              tile: 'border-rose-300 bg-rose-100',
+   722→              text: 'text-rose-900',
+   723→              amount: 'text-rose-700',
+   724→              meta: 'text-rose-600',
+   725→            }
+   726→    : null
+   727→
+   728→  return (
+   729→    <button
+   730→      type="button"
+   731→      disabled={interaction === 'ineligible'}
+   732→      onClick={onClick}
+   733→      className={cn(
+   734→        'relative flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden border p-3 text-center shadow-sm transition hover:shadow-md active:scale-[0.97]',
+   735→        shapeClasses(table.shape),
+   736→        isRound && 'px-4',
+   737→        occupied && heat
+   738→          ? cn(heat.tile, heat.text)
+   739→          : paid
+   740→            ? 'border-emerald-600 bg-emerald-600 text-white'
+   741→            : deferred
+   742→              ? 'border-violet-400 bg-violet-100 text-violet-900 ring-1 ring-violet-400'
+   743→              : reserved
+   744→                ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
+   745→                : 'border-[#E2E2E0] bg-white text-stone-500',
+   746→        interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   747→        interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   748→        selected && 'ring-2 ring-violet-600 ring-offset-1',
+   749→      )}
+   750→    >
+   751→      {/* FREE — clean white tile with capacity */}
+   752→      {!occupied && !reserved && !paid && !deferred && (
+   753→        <>
+   754→          <p className="max-w-full truncate text-base font-bold leading-tight text-stone-500">
+   755→            {table.name}
+   756→          </p>
+   757→          <p className="flex items-center gap-1 text-xs text-stone-400">
+   758→            <Users className="size-3.5" aria-hidden />
+   759→            {table.capacity} {t('common.seats')}
+   760→          </p>
+   761→        </>
+   762→      )}
+   763→
+   764→      {/* OCCUPIED — duration "heat" tint, amount + guests + elapsed */}
+   765→      {occupied && (
+   766→        <>
+   767→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   768→          <p className={cn('text-lg font-extrabold tabular-nums leading-none', heat?.amount)}>
+   769→            {formatCurrency(table.openOrderTotal ?? 0)}
+   770→          </p>
+   771→          <p className={cn('flex items-center justify-center gap-1.5 text-[11px]', heat?.meta)}>
+   772→            <Users className="size-3.5" aria-hidden />
+   773→            {table.openOrderGuests ?? '—'}
+   774→            <span aria-hidden>·</span>
+   775→            <Clock className="size-3" aria-hidden />
+   776→            {table.openOrderSince ? elapsedSince(table.openOrderSince) : t('pos.open')}
+   777→          </p>
+   778→        </>
+   779→      )}
+   780→
+   781→      {/* RESERVED — amber outline ring + badge */}
+   782→      {reserved && (
+   783→        <>
+   784→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   785→          <p className="flex items-center gap-1 text-xs text-amber-600">
+   786→            <Users className="size-3.5" aria-hidden />
+   787→            {table.capacity} {t('common.seats')}
+   788→          </p>
+   789→          <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-600">
+   790→            <Clock className="size-3" aria-hidden />
+   791→            {t('status.table.reserved')}
+   792→          </span>
+   793→        </>
+   794→      )}
+   795→
+   796→      {/* PAID — solid emerald, tap to clear */}
+   797→      {paid && (
+   798→        <>
+   799→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   800→          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white ring-1 ring-white/30">
+   801→            <BadgeCheck className="size-3.5" aria-hidden />
+   802→            {t('pos.tablePaidBadge')}
+   803→          </span>
+   804→          <p className="max-w-full truncate text-[10px] leading-tight text-white/80">
+   805→            {t('pos.paidHint')}
+   806→          </p>
+   807→        </>
+   808→      )}
+   809→
+   810→      {/* DEFERRED — violet, client name, tap to clear */}
+   811→      {deferred && (
+   812→        <>
+   813→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   814→          <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+   815→            <Hourglass className="size-3" aria-hidden />
+   816→            {t('pos.tableDeferredBadge')}
+   817→          </span>
+   818→          <p className="max-w-full truncate text-xs font-semibold leading-tight">
+   819→            {table.deferredClientName ?? '—'}
+   820→          </p>
+   821→          <p className="max-w-full truncate text-[10px] leading-tight text-violet-700/80">
+   822→            {t('pos.deferredHint', { client: table.deferredClientName ?? '—' })}
+   823→          </p>
+   824→        </>
+   825→      )}
+   826→
+   827→      {/* MERGED — multi-table seating link badge (occupied tiles) */}
+   828→      {occupied && table.openOrderMerged && (
+   829→        <span
+   830→          className={cn(
+   831→            'absolute inline-flex items-center gap-0.5 rounded-full bg-black/10 px-1.5 py-0.5 text-[9px] font-bold uppercase',
+   832→            cornerBadgePos,
+   833→          )}
+   834→        >
+   835→          <Combine className="size-2.5" aria-hidden />
+   836→          {t('pos.mergedBadge')}
+   837→        </span>
+   838→      )}
+   839→
+   840→      {/* SEAT PARTY — selection check */}
+   841→      {selected && (
+   842→        <span
+   843→          className={cn(
+   844→            'absolute flex size-5 items-center justify-center rounded-full bg-violet-600 text-white shadow-sm',
+   845→            cornerBadgePos,
+   846→          )}
+   847→        >
+   848→          <Check className="size-3.5" aria-hidden />
+   849→        </span>
+   850→      )}
+   851→    </button>
+   852→  )
+   853→}
+   854→

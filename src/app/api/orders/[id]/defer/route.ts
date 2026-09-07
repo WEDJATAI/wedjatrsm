@@ -4,13 +4,14 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { deferOrder, parseId, serializeOrder } from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 
@@ -23,7 +24,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     const updated = await deferOrder(orderId, clientName)
-    return NextResponse.json({ order: serializeOrder(updated) })
+    const serialized = serializeOrder(updated)
+
+    await logAudit({
+      user,
+      action: 'order.defer',
+      entity: 'order',
+      entityId: orderId,
+      details: `Check #${orderId} deferred for ${clientName} — EGP ${serialized.remainingAmount.toFixed(
+        2,
+      )} remaining`,
+    })
+
+    return NextResponse.json({ order: serialized })
   } catch (err) {
     return errorResponse(err)
   }

@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import {
   closeOrderIfFullyPaid,
   findOpenOrderOnTable,
@@ -17,7 +18,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const targetId = parseId(id, 'order id')
 
@@ -102,7 +103,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     await closeOrderIfFullyPaid(targetId)
 
     const fresh = await getOrderOr404(targetId)
-    return NextResponse.json({ order: serializeOrder(fresh) })
+    const serialized = serializeOrder(fresh)
+
+    await logAudit({
+      user,
+      action: 'order.merge',
+      entity: 'order',
+      entityId: targetId,
+      details: `Merged order #${source.id} into order #${targetId} — new total EGP ${serialized.totalAmount.toFixed(
+        2,
+      )}`,
+    })
+
+    return NextResponse.json({ order: serialized })
   } catch (err) {
     return errorResponse(err)
   }

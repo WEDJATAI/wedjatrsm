@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { ROLES } from '@/lib/constants'
 
 // Never expose passwordHash in responses.
@@ -115,7 +116,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'users'])
+    // `session` = the acting admin; `user` below = the created row (audit
+    // logs the ACTOR; the target user's name/email go into the details)
+    const session = await requireAuth(req, ['admin', 'users'])
     const body = await readBody(req)
 
     const name = typeof body.name === 'string' ? body.name.trim() : ''
@@ -143,7 +146,21 @@ export async function POST(req: NextRequest) {
         data: { name, email, passwordHash, role, pin, roleId },
         select: USER_SAFE_SELECT,
       })
-      return NextResponse.json({ user: serializeUser(user) })
+      const serialized = serializeUser(user)
+
+      await logAudit({
+        user: session,
+        action: 'user.create',
+        entity: 'user',
+        entityId: serialized.id,
+        details: `Created user ${serialized.name} (${serialized.email}) — role ${
+          serialized.role === 'custom'
+            ? `custom (${serialized.roleName ?? '?'})`
+            : serialized.role
+        }`,
+      })
+
+      return NextResponse.json({ user: serialized })
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

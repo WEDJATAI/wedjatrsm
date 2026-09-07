@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { MAX_SEATING_TABLES } from '@/lib/constants'
 import {
   ORDER_INCLUDE,
@@ -140,6 +141,22 @@ export async function POST(req: NextRequest) {
 
     // Persist subtotal/tax/total from the created items
     const order = await recomputeTotals(created.id)
+
+    await logAudit({
+      user: session,
+      action: 'order.create',
+      entity: 'order',
+      entityId: order.id,
+      details:
+        `EGP ${order.totalAmount.toFixed(2)} — ${
+          tables.length > 1
+            ? `Tables ${tables.map((t) => t.name).join(' + ')} (merged seating)`
+            : table
+              ? `Table ${table.name}`
+              : 'takeaway'
+        }, ${order.items.length} item(s), ${guests} guest(s)`,
+    })
+
     return NextResponse.json({ order })
   } catch (err) {
     return errorResponse(err)

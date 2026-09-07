@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { COURSES, DELETE_PIN_KEY } from '@/lib/constants'
 import {
   checkStockAvailability,
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 
@@ -83,7 +84,28 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         if (!pinRow || pinRow.value !== body.removePin) {
           throw new ApiError('Wrong PIN — item removal denied', 403)
         }
-        await db.orderItem.deleteMany({ where: { id: { in: ids }, orderId } })
+        // snapshot the doomed lines first so the audit row can name them
+        // (read-only — the delete below is the existing behavior)
+        const doomed = await db.orderItem.findMany({
+          where: { id: { in: ids }, orderId },
+          select: {
+            id: true,
+            quantity: true,
+            product: { select: { name: true } },
+          },
+        })
+        const removed = await db.orderItem.deleteMany({ where: { id: { in: ids }, orderId } })
+        if (removed.count > 0) {
+          await logAudit({
+            user,
+            action: 'order.itemDelete',
+            entity: 'order',
+            entityId: orderId,
+            details: `${doomed
+              .map((item) => `${item.quantity}× ${item.product?.name ?? `item ${item.id}`}`)
+              .join(', ')} removed from order #${orderId} (PIN verified)`,
+          })
+        }
       }
     }
 

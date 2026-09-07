@@ -3,12 +3,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import {
   ORDER_INCLUDE,
   freeTableIfUnused,
   getOrderOr404,
   orderTableIds,
   parseId,
+  round2,
   serializeOrder,
   sessionUserId,
 } from '@/lib/orders'
@@ -43,6 +45,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     for (const tableId of orderTableIds(order)) {
       await freeTableIfUnused(tableId, orderId)
     }
+
+    await logAudit({
+      user: session,
+      action: 'order.cancel',
+      entity: 'order',
+      entityId: orderId,
+      details: `Cancelled order #${orderId} (EGP ${round2(order.totalAmount).toFixed(2)}${
+        order.table ? `, table ${order.table.name}` : ', takeaway'
+      })`,
+    })
 
     return NextResponse.json({ order: serializeOrder(updated) })
   } catch (err) {

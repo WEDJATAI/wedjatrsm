@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { PERMISSIONS } from '@/lib/constants'
 
 // Roles are soft-deleted (active=false). Users keep their roleName but lose
@@ -52,7 +53,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAuth(req, ['admin', 'roles'])
+    const user = await requireAuth(req, ['admin', 'roles'])
     const { id } = await params
     const roleId = parseIdParam(id)
 
@@ -87,6 +88,23 @@ export async function PUT(
         data,
         include: { _count: { select: { users: true } } },
       })
+
+      // Audit — deactivating a role is this app's soft delete → 'role.delete'.
+      const changedKeys: string[] = []
+      if (data.name !== undefined) changedKeys.push('name')
+      if (data.permissions !== undefined) changedKeys.push('permissions')
+      if (data.active !== undefined) changedKeys.push('active')
+      const softDeleted = body.active === false
+      await logAudit({
+        user,
+        action: softDeleted ? 'role.delete' : 'role.update',
+        entity: 'role',
+        entityId: roleId,
+        details: `${softDeleted ? 'Deactivated' : 'Updated'} role ${role.name}${
+          changedKeys.length > 0 ? ` — keys: ${changedKeys.join(', ')}` : ''
+        }`,
+      })
+
       return NextResponse.json({
         role: {
           id: role.id,

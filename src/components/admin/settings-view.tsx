@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import {
   CalendarClock,
   Clock,
+  DatabaseBackup,
   Info,
   Loader2,
   MoonStar,
@@ -17,7 +18,8 @@ import {
 } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
-import type { AppSettings, Shift } from '@/lib/types'
+import { formatTime } from '@/lib/format'
+import type { AppSettings, BackupInfo, Shift } from '@/lib/types'
 import { useAppSettings, updateAppSettings } from '@/lib/use-settings'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -106,7 +108,10 @@ export default function SettingsView() {
       {/* Card 2 — security (item-deletion PIN) */}
       <SecurityCard />
 
-      {/* Card 3 — shifts */}
+      {/* Card 3 — data & backups (one-click SQLite snapshot) */}
+      <BackupCard />
+
+      {/* Card 4 — shifts */}
       <ShiftsCard />
     </div>
   )
@@ -255,6 +260,165 @@ function SecurityCard() {
             )}
             {t('common.save')}
           </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Data & backups card (one-click SQLite snapshot) ────────────────
+
+/** Human-readable file size: B below 1 KB, then KB / MB with one decimal. */
+function formatBackupSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function BackupCard() {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  // Shown when the API answers 501 (remote database — no local file to copy).
+  const [unavailable, setUnavailable] = useState(false)
+
+  const backupsQuery = useQuery({
+    queryKey: ['backups'],
+    queryFn: () => fetcher<{ backups: BackupInfo[] }>('/api/admin/backup'),
+    refetchInterval: 15000,
+  })
+
+  const backupMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ backup: BackupInfo }>('/api/admin/backup', { method: 'POST' }),
+    onSuccess: (data) => {
+      setUnavailable(false)
+      toast.success(t('admin.backupDone', { name: data.backup.name }))
+      void queryClient.invalidateQueries({ queryKey: ['backups'] })
+    },
+    onError: (err: Error) => {
+      if (/unavailable/i.test(err.message)) {
+        // 501 — remote-database deployment: friendly amber note, no red toast.
+        setUnavailable(true)
+        toast(err.message)
+      } else {
+        toast.error(err.message)
+      }
+    },
+  })
+
+  const backups = backupsQuery.data?.backups ?? []
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <DatabaseBackup className="size-5 text-primary" aria-hidden />
+          {t('admin.backupTitle')}
+        </CardTitle>
+        <CardDescription>{t('admin.backupSubtitle')}</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            className="h-11"
+            disabled={backupMutation.isPending}
+            onClick={() => backupMutation.mutate()}
+          >
+            {backupMutation.isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <DatabaseBackup className="size-4" />
+            )}
+            {backupMutation.isPending ? t('admin.backupBackingUp') : t('admin.backupNow')}
+          </Button>
+        </div>
+
+        {unavailable ? (
+          <p
+            className="flex items-start gap-2 rounded-lg border border-amber-600/40 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400"
+            role="note"
+          >
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>{t('admin.backupUnavailable')}</span>
+          </p>
+        ) : null}
+
+        <div className="grid gap-2">
+          <p className="text-sm font-medium">{t('admin.backupListTitle')}</p>
+          {backupsQuery.isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }, (_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
+          ) : backupsQuery.isError ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+              <TriangleAlert className="size-10 text-destructive" aria-hidden />
+              <div>
+                <p className="font-medium">{t('admin.backupLoadFailed')}</p>
+                <p className="text-muted-foreground text-sm">
+                  {backupsQuery.error?.message ?? t('common.error')}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="h-11"
+                onClick={() => void backupsQuery.refetch()}
+              >
+                {t('common.retry')}
+              </Button>
+            </div>
+          ) : backups.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-8 text-center">
+              <DatabaseBackup className="size-10 text-muted-foreground/40" aria-hidden />
+              <p className="font-medium">{t('admin.backupEmpty')}</p>
+            </div>
+          ) : (
+            <div className="rms-scroll max-h-64 overflow-y-auto rounded-lg border">
+              <table className="w-full">
+                <thead className="sticky top-0 z-10 bg-muted">
+                  <tr>
+                    <th
+                      scope="col"
+                      className="p-2.5 text-start text-xs font-medium text-muted-foreground"
+                    >
+                      {t('admin.backupName')}
+                    </th>
+                    <th
+                      scope="col"
+                      className="w-20 p-2.5 text-end text-xs font-medium text-muted-foreground"
+                    >
+                      {t('admin.backupSize')}
+                    </th>
+                    <th
+                      scope="col"
+                      className="w-16 p-2.5 text-end text-xs font-medium text-muted-foreground"
+                    >
+                      {t('admin.backupCreated')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {backups.map((backup, i) => (
+                    <tr
+                      key={backup.name}
+                      className={cn(i === 0 && 'bg-amber-50/50 dark:bg-amber-500/5')}
+                    >
+                      <td className="max-w-0 truncate p-2.5 font-mono text-xs">
+                        {backup.name}
+                      </td>
+                      <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
+                        {formatBackupSize(backup.sizeBytes)}
+                      </td>
+                      <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
+                        {formatTime(backup.createdAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { ROLES } from '@/lib/constants'
 
 // Never expose passwordHash in responses.
@@ -187,7 +188,30 @@ export async function PUT(
       data,
       select: USER_SAFE_SELECT,
     })
-    return NextResponse.json({ user: serializeUser(user) })
+    const serialized = serializeUser(user)
+
+    // Audit — the actor's session + the TARGET user's name/email in the
+    // details (never the password hash; 'password' only as a key name).
+    // Deactivating a user is this app's soft delete → 'user.delete'.
+    const changedKeys: string[] = []
+    if (data.name !== undefined) changedKeys.push('name')
+    if (data.role !== undefined) changedKeys.push('role')
+    if (data.pin !== undefined) changedKeys.push('pin')
+    if (data.passwordHash !== undefined) changedKeys.push('password')
+    if (data.active !== undefined) changedKeys.push('active')
+    if (data.roleId !== undefined) changedKeys.push('roleId')
+    const softDeleted = body.active === false
+    await logAudit({
+      user: session,
+      action: softDeleted ? 'user.delete' : 'user.update',
+      entity: 'user',
+      entityId: userId,
+      details: `${softDeleted ? 'Deactivated' : 'Updated'} user ${serialized.name} (${serialized.email})${
+        changedKeys.length > 0 ? ` — keys: ${changedKeys.join(', ')}` : ''
+      }`,
+    })
+
+    return NextResponse.json({ user: serialized })
   } catch (err) {
     return errorResponse(err)
   }

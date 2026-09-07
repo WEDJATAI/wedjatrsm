@@ -12,6 +12,7 @@ import {
   LogOut,
   Map,
   Package,
+  ScrollText,
   Settings,
   Settings2,
   ShieldCheck,
@@ -58,6 +59,7 @@ const ADMIN_MENU: NavItem[] = [
   { view: 'users', permission: 'users', icon: Users },
   { view: 'roles', permission: 'roles', icon: ShieldCheck },
   { view: 'attendance', permission: 'attendance', icon: CalendarCheck },
+  { view: 'activity', permission: 'audit', icon: ScrollText },
   { view: 'settings', permission: 'settings', icon: Settings },
 ]
 

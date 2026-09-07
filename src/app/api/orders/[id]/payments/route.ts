@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import { MONEY_EPSILON, PAYMENT_METHODS } from '@/lib/constants'
 import {
   closeOrderIfFullyPaid,
@@ -16,7 +17,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
-    await requireAuth(req, ['waiter', 'admin', 'pos'])
+    const user = await requireAuth(req, ['waiter', 'admin', 'pos'])
     const { id } = await ctx.params
     const orderId = parseId(id, 'order id')
 
@@ -64,6 +65,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       )
     }
 
+    // Snapshot: was this check deferred BEFORE these payments? (a deferred
+    // check that this payment fully settles gets its own audit entry)
+    const wasDeferred = order.status === 'deferred'
+
     await db.payment.createMany({
       data: rows.map((p) => ({
         orderId,
@@ -74,6 +79,27 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     })
 
     const { closed } = await closeOrderIfFullyPaid(orderId)
+
+    await logAudit({
+      user,
+      action: 'order.payment',
+      entity: 'order',
+      entityId: orderId,
+      details: `EGP ${round2(rows.reduce((sum, p) => sum + p.amount, 0)).toFixed(2)} (${rows
+        .map((p) => `${p.method} ${round2(p.amount).toFixed(2)}`)
+        .join(', ')}) on order #${orderId}${closed ? ' — closed' : ''}`,
+    })
+    if (wasDeferred && closed) {
+      await logAudit({
+        user,
+        action: 'order.deferSettle',
+        entity: 'order',
+        entityId: orderId,
+        details: `Deferred check #${orderId} (client ${order.clientName ?? '—'}) settled — EGP ${round2(
+          rows.reduce((sum, p) => sum + p.amount, 0),
+        ).toFixed(2)} received`,
+      })
+    }
 
     const fresh = await getOrderOr404(orderId)
     const serialized = serializeOrder(fresh)

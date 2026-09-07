@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAuth, errorResponse, ApiError } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
 import type { Product } from '@/lib/types'
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
@@ -46,7 +47,7 @@ function serializeProduct(p: DbProduct): Product & { createdAt: string } {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'inventory'])
+    const user = await requireAuth(req, ['admin', 'inventory'])
 
     let body: unknown
     try {
@@ -104,6 +105,16 @@ export async function POST(req: NextRequest) {
         },
       })
       return saved
+    })
+
+    await logAudit({
+      user,
+      action: 'inventory.adjust',
+      entity: 'inventory',
+      entityId: productId,
+      details: `${product.name} ${quantityChange > 0 ? '+' : ''}${quantityChange} (${reason}${
+        note ? ` — ${note}` : ''
+      }) — stock ${product.stock} → ${newStock}`,
     })
 
     return NextResponse.json({ product: serializeProduct(updated) })

@@ -26,6 +26,7 @@ import ReportsView from '@/components/admin/reports-view'
 import UsersView from '@/components/admin/users-view'
 import RolesView from '@/components/admin/roles-view'
 import AttendanceView from '@/components/admin/attendance-view'
+import ActivityView from '@/components/admin/activity-view'
 import SettingsView from '@/components/admin/settings-view'
 
 type View =
@@ -41,6 +42,7 @@ type View =
   | 'users'
   | 'roles'
   | 'attendance'
+  | 'activity'
   | 'settings'
 
 /** which module permission each view requires */
@@ -57,6 +59,7 @@ const VIEW_PERMISSION: Record<View, string> = {
   users: 'users',
   roles: 'roles',
   attendance: 'attendance',
+  activity: 'audit',
   settings: 'settings',
 }
 
@@ -71,6 +74,7 @@ const ADMIN_VIEWS: View[] = [
   'users',
   'roles',
   'attendance',
+  'activity',
   'settings',
 ]
 
@@ -82,6 +86,7 @@ const VIEW_PRIORITY: View[] = [
   'reports',
   'inventory',
   'attendance',
+  'activity',
   'products',
   'categories',
   'floorplans',
@@ -171,6 +176,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <RolesView />
       case 'attendance':
         return <AttendanceView />
+      case 'activity':
+        return <ActivityView />
       case 'settings':
         return <SettingsView />
       default:

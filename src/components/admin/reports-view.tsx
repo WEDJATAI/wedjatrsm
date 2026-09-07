@@ -5,12 +5,19 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  Ban,
   BarChart3,
   Boxes,
+  CalendarDays,
   CalendarRange,
+  CircleDollarSign,
+  HandCoins,
   Hourglass,
   Info,
+  Percent,
+  Printer,
   Receipt,
+  ReceiptText,
   TrendingUp,
   Users,
   Wallet,
@@ -29,7 +36,7 @@ import {
   YAxis,
 } from 'recharts'
 import { fetcher } from '@/lib/api'
-import type { InventoryValueReport, SalesReport } from '@/lib/types'
+import type { InventoryValueReport, SalesReport, ZReport } from '@/lib/types'
 import { formatCurrency, formatDate, formatLocale, toDateInputValue } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { Button } from '@/components/ui/button'
@@ -44,6 +51,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { escapeHtml } from '@/components/pos/pos-utils'
+import { useAppSettings } from '@/lib/use-settings'
 
 function daysAgo(n: number): string {
   const d = new Date()
@@ -150,6 +167,341 @@ function ChartCard({
         ) : (
           children
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Z-Report (end-of-day reconciliation) ─────────────────────
+
+function todayLocal(): string {
+  return toDateInputValue(new Date())
+}
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string
+
+/** Build the printable Z-Report paper. Same print mechanism as the POS
+ *  receipt/check modals: thermal monospace, 320px, dashed rules, flex rows. */
+function buildZReportHtml(
+  report: ZReport,
+  t: Translate,
+  restaurantName: string,
+  restaurantNameAr: string,
+): string {
+  const row = (l: string, r: string, cls = '') =>
+    `<div class="r ${cls}"><span>${escapeHtml(l)}</span><span>${escapeHtml(r)}</span></div>`
+  const dashed = '<div class="dashed"></div>'
+  const section = (title: string) => `<p class="sec">${escapeHtml(title)}</p>`
+
+  const lines: string[] = []
+  lines.push(`<h3>${escapeHtml(restaurantName)}</h3>`)
+  lines.push(`<p class="arn" dir="rtl">${escapeHtml(restaurantNameAr)}</p>`)
+  lines.push(`<p>${escapeHtml(t('admin.zreportTitle'))}</p>`)
+  lines.push(dashed)
+  lines.push(row(t('admin.zreportDate'), formatDate(parseDay(report.date))))
+  lines.push(dashed)
+  lines.push(row(t('admin.zreportOrdersClosed'), String(report.ordersClosed)))
+  lines.push(row(t('admin.zreportCovers'), String(report.covers)))
+  lines.push(row(t('admin.zreportGross'), formatCurrency(report.grossSubtotal)))
+  lines.push(row(t('admin.zreportDiscounts'), formatCurrency(report.discounts)))
+  lines.push(row(t('admin.zreportVat'), formatCurrency(report.vat)))
+  lines.push(row(t('admin.zreportService'), formatCurrency(report.serviceTax)))
+  lines.push(row(t('admin.zreportNet'), formatCurrency(report.netTotal), 'bold'))
+  lines.push(row(t('admin.zreportAvgCheck'), formatCurrency(report.avgCheck)))
+  lines.push(row(t('admin.zreportCancelled'), String(report.cancelledCount)))
+  lines.push(dashed)
+  lines.push(section(t('admin.zreportPayments')))
+  for (const m of report.paymentsByMethod) {
+    lines.push(row(`${t(`status.payment.${m.method}`)} (${m.count})`, formatCurrency(m.amount)))
+  }
+  if (report.paymentsByMethod.length === 0) lines.push('<p class="muted">—</p>')
+  lines.push(
+    row(
+      t('admin.zreportPaymentsTotal'),
+      formatCurrency(report.paymentsTotal),
+      'bold',
+    ),
+  )
+  lines.push(dashed)
+  lines.push(row(t('admin.zreportDeferredSettled'), formatCurrency(report.deferredSettled)))
+  lines.push(row(t('admin.zreportDeferredOutstanding'), formatCurrency(report.deferredOutstanding)))
+  lines.push(dashed)
+  lines.push(section(t('admin.zreportByWaiter')))
+  for (const w of report.byWaiter) {
+    lines.push(row(`${w.name} (${w.orders})`, formatCurrency(w.net)))
+  }
+  if (report.byWaiter.length === 0) lines.push('<p class="muted">—</p>')
+  return lines.join('\n')
+}
+
+/** One KPI tile of the Z-Report grid (mirrors the view's KPI card markup). */
+function ZKpi({
+  label,
+  value,
+  icon,
+  emphasized,
+}: {
+  label: string
+  value: string
+  icon: ReactNode
+  emphasized?: boolean
+}) {
+  return (
+    <Card className="gap-2 p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{label}</p>
+        {icon}
+      </div>
+      <p
+        className={`text-2xl font-bold tabular-nums ${emphasized ? 'text-primary' : ''}`}
+      >
+        {value}
+      </p>
+    </Card>
+  )
+}
+
+function ZReportSection() {
+  const { t, lang, isRTL } = useI18n()
+  const { restaurantName, restaurantNameAr } = useAppSettings()
+  // report is fetched manually: draft date in state, submitted date drives the query
+  const [date, setDate] = useState(todayLocal)
+  const [queryDate, setQueryDate] = useState<string | null>(null)
+
+  const zreportQuery = useQuery({
+    queryKey: ['zreport', queryDate],
+    enabled: queryDate != null,
+    queryFn: () => fetcher<{ report: ZReport }>(`/api/reports/zreport?date=${queryDate}`),
+  })
+
+  const report = zreportQuery.data?.report
+  const noData = report != null && report.ordersClosed === 0 && report.paymentsTotal === 0
+  const paymentsCount = (report?.paymentsByMethod ?? []).reduce((sum, m) => sum + m.count, 0)
+
+  function handlePrint() {
+    if (!report) return
+    const html = buildZReportHtml(report, t, restaurantName, restaurantNameAr)
+    const w = window.open('', '_blank', 'width=380,height=760')
+    if (!w) {
+      window.alert(t('pos.receiptPopupBlocked'))
+      return
+    }
+    w.document.write(
+      `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(
+        t('admin.zreportTitle'),
+      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .sec{font-weight:bold;margin:6px 0 2px} .muted{color:#555} .bold{font-weight:bold} .arn{font-weight:bold;direction:rtl;margin:2px 0}</style></head><body>${html}</body></html>`,
+    )
+    w.document.close()
+    w.focus()
+    w.print()
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('admin.zreportTitle')}</CardTitle>
+        <CardDescription>{t('admin.zreportSubtitle')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Controls: date + load + print (print only once loaded) */}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="zreport-date" className="text-xs text-muted-foreground">
+              {t('admin.zreportDate')}
+            </Label>
+            <Input
+              id="zreport-date"
+              type="date"
+              value={date}
+              max={todayLocal()}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-40"
+            />
+          </div>
+          <Button
+            className="h-11"
+            onClick={() => setQueryDate(date)}
+            disabled={zreportQuery.isFetching}
+          >
+            <CalendarDays />
+            {t('admin.zreportLoad')}
+          </Button>
+          {report ? (
+            <Button variant="outline" className="h-11" onClick={handlePrint}>
+              <Printer />
+              {t('admin.zreportPrint')}
+            </Button>
+          ) : null}
+        </div>
+
+        {zreportQuery.isError ? (
+          <div className="flex flex-col items-start gap-3 py-2">
+            <p className="text-sm text-rose-600">
+              {(zreportQuery.error as Error | null)?.message ?? t('admin.zreportLoadFailed')}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void zreportQuery.refetch()}
+            >
+              {t('common.retry')}
+            </Button>
+          </div>
+        ) : zreportQuery.isFetching && !report ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              {Array.from({ length: 8 }, (_, i) => (
+                <Skeleton key={i} className="h-24 rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-40 w-full rounded-xl" />
+          </div>
+        ) : report ? (
+          <div className="space-y-6">
+            {noData ? (
+              <p className="text-sm text-muted-foreground">{t('admin.zreportNoData')}</p>
+            ) : null}
+
+            {/* Day KPIs */}
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              <ZKpi
+                label={t('admin.zreportOrdersClosed')}
+                value={String(report.ordersClosed)}
+                icon={<Receipt className="size-5 text-muted-foreground" />}
+              />
+              <ZKpi
+                label={t('admin.zreportCovers')}
+                value={String(report.covers)}
+                icon={<Users className="size-5 text-primary" />}
+              />
+              <ZKpi
+                label={t('admin.zreportGross')}
+                value={formatCurrency(report.grossSubtotal)}
+                icon={<TrendingUp className="size-5 text-emerald-600" />}
+              />
+              <ZKpi
+                label={t('admin.zreportDiscounts')}
+                value={formatCurrency(report.discounts)}
+                icon={<Percent className="size-5 text-amber-600" />}
+              />
+              <ZKpi
+                label={t('admin.zreportVat')}
+                value={formatCurrency(report.vat)}
+                icon={<ReceiptText className="size-5 text-muted-foreground" />}
+              />
+              <ZKpi
+                label={t('admin.zreportService')}
+                value={formatCurrency(report.serviceTax)}
+                icon={<HandCoins className="size-5 text-muted-foreground" />}
+              />
+              <ZKpi
+                label={t('admin.zreportNet')}
+                value={formatCurrency(report.netTotal)}
+                icon={<CircleDollarSign className="size-5 text-emerald-600" />}
+                emphasized
+              />
+              <ZKpi
+                label={t('admin.zreportAvgCheck')}
+                value={formatCurrency(report.avgCheck)}
+                icon={<Wallet className="size-5 text-amber-600" />}
+              />
+              <ZKpi
+                label={t('admin.zreportCancelled')}
+                value={String(report.cancelledCount)}
+                icon={<Ban className="size-5 text-rose-600" />}
+              />
+            </div>
+
+            {/* Payments by method + deferred chips · Sales by waiter */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="gap-2 p-4">
+                <p className="text-sm font-semibold">{t('admin.zreportPayments')}</p>
+                {report.paymentsByMethod.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">—</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t('admin.zreportMethod')}</TableHead>
+                        <TableHead className="text-end">{t('admin.zreportCount')}</TableHead>
+                        <TableHead className="text-end">{t('money.total')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {report.paymentsByMethod.map((m) => (
+                        <TableRow key={m.method}>
+                          <TableCell className="font-medium">
+                            {t(`status.payment.${m.method}`)}
+                          </TableCell>
+                          <TableCell className="text-end tabular-nums">{m.count}</TableCell>
+                          <TableCell className="text-end tabular-nums">
+                            {formatCurrency(m.amount)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="bg-muted/50 font-semibold">
+                        <TableCell>{t('admin.zreportPaymentsTotal')}</TableCell>
+                        <TableCell className="text-end tabular-nums">{paymentsCount}</TableCell>
+                        <TableCell className="text-end tabular-nums">
+                          {formatCurrency(report.paymentsTotal)}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                )}
+                {/* Deferred (pay-later) reconciliation chips */}
+                <div className="flex flex-wrap gap-3 border-t pt-4">
+                  <div className="flex items-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-3 py-2 text-violet-900">
+                    <Hourglass className="size-4 shrink-0 text-violet-500" aria-hidden />
+                    <div>
+                      <p className="text-xs font-medium">{t('admin.zreportDeferredSettled')}</p>
+                      <p className="text-sm font-bold tabular-nums">
+                        {formatCurrency(report.deferredSettled)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-3 py-2 text-violet-900">
+                    <Hourglass className="size-4 shrink-0 text-violet-500" aria-hidden />
+                    <div>
+                      <p className="text-xs font-medium">{t('admin.zreportDeferredOutstanding')}</p>
+                      <p className="text-sm font-bold tabular-nums">
+                        {formatCurrency(report.deferredOutstanding)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="gap-2 p-4">
+                <p className="text-sm font-semibold">{t('admin.zreportByWaiter')}</p>
+                {report.byWaiter.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">—</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t('common.name')}</TableHead>
+                        <TableHead className="text-end">{t('admin.zreportWaiterOrders')}</TableHead>
+                        <TableHead className="text-end">{t('money.revenue')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {report.byWaiter.map((w) => (
+                        <TableRow key={w.userId ?? `user-${w.name}`}>
+                          <TableCell className="font-medium">{w.name}</TableCell>
+                          <TableCell className="text-end tabular-nums">{w.orders}</TableCell>
+                          <TableCell className="text-end tabular-nums">
+                            {formatCurrency(w.net)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </Card>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )
@@ -633,6 +985,9 @@ export default function ReportsView() {
           </>
         )}
       </div>
+
+      {/* Z-Report — end-of-day cash reconciliation (manual date + print) */}
+      <ZReportSection />
     </div>
   )
 }
