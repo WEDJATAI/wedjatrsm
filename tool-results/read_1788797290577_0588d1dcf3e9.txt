@@ -1,183 +1,3 @@
-     1→# RMS — Restaurant Management System — Worklog
-     2→
-     3→Single-page app on `/` (src/app/page.tsx) with client-side view switching.
-     4→Stack: Next.js 16 App Router + TS, Tailwind 4 + shadcn/ui, Prisma + SQLite, TanStack Query (polling), JWT auth (jose) in httpOnly cookie `rms_session`, bcryptjs passwords.
-     5→
-     6→## Global conventions (ALL agents MUST follow)
-     7→
-     8→- **Currency/time**: use `@/lib/format` (formatCurrency EGP, formatTime, elapsedSince…).
-     9→- **Constants**: `@/lib/constants` (TAX_RATE=0.14, COURSES, PAYMENT_METHODS, ITEM_STATUSES, TABLE_STATUSES, INVENTORY_REASONS, RESTAURANT_NAME='Saffron Table', ROLE_LABELS).
-    10→- **Types**: `@/lib/types` (Product, Order, OrderItem, Payment, RestaurantTable, FloorPlan, Category, SessionUser, RecipeComponent, InventoryItem, InventoryTransaction, SalesReport…).
-    11→- **Server**: `import { db } from '@/lib/db'`; auth guard: `requireAuth(req, roles?)`, errors: `errorResponse(err)` / `throw new ApiError(msg, status)` from `@/lib/auth`.
-    12→- **Client data fetching**: TanStack Query. Fetcher: `fetcher` / mutation helper `apiFetch` from `@/lib/api`. Error messages come as `{ error: string }` JSON — show via `sonner` toast.
-    13→- **Next.js 16 specifics**: route handler `params` is a Promise → `const { id } = await params`; `cookies()` from `next/headers` is async.
-    14→- **UI rules**: shadcn/ui components from `@/components/ui`; warm amber/stone theme via CSS vars (bg-primary etc. already themed); NO blue/indigo accents; responsive (tablet-first for POS/KDS: big touch targets ≥ 44px); long lists `max-h-… overflow-y-auto rms-scroll`; cards `p-4`/`p-6`; toasts via `sonner`.
-    15→- **Do NOT**: create pages/routes other than API routes under `src/app/api/**`; do NOT touch `src/app/page.tsx` (owner: main agent); do NOT modify `prisma/schema.prisma`; do NOT install packages; do NOT write tests.
-    16→- Money is stored as Float; compare with tolerance `MONEY_EPSILON = 0.02`.
-    17→
-    18→## Database (Task 0 — DONE, pushed + seeded)
-    19→
-    20→Models: User(email,passwordHash,name,role[admin|waiter|kitchen],pin,active) · Category(name,displayOrder,active) · Product(name,categoryId,price,cost,isStockable,isSellable,sku,imageUrl,active,lowStockThreshold,stock) · FloorPlan(name,active) · RestaurantTable(floorPlanId,name,capacity,positionX[%],positionY[%],status[free|occupied|reserved],active) · Order(tableId?,userId,status[open|paid|cancelled],subtotalAmount,totalAmount,discountAmount,taxAmount,createdAt,closedAt) · OrderItem(orderId,productId,quantity,unitPrice,notes,course[starter|main|dessert|drink],status[new|preparing|ready|served]) · Payment(orderId,method[cash|card|other],amount,reference) · RecipeComponent(productId(dish),ingredientId,quantity, unique[productId,ingredientId]) · InventoryTransaction(productId,quantityChange,reason[sale|purchase|adjustment|waste],orderId).
-    21→
-    22→Seeded: users (admin@rms.com/admin123 PIN 1234 · waiter@rms.com/waiter123 PIN 1111 · kitchen@rms.com/kitchen123 PIN 2222), 5 categories, 18 sellable dishes, 18 ingredients w/ stock, 35 recipe components, 2 floor plans (Main Hall 9 tables, Terrace 3 tables), ~35 paid historical orders over 7 days.
-    23→
-    24→## Order money model
-    25→
-    26→- subtotal = Σ(item.quantity × unitPrice)
-    27→- discount (absolute EGP, 0 ≤ discount ≤ subtotal)
-    28→- tax = (subtotal − discount) × TAX_RATE
-    29→- total = subtotal − discount + tax
-    30→- paidAmount = Σ payments; remaining = total − paidAmount
-    31→- Order auto-closes (status='paid', closedAt, inventory deducted, table freed) when paidAmount ≥ total − 0.02.
-    32→
-    33→## API contracts (response shapes are BINDING)
-    34→
-    35→All endpoints return JSON; errors: `{ "error": string }` with 4xx/5xx. Auth via httpOnly cookie (login sets it). Role gates noted per endpoint.
-    36→
-    37→### Auth
-    38→- `POST /api/auth/login` body `{ email?, password?, pin? }` (pin OR email+password) → `{ user: SessionUser }` + sets cookie. 401 on bad creds.
-    39→- `POST /api/auth/logout` → `{ ok: true }`
-    40→- `GET /api/auth/me` → `{ user: SessionUser }` or 401.
-    41→
-    42→### Users (admin)
-    43→- `GET /api/users` → `{ users: (SessionUser & {active:boolean; pin:string|null; createdAt:string})[] }` (no passwordHash)
-    44→- `POST /api/users` `{ name,email,password,role,pin? }` → `{ user }`
-    45→- `PUT /api/users/[id]` `{ name?,role?,pin?,active?,password? }` → `{ user }`
-    46→
-    47→### Categories (read: any authed; write: admin)
-    48→- `GET /api/categories?all=1` → `{ categories: Category[] }` (default active only; `all=1` includes inactive; each has productCount)
-    49→- `POST /api/categories` `{ name, displayOrder? }` → `{ category }`
-    50→- `PUT /api/categories/[id]` `{ name?, displayOrder?, active? }` → `{ category }`
-    51→- `DELETE /api/categories/[id]` → soft delete (active=false) `{ ok:true }`
-    52→
-    53→### Products (read: any authed; write: admin)
-    54→- `GET /api/products?category=<id>&all=1&sellable=1&stockable=1&search=<q>` → `{ products: Product[] }` (includes `category:{id,name}|null`; default: active only)
-    55→- `POST /api/products` `{ name, categoryId?, price, cost, isStockable?, isSellable?, sku?, imageUrl?, lowStockThreshold?, stock? }` → `{ product }` (initial stock ⇒ 'purchase' inventory transaction if stockable)
-    56→- `PUT /api/products/[id]` same fields (stock only via inventory adjust; price/cost updates allowed) → `{ product }`
-    57→- `DELETE /api/products/[id]` soft delete → `{ ok:true }`
-    58→
-    59→### Floor plans & tables
-    60→- `GET /api/floorplans` → `{ floorPlans: FloorPlan[] }` (each with tables incl. polling extras: openOrderId, openOrderTotal, openOrderItemCount, openOrderSince)
-    61→- `POST /api/floorplans` `{ name }` (admin) → `{ floorPlan }`
-    62→- `PUT /api/floorplans/[id]` `{ name?, active? }` (admin) → `{ floorPlan }`
-    63→- `POST /api/tables` (admin) `{ floorPlanId, name, capacity?, positionX?, positionY? }` → `{ table }`
-    64→- `PUT /api/tables/[id]` `{ name?, capacity?, positionX?, positionY?, status?(free|reserved only), active? }` (admin) → `{ table }`
-    65→- `GET /api/tables/status` (any authed) → `{ tables: RestaurantTable[] }` with polling extras — optimized for POS polling (3s)
-    66→
-    67→### Orders (waiter/admin)
-    68→- `POST /api/orders` `{ tableId?: number|null, items: [{productId, quantity, notes?, course?}] }` → `{ order: Order }` (validates stock; sets table occupied; items status='new')
-    69→- `GET /api/orders?status=open` → `{ orders: Order[] }` (with items, payments, table, paidAmount, remainingAmount; sorted createdAt asc)
-    70→- `GET /api/orders/[id]` → `{ order: Order }`
-    71→- `PUT /api/orders/[id]` `{ addItems?: [{productId,quantity,notes?,course?}], removeItemIds?: number[], updateItems?: [{id,quantity,notes?,course?}], discountAmount?: number }` → `{ order }` (recompute totals; stock validation on addItems; removed items deleted)
-    72→- `POST /api/orders/[id]/payments` (waiter/admin) `{ payments: [{method, amount, reference?}] }` → `{ order, paidAmount, remaining, closed:boolean }` — rejects overpay (sum > remaining + 0.02 → 400). If fully paid → auto close (status paid + closedAt + inventory deduction + table freed) and `closed:true`.
-    73→- `POST /api/orders/[id]/close` (waiter/admin) → only succeeds if remaining ≤ 0.02 → `{ order, closed:true }`; else 400.
-    74→- `POST /api/orders/[id]/cancel` (admin or creating waiter) → `{ order }` (status cancelled, table freed, NO inventory deduction)
-    75→- `PUT /api/order-items/[id]` (kitchen/waiter/admin) `{ status?: 'new'|'preparing'|'ready'|'served', notes?, quantity? }` → `{ item }`
-    76→
-    77→### Inventory (read: waiter/admin; adjust: admin)
-    78→- `GET /api/inventory` → `{ items: InventoryItem[] }` (stockable products: stock, cost, value=cost×stock, isLow)
-    79→- `GET /api/inventory/low-stock` → `{ items: InventoryItem[] }`
-    80→- `GET /api/inventory/transactions?limit=100` → `{ transactions: InventoryTransaction[] }` (with product name, desc by date)
-    81→- `POST /api/inventory/adjust` (admin) `{ productId, quantityChange (±), reason('purchase'|'adjustment'|'waste'), note? }` → `{ product }` (reject stock < 0; updates product.stock + transaction)
-    82→
-    83→### Recipes (admin)
-    84→- `GET /api/recipes?productId=<id>` → `{ components: RecipeComponent[] }` (with ingredient info) — NOTE: productId is a QUERY PARAM (path segment conflict with DELETE [id])
-    85→- `POST /api/recipes` `{ productId, ingredientId, quantity }` → upsert on (productId,ingredientId) → `{ component }`
-    86→- `DELETE /api/recipes/[id]` (id = componentId) → `{ ok: true }`
-    87→
-    88→### Reports (admin)
-    89→- `GET /api/reports/sales?from=YYYY-MM-DD&to=YYYY-MM-DD` (inclusive; to end-of-day) → `SalesReport`: `{ totalRevenue, totalOrders, avgOrderValue, byMethod[], topProducts[](top 8), byCategory[], byDay[], byHour[] }` (paid orders only; revenue = Σ totalAmount; from defaults to 30 days ago, to defaults to today)
-    90→- `GET /api/reports/inventory-value` → `{ totalValue, itemCount, lowStockCount }`
-    91→
-    92→## Frontend component contracts (files + exports are BINDING)
-    93→
-    94→All view components are default exports, self-contained (fetch own data), take no props unless noted. Toasts: `import { toast } from 'sonner'` (main agent mounts the Sonner Toaster in page.tsx).
-    95→
-    96→- `src/components/auth/login-view.tsx` → `LoginView({ onLogin: () => void })` — email/password + PIN quick login.
-    97→- `src/components/app-navbar.tsx` → `AppNavbar({ user: SessionUser, view: string, onNavigate: (view: string) => void, onLogout: () => void })` — top bar, module tabs (role-aware: waiter → POS; kitchen → Kitchen; admin → all incl. Admin dropdown).
-    98→- `src/components/admin/dashboard-view.tsx` → `DashboardView({ onNavigate }: { onNavigate?: (view: string) => void })` — KPIs (today revenue/orders, open orders, low stock), 7-day sales bar chart (recharts), top products, quick links using onNavigate.
-    99→- `src/components/pos/pos-view.tsx` → `PosView()` — table map → order screen → payment (split by equal/items/custom) → receipt.
-   100→- `src/components/kitchen/kitchen-view.tsx` → `KitchenView()` — dark KDS, polls open orders 3s, item status buttons.
-   101→- `src/components/admin/floorplans-view.tsx` → `FloorPlansView()` — floor plan manager with draggable tables.
-   102→- `src/components/admin/products-view.tsx` → `ProductsView()`
-   103→- `src/components/admin/categories-view.tsx` → `CategoriesView()`
-   104→- `src/components/admin/users-view.tsx` → `UsersView()`
-   105→- `src/components/admin/inventory-view.tsx` → `InventoryView()`
-   106→- `src/components/admin/recipes-view.tsx` → `RecipesView()`
-   107→- `src/components/admin/reports-view.tsx` → `ReportsView()`
-   108→
-   109→Main agent owns `src/app/page.tsx`: view state machine (`login` → role default view; views: `pos`, `kitchen`, `dashboard`, `products`, `categories`, `floorplans`, `inventory`, `recipes`, `reports`, `users`) + TanStack `QueryClientProvider` + `Toaster`.
-   110→
-   111→---
-   112→
-   113→---
-   114→Task ID: 0
-   115→Agent: main (Z.ai Code)
-   116→Task: Foundation — deps, Prisma schema, db push, seed, shared libs, theme, worklog/contracts
-   117→
-   118→Work Log:
-   119→- Installed `jose`, `bcryptjs@2.4.3`, `@types/bcryptjs`.
-   120→- Wrote `prisma/schema.prisma` (10 models: User, Category, Product, FloorPlan, RestaurantTable, Order, OrderItem, Payment, RecipeComponent, InventoryTransaction) + indexes; `bun run db:push` OK (SQLite at db/custom.db).
-   121→- Created shared libs: `src/lib/constants.ts` (TAX_RATE 0.14, enums/labels), `src/lib/auth.ts` (JWT sign/verify, bcrypt, SESSION_COOKIE='rms_session', requireAuth, errorResponse, ApiError), `src/lib/types.ts`, `src/lib/api.ts` (fetcher/apiFetch), `src/lib/format.ts` (EGP currency, elapsed time).
-   122→- Theme: warm amber/stone palette in `src/app/globals.css` + `.rms-scroll` scrollbar + number-input spin removal.
-   123→- `.env`: added JWT_SECRET, TAX_RATE.
-   124→- Wrote + ran `prisma/seed.ts`: 3 users, 5 categories, 36 products, 35 recipe components, 2 floor plans, 12 tables, opening stock transactions, ~35 paid orders across 7 days.
-   125→- Wrote this worklog with binding API + component contracts.
-   126→
-   127→Stage Summary:
-   128→- Foundation ready. All 8 agents (1-a/1-b/1-c backend, 2-a..2-e frontend) can start in parallel using the contracts above. Schema is frozen. page.tsx integration is reserved for the main agent (Task 3).
-   129→
-   130→---
-   131→Task ID: 1-c
-   132→Agent: general-purpose (backend inventory/recipes/reports)
-   133→Task: Inventory, recipes and reports API routes (8 endpoints) per binding contracts
-   134→
-   135→Work Log:
-   136→- Created `src/app/api/inventory/route.ts` (GET, waiter/admin): stockable+active products → InventoryItem[] (value=round2(cost×stock), isLow=stock≤threshold), sorted isLow desc then name asc (stable JS sort over Prisma name-asc).
-   137→- Created `src/app/api/inventory/low-stock/route.ts` (GET, waiter/admin): same mapping, JS-filtered to stock ≤ lowStockThreshold (Prisma can't compare column-to-column), name asc.
-   138→- Created `src/app/api/inventory/transactions/route.ts` (GET, waiter/admin): `?limit=` int (400 on non-integer, clamped to 1-500, default 100), include product {id,name}, createdAt desc, Dates → ISO strings.
-   139→- Created `src/app/api/inventory/adjust/route.ts` (POST, admin): validates productId/quantityChange≠0/reason∈{purchase,adjustment,waste} ('sale' rejected 400); product must exist+active+isStockable (400); newStock<0 → 400 `Insufficient stock: cannot reduce below zero (current ${stock})`; $transaction: update stock + create InventoryTransaction with reason `${reason} (${note})` when note present; returns full product incl. category.
-   140→- Created `src/app/api/recipes/route.ts` (GET+POST, admin): GET `?productId=` (400 if missing/non-int) → components ordered by ingredient name asc, ingredient = full product incl. stock/category, Dates serialized; POST upserts on unique (productId,ingredientId) after validating qty>0, dish sellable ('Selected dish is not a sellable product'), ingredient stockable ('Selected ingredient is not stockable'), dish≠ingredient.
-   141→- Created `src/app/api/recipes/[id]/route.ts` (DELETE, admin): `await ctx.params` (Next 16 Promise params), 404 if missing → `{ ok: true }`.
-   142→- Created `src/app/api/reports/sales/route.ts` (GET, admin): from/to parsed as LOCAL dates via new Date(y,m-1,d) + round-trip validation (400 on garbage like 2026-02-31), from>to → 400; defaults from=30 days ago, to=today end-of-day (23:59:59.999); paid orders w/ items(product+category)+payments aggregated in JS → SalesReport (byMethod amount desc; topProducts revenue desc top 8; byCategory revenue desc with 'Uncategorized' fallback; byDay zero-filled continuous local dates; byHour zero-filled 0-23 from local hour; money round2).
-   143→- Created `src/app/api/reports/inventory-value/route.ts` (GET, admin): totalValue=round2(Σcost×stock), itemCount, lowStockCount over stockable+active products.
-   144→- Verified live on :3000 with curl as admin/waiter/kitchen: all shapes match types, role gates (waiter 403 on reports/recipes/adjust, kitchen 403 on inventory read), upsert keeps component count, DELETE then 404, sales Sep1-2 cross-checked against direct DB query (8196.6 / 12 orders exact match), byDay continuity + byHour 24 entries verified, ΣbyDay/ΣbyHour == totalRevenue.
-   145→- Test side-effects reverted: Coffee Beans stock restored to seed 2.5, Olive Oil to 6, recipe pair (20,19) quantity restored to 0.02, created-then-deleted component cleaned up. NOTE: mid-test the parallel users-agent left seeded admin (id 1) `active:false` which broke logins; I re-activated it via direct DB update to continue testing (seed state restored).
-   146→- `bunx tsc --noEmit`: no errors in my files (only pre-existing infra error `TS2688 Cannot find type definition file for 'bcryptjs'` from lib/auth.ts, owned by main). `bun run lint`: no errors in my files (1 error in src/lib/orders.ts, owned by agent 1-b). dev.log: zero 500s from my routes.
-   147→
-   148→Stage Summary:
-   149→- Endpoints live & verified: GET /api/inventory, GET /api/inventory/low-stock, GET /api/inventory/transactions?limit=, POST /api/inventory/adjust, GET+POST /api/recipes, DELETE /api/recipes/[id], GET /api/reports/sales?from&to, GET /api/reports/inventory-value — all response shapes match @/lib/types exactly (extra `createdAt` ISO field added to serialized products/components; additive, type-compatible).
-   150→- Decisions: transactions limit clamps out-of-range ints to [1,500] (400 only for non-integer garbage); low-stock filter done in JS (Prisma lacks column-to-column compare); adjust stores raw stock sum (no rounding) but checks newStock<0 pre-write; recipes GET requires integer productId query param; dish/ingredient not-found reported via the spec's 400 messages ('not sellable'/'not stockable').
-   151→- Inventory/recipes/reports views (agents 2-e etc.) can now consume: /api/inventory (items with isLow first), adjust for stock ops, recipes upsert/delete, reports/sales with continuous byDay/byHour for recharts.
-   152→
-   153→---
-   154→Task ID: 1-a
-   155→Agent: general-purpose (backend auth/users/categories/products)
-   156→Task: Auth, users, categories, products API routes (14 handlers in 9 files) per binding contracts
-   157→
-   158→Work Log:
-   159→- Created `src/app/api/auth/login/route.ts` (POST): PIN path (exact match on active user; accepts string or numeric pin) takes precedence, else email (lowercased+trimmed) + bcrypt verify; empty/invalid body → 400 'Email and password or PIN required'; failure → 401 'Invalid credentials'; success → createSessionToken + setSessionCookie → `{ user: {id,email,name,role} }`.
-   160→- Created `src/app/api/auth/logout/route.ts` (POST, no auth): `{ ok: true }` + clearSessionCookie. Created `src/app/api/auth/me/route.ts` (GET): getSessionUser → `{ user }` or 401.
-   161→- Created `src/app/api/users/route.ts`: GET (admin) all users createdAt asc, safe select (id,email,name,role,pin,active,createdAt — NEVER passwordHash); POST (admin) validates name/email non-empty, password ≥ 4 chars, role ∈ ROLES, pin 3-8 digits (optional; ''/null clears), email stored lowercased+trimmed, P2002 → 409 'Email already exists'.
-   162→- Created `src/app/api/users/[id]/route.ts` (PUT, admin): partial {name,role,pin,active,password}; password re-hashed only when non-empty string; self-deactivate guard → 400 'You cannot deactivate your own account'; 404 if user missing; 400 on non-integer id.
-   163→- Created `src/app/api/categories/route.ts`: GET (any authed) default active-only, `?all=1` includes inactive, orderBy displayOrder asc then id asc, productCount = ACTIVE products per category (filtered `_count` include); POST (admin) name required, displayOrder int ≥ 0 default 0. `[id]/route.ts`: PUT partial + DELETE soft (active=false) → `{ok:true}`; both 404 on missing.
-   164→- Created `src/app/api/products/route.ts`: GET (any authed) filters `category`/`all=1`/`sellable=1`/`stockable=1`/`search` (name OR sku contains — SQLite LIKE is ASCII case-insensitive), include `category {id,name}`, orderBy category.displayOrder asc then name asc (Prisma relation orderBy / LEFT JOIN); POST (admin) validates name/price/cost/lowStockThreshold/stock ≥ 0 (price/cost default 0), isStockable default false / isSellable default true, sku/imageUrl nullable, categoryId verified to exist (400 'Category not found'); initial stock on stockable product atomically creates InventoryTransaction {quantityChange: stock, reason: 'purchase'} via nested create. `[id]/route.ts`: PUT same fields partial — `stock` in body is DELIBERATELY IGNORED (verified: stock stayed 50 when 999 sent); categoryId null clears; DELETE soft; 404s on missing.
-   165→- Verified live on :3000 with curl (admin/waiter/kitchen jars): login by email/pin/numeric-pin, pin precedence when both sent, bad creds 401, empty body 400, me 200/401, logout clears cookie; users CRUD + dup email 409 + validation 400s + self-deactivate 400 + deactivated user login 401; categories CRUD + productCount (4/6/4/5, inactive 'Ingredients' 19 with all=1) + waiter/kitchen 403 on writes; products GET filters (category=1 → 4 items, sellable=1 → 19, stockable=1 → 21, case-insensitive search on name+sku, combined filters) + POST/PUT/DELETE + purchase transaction verified in DB + 403s for non-admin writes. All test rows deleted afterwards (users 3, categories 5, products 38 — seed state).
-   166→- ⚠️ FOUND + WORKED AROUND a bug in `src/lib/auth.ts` (owner: main agent): `getSessionUser` returns the DB row `{id,email,name,role}` although typed `SessionPayload {userId,...}` → `requireAuth(...).userId` is `undefined` AT RUNTIME. It silently defeated my self-deactivate guard mid-test (admin id 1 got deactivated; 1-c re-activated it via DB — thanks). My users/[id] route now reads the id defensively (`userId ?? id`) so it works with either shape. **ALL agents using session.userId (e.g. 1-b orders 'creating waiter' cancel rights) must do the same until main fixes getSessionUser** — suggested fix: return `{ userId: user.id, email, name, role }`.
-   167→- `bunx tsc --noEmit`: no errors in my files (only pre-existing global TS2688 'Cannot find type definition file for bcryptjs' — @types/bcryptjs@3.0.0 is a deprecated stub with no .d.ts; suggest main agent removes that devDependency). `bun run lint` scoped to my routes: clean (remaining repo errors are in src/lib/orders.ts and src/components/pos/cart-panel.tsx — other agents). dev.log: zero `[api-error]`/500s from my routes.
-   168→
-   169→Stage Summary:
-   170→- Live & verified: POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me, GET+POST /api/users, PUT /api/users/[id], GET+POST /api/categories, PUT+DELETE /api/categories/[id], GET+POST /api/products, PUT+DELETE /api/products/[id]. Response shapes match the binding contracts exactly (`{user}`, `{users}`, `{category}`, `{categories}` w/ productCount, `{product}`/`{products}` w/ category {id,name}); all errors are `{ error: string }` with 400/401/403/404/409.
-   171→- Decisions: pin beats email+password when both present; emails stored/compared lowercased+trimmed; PIN accepts 3-8 digit string or number, ''/null clears; product POST price/cost default 0 when omitted (validated ≥ 0 when present); PUT ignores `stock` per contract; uncategorized products sort first (SQLite NULL ordering under relation orderBy).
-   172→- Frontend agents can consume: login-view (email+PIN), users-view, categories-view, products-view; product creation with initial stock auto-books a 'purchase' inventory transaction (visible in /api/inventory/transactions).
-   173→
-   174→---
-   175→Task ID: 2-a
-   176→Agent: general-purpose (frontend login/navbar/dashboard)
-   177→Task: LoginView (email + PIN keypad), AppNavbar (role-aware sticky top bar), DashboardView (KPIs + 7-day revenue chart + top products + quick actions)
-   178→
-   179→Work Log:
-   180→- Read worklog contracts, `src/lib/types.ts`, `src/lib/{constants,api,format}.ts`, and inspected all shadcn components in `src/components/ui` (button/badge/avatar/dropdown-menu/tabs/card/progress/skeleton/alert confirmed) before writing.
    181→- Created `src/components/auth/login-view.tsx`: full-screen split card (max-w-4xl, md:grid-cols-2). Left brand panel (md:flex, amber-600→orange-600→stone-900 gradient, logo mark + RESTAURANT_NAME + 3 feature bullets w/ CreditCard/ChefHat/Boxes). Right panel: "Welcome back" header + Tabs Email/PIN. Email tab = labelled h-11 inputs, Enter submits (real form onSubmit), `apiFetch POST /api/auth/login {email,password}` (email lowercased+trimmed to match 1-a's server behavior), Loader2 spinner, 401 → toast.error + `aria-invalid` red borders (cleared on typing). PIN tab = 4 display boxes + 3×4 keypad (h-14, active:scale-95), auto-submit at 4 digits via `POST /api/auth/login {pin}`, error → toast + custom shake keyframe (injected `<style>`) + clear. Physical keyboard digits/Backspace/Escape work while PIN tab active (window listener guarded for INPUT/TEXTAREA focus + e.repeat). Demo credentials + PINs hint card (font-mono, muted).
    182→- Created `src/components/app-navbar.tsx`: sticky top-0 z-50, `bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80`, h-16 inner with horizontal overflow scroll. Brand button (primary logo tile + name truncate max-w-[140px] + "RMS") → onNavigate(defaultView). Desktop center nav (sm:flex, h-9 tabs, active = bg-accent text-accent-foreground): waiter→POS, kitchen→Kitchen, admin→POS/Kitchen/Dashboard + "Admin" outline dropdown (Settings2+ChevronDown) → products/categories/floorplans/inventory/recipes/reports/users with icons. Mobile (sm:hidden) icon-only h-11 w-11 buttons + icon Admin dropdown (same handlers). Right: avatar initials (bg-primary/10 text-primary), name + role Badge w/ role colors (admin=amber, waiter=emerald, kitchen=rose), ghost size-11 LogOut button. Brand/logo click → role default view (admin='dashboard', else first nav view).
    183→- Created `src/components/admin/dashboard-view.tsx`: p-4 sm:p-6 max-w-7xl space-y-6. 4 TanStack queries: today sales (`/api/reports/sales?from=today&to=today`), 7-day sales, open orders (`/api/orders?status=open`, refetchInterval 5000), low-stock (`/api/inventory/low-stock`). KPI grid (sm:2 / xl:4): revenue today (emerald Banknote), open orders LIVE (primary Utensils + pulsing emerald dot), avg order value (stone Receipt), low stock (amber AlertCircle) — errors render "—" + destructive sub. Charts row (lg:grid-cols-3): recharts ResponsiveContainer h-72 BarChart (fill #d97706, radius [6,6,0,0], CartesianGrid dashed vertical=false, XAxis 'dd MMM', YAxis `EGP n` width 70, warm-styled Tooltip w/ formatCurrency) — byDay zero-filled across the full 7-day window (falls back to raw rows if server date keys don't match); Top products card (top 5, rank badge, amber Progress vs max revenue). Quick actions card (only when onNavigate given): h-16 outline buttons POS/Kitchen/Inventory/Reports. Skeletons everywhere while loading; first error → toast + top-level destructive Alert.
@@ -287,3 +107,16 @@
    287→Stage Summary:
    288→- App fully integrated and browser-verified end-to-end. Single-page architecture on / with all RMS modules. Login: admin@rms.com/admin123 (PIN 1234) · waiter@rms.com/waiter123 (PIN 1111) · kitchen@rms.com/kitchen123 (PIN 2222). All acceptance criteria from the spec validated: CRUD, POS order→split-payment→close, recipe-based inventory deduction on payment, KDS status flow + POS notifications, table status lifecycle, reports accuracy, tablet-friendly UI.
    289→
+   290→---
+   291→
+   292→## ROUND 2 — Auth fix, Odoo UI, Print Check, Transfer/Merge (in progress)
+   293→
+   294→### Auth fixes (Task R2-auth — DONE by main)
+   295→- Login loop in cross-site preview iframes fixed: `setSessionCookie(res, token, req?)`/`clearSessionCookie(res, req?)` now emit `SameSite=None; Secure` when request host is non-localhost or x-forwarded-proto=https (preview gateway), `Lax` otherwise (localhost dev). Login/logout routes pass `req`.
+   296→- Bearer fallback: login response now `{ user, token }` (token additive); `src/lib/api.ts` gained `setSessionToken/clearSessionToken/getSessionToken` (localStorage `rms_session_token`) and attaches `Authorization: Bearer` to fetcher/apiFetch; `getSessionUser` reads cookie FIRST then Bearer header; login-view stores token; page.tsx clears it on logout.
+   297→- `verifySessionToken` tolerates legacy `{id}` payload tokens.
+   298→- Agents: DO NOT modify src/lib/auth.ts, src/lib/api.ts, src/app/api/auth/**, src/app/page.tsx (owner: main).
+   299→
+   300→### New Order statuses
+
+[showing lines 181-300 of 398; use offset=301 with limit to continue reading]
