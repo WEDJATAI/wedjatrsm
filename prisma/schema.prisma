@@ -21,6 +21,7 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at")
   orders       Order[]
   attendance   Attendance[]
+  cashDrawerSessions CashDrawerSession[]
 
   @@index([roleId])
   @@map("users")
@@ -100,9 +101,13 @@ model Product {
   active            Boolean  @default(true)
   lowStockThreshold Float    @default(0) @map("low_stock_threshold")
   stock             Float    @default(0) // materialized current stock for stockable products
+  // R8: JSON string arrays of tags (see ALLERGENS / DIETARY_TAGS in constants)
+  allergens         String? // e.g. '["gluten","dairy"]' — red warning badges (POS + KDS)
+  dietary           String? // e.g. '["vegetarian","spicy"]' — green badges
   createdAt         DateTime @default(now()) @map("created_at")
 
   orderItems               OrderItem[]
+  modifierGroups          ProductModifierGroup[]
   recipeFor                RecipeComponent[] @relation("DishRecipe")
   recipeIngredients        RecipeComponent[] @relation("IngredientRecipe")
   inventoryTransactions    InventoryTransaction[]
@@ -156,6 +161,8 @@ model Order {
   discountAmount Float              @default(0) @map("discount_amount")
   taxAmount      Float              @default(0) @map("tax_amount") // 14% VAT
   serviceTaxAmount Float            @default(0) @map("service_tax_amount") // 12% service tax (Egypt)
+  // R8: manager-approved order-level discount justification (audit trail)
+  discountReason  String?           @map("discount_reason")
   clientName     String?            @map("client_name") // deferred-check client name
   extraTableIds  String?            @map("extra_table_ids") // JSON array of extra table ids (merged seating from the beginning)
   createdAt      DateTime           @default(now()) @map("created_at")
@@ -182,6 +189,9 @@ model OrderItem {
   notes     String?
   course    String   @default("main") // 'starter' | 'main' | 'dessert' | 'drink'
   status    String   @default("new") // 'new' | 'preparing' | 'ready' | 'served'
+  // R8: JSON array of selected modifiers: [{"id":1,"name":"Extra cheese","nameAr":null,"priceDelta":8}]
+  // unitPrice already includes the price deltas (baked in at order time).
+  selectedModifiers String?  @map("selected_modifiers")
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([orderId])
@@ -196,11 +206,94 @@ model Payment {
   order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   method    String // 'cash' | 'card' | 'other'
   amount    Float
+  // R8: gratuity on top of the billed amount — does NOT count toward
+  // paidAmount / order closure; aggregated per server + Z-report.
+  tip       Float    @default(0)
   reference String?
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([orderId])
   @@map("payments")
+}
+
+// ─── Modifier groups (item options, R8) ─────────────────────────────
+// e.g. group "Coffee size" (required, max 1) with options Small (+0) /
+// Large (+15); group "Extras" (optional, max 3) with Extra cheese (+8)…
+// priceDelta is added to the product base price at order time.
+model ModifierGroup {
+  id        Int      @id @default(autoincrement())
+  name      String
+  nameAr    String?  @map("name_ar")
+  minSelect Int      @default(0) @map("min_select") // 0 = nothing required
+  maxSelect Int      @default(1) @map("max_select") // 1 = pick one; >1 multi-select
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  modifiers Modifier[]
+  products  ProductModifierGroup[]
+
+  @@map("modifier_groups")
+}
+
+model Modifier {
+  id         Int           @id @default(autoincrement())
+  groupId    Int           @map("group_id")
+  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name       String
+  nameAr     String?       @map("name_ar")
+  priceDelta Float         @default(0) @map("price_delta") // may be negative
+  active     Boolean       @default(true)
+  sortOrder  Int           @default(0) @map("sort_order")
+
+  @@index([groupId])
+  @@map("modifiers")
+}
+
+// Which modifier groups are offered for which products (many-to-many).
+model ProductModifierGroup {
+  productId       Int           @map("product_id")
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modifierGroupId Int           @map("modifier_group_id")
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  sortOrder       Int           @default(0) @map("sort_order")
+
+  @@id([productId, modifierGroupId])
+  @@index([modifierGroupId])
+  @@map("product_modifier_groups")
+}
+
+// ─── Cash drawer sessions (R8) ───────────────────────────────────────
+// Open with a float; cash sales + paid-in/out accrue while open; close
+// with a counted amount → variance (expected computed from payments).
+model CashDrawerSession {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  user         User     @relation(fields: [userId], references: [id])
+  openingFloat Float    @default(0) @map("opening_float")
+  openedAt     DateTime @default(now()) @map("opened_at")
+  closedAt     DateTime? @map("closed_at")
+  countedCash  Float?   @map("counted_cash") // entered at close
+  expectedCash Float?   @map("expected_cash") // float + cash sales + paid-ins − paid-outs
+  variance     Float? // counted − expected
+  note         String?
+  entries      CashDrawerEntry[]
+
+  @@index([closedAt])
+  @@map("cash_drawer_sessions")
+}
+
+// Manual paid-in / paid-out entries on an open drawer session.
+model CashDrawerEntry {
+  id        Int      @id @default(autoincrement())
+  sessionId Int      @map("session_id")
+  session   CashDrawerSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type      String // 'paid_in' | 'paid_out'
+  amount    Float
+  note      String?
+  userId    Int?     @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([sessionId])
+  @@map("cash_drawer_entries")
 }
 
 // ─── Recipes (bill of materials) ────────────────────────────────────

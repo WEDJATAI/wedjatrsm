@@ -103,6 +103,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         notes: true,
         course: true,
         status: true,
+        // R8: option snapshot — copied verbatim onto split rows below
+        selectedModifiers: true,
         product: { select: { name: true } },
       },
     })
@@ -160,6 +162,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       for (const move of partialMoves) {
         const row = itemById.get(move.id)!
         // New row on the target order carrying just the moved units
+        // (R8: the option snapshot moves with the units — copied verbatim)
         await tx.orderItem.create({
           data: {
             orderId: targetOrderId,
@@ -169,6 +172,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             notes: row.notes,
             course: row.course,
             status: row.status,
+            selectedModifiers: row.selectedModifiers,
           },
         })
         // Source row keeps the remaining quantity (round2 keeps it > 0)

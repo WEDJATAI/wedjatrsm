@@ -7,6 +7,7 @@ import {
   Banknote,
   Check,
   CreditCard,
+  HandCoins,
   Hourglass,
   Loader2,
   MoreHorizontal,
@@ -28,7 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
-import { PAYMENT_METHODS } from '@/lib/constants'
+import { PAYMENT_METHODS, TIP_PRESETS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -84,6 +85,13 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   // Which payment row the method tiles currently target.
   const [activeIdx, setActiveIdx] = useState(0)
 
+  // R8: tips — gratuity ON TOP of the bill, attached PER PAYMENT ROW
+  // (single tab → one tip; equal/items/custom → per-payer tips). Keyed per
+  // tab+row so every payer's tip survives row switching; the preset
+  // selection and the custom input text are tracked separately per row.
+  const [tipSel, setTipSel] = useState<Record<string, number | 'custom'>>({})
+  const [tipCustom, setTipCustom] = useState<Record<string, string>>({})
+
   const [singleRow, setSingleRow] = useState<EditableRow>({ id: 'single', method: 'cash', amount: '', reference: '' })
   const [customRows, setCustomRows] = useState<EditableRow[]>([])
 
@@ -110,6 +118,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     setAssignments({})
     setSubmitting(false)
     setActiveIdx(0)
+    setTipSel({})
+    setTipCustom({})
     setCheckOpen(false)
     setDeferOpen(false)
     setDeferName('')
@@ -181,12 +191,50 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const diff = round2(sum - remaining)
   const exceeds = diff > 0.01
   const exact = Math.abs(diff) <= 0.01
-  const canSubmit = !submitting && remaining > 0 && sum > 0 && !exceeds
 
   // ── Active row / method tiles ─────────────────────────────────────
   const rowCount =
     tab === 'single' ? 1 : tab === 'equal' ? eqPayers : tab === 'items' ? itPayers : customRows.length
   const safeActiveIdx = Math.min(activeIdx, Math.max(0, rowCount - 1))
+
+  // ── Tips (R8) ────────────────────────────────────────────────
+  // Tips sit ON TOP of the bill: `remaining` stays bill-only and the
+  // validation below is unchanged (Σ row amounts ≤ remaining as before).
+
+  /** Stable per-row key for the tip state ('single' | 'eq:0' | 'it:1' | 'c:<rowId>'). */
+  const tipKeyFor = (index: number): string => {
+    if (tab === 'single') return 'single'
+    if (tab === 'equal') return `eq:${index}`
+    if (tab === 'items') return `it:${index}`
+    return `c:${customRows[index]?.id ?? index}`
+  }
+
+  const activeTipKey = tipKeyFor(safeActiveIdx)
+  const activeSel = tipSel[activeTipKey]
+  const activeCustomText = tipCustom[activeTipKey] ?? ''
+
+  const activeRowAmount = useMemo(
+    () => round2(submitRows[safeActiveIdx]?.amount ?? 0),
+    [submitRows, safeActiveIdx],
+  )
+
+  /** Tip for a submit-row index: {value, invalid} — presets are % of that row's amount. */
+  const rowTip = (index: number): { value: number; invalid: boolean } => {
+    const key = tipKeyFor(index)
+    const sel = tipSel[key]
+    if (sel == null || sel === 0) return { value: 0, invalid: false }
+    if (sel === 'custom') {
+      const parsed = parseTipInput(tipCustom[key] ?? '')
+      return parsed == null ? { value: 0, invalid: true } : { value: parsed, invalid: false }
+    }
+    return { value: round2((submitRows[index]?.amount ?? 0) * (sel / 100)), invalid: false }
+  }
+
+  const activeTip = rowTip(safeActiveIdx)
+  const tipsTotal = round2(submitRows.reduce((s, _r, i) => s + rowTip(i).value, 0))
+  const tipInvalid = submitRows.some((_r, i) => rowTip(i).invalid)
+
+  const canSubmit = !submitting && remaining > 0 && sum > 0 && !exceeds && !tipInvalid
 
   const activeRowLabel =
     tab === 'single'
@@ -262,12 +310,15 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   }
 
   const handleSubmit = async () => {
+    // R8: each payment row carries its own tip (≥ 0, round2) on top of the
+    // amount — the API persists it but never counts it toward paidAmount.
     const payments = submitRows
-      .map((r) => ({ ...r, amount: round2(r.amount) }))
+      .map((r, i) => ({ ...r, amount: round2(r.amount), tip: Math.max(0, round2(rowTip(i).value)) }))
       .filter((r) => r.amount > 0)
       .map((r) => ({
         method: r.method,
         amount: r.amount,
+        tip: r.tip,
         ...(r.method === 'card' && r.reference?.trim() ? { reference: r.reference.trim() } : {}),
       }))
     if (payments.length === 0) return
@@ -554,8 +605,100 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
             </TabsContent>
           </Tabs>
 
+          {/* R8: Tip — gratuity ON TOP of the bill, attached to the ACTIVE
+              payment row (switch rows above to tip a different payer). */}
+          <div className="space-y-2 rounded-xl border border-[#E2E2E0] bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+                <HandCoins className="size-4 shrink-0 text-emerald-600" aria-hidden />
+                <span className="truncate">{t('pos.tipOn', { name: activeRowLabel })}</span>
+              </p>
+              <p
+                className={cn(
+                  'shrink-0 text-sm font-bold tabular-nums',
+                  activeTip.value > 0 ? 'text-emerald-600' : 'text-muted-foreground',
+                )}
+              >
+                {formatCurrency(activeTip.value)}
+              </p>
+            </div>
+            <p className="-mt-1 text-xs text-muted-foreground">{t('pos.tipHint')}</p>
+            <div className="grid grid-cols-5 gap-1.5">
+              {TIP_PRESETS.map((pct) => {
+                const active = activeSel === pct
+                const presetAmount = round2((activeRowAmount * pct) / 100)
+                return (
+                  <button
+                    key={pct}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setTipSel((prev) => ({ ...prev, [activeTipKey]: pct }))}
+                    className={cn(
+                      'flex h-12 flex-col items-center justify-center rounded-lg border-2 px-1 text-xs font-semibold leading-tight transition active:scale-95',
+                      active
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                        : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-emerald-600/40',
+                    )}
+                  >
+                    <span>{pct === 0 ? t('pos.noTip') : `${pct}%`}</span>
+                    {pct > 0 && (
+                      <span className="text-[10px] font-normal tabular-nums text-muted-foreground">
+                        {formatCurrency(presetAmount)}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                aria-pressed={activeSel === 'custom'}
+                onClick={() => setTipSel((prev) => ({ ...prev, [activeTipKey]: 'custom' }))}
+                className={cn(
+                  'flex h-12 items-center justify-center rounded-lg border-2 px-1 text-xs font-semibold transition active:scale-95',
+                  activeSel === 'custom'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-emerald-600/40',
+                )}
+              >
+                {t('pos.tipCustom')}
+              </button>
+            </div>
+            {activeSel === 'custom' && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  inputMode="decimal"
+                  value={activeCustomText}
+                  onChange={(e) =>
+                    setTipCustom((prev) => ({ ...prev, [activeTipKey]: e.target.value }))
+                  }
+                  placeholder="0.00"
+                  aria-label={t('pos.tip')}
+                  className="h-11 w-28 text-right text-sm font-semibold tabular-nums"
+                />
+                {activeTip.invalid && (
+                  <p className="text-xs font-medium text-destructive">{t('pos.tipInvalid')}</p>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Live total + submit */}
           <div className="space-y-2 border-t border-[#E2E2E0] pt-3">
+            {tipsTotal > 0 && (
+              <div className="flex items-center justify-between gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                <span className="flex min-w-0 items-center gap-1.5 font-medium">
+                  <HandCoins className="size-4 shrink-0" aria-hidden />
+                  {t('pos.tipTotal')}
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {formatCurrency(sum)} + {formatCurrency(tipsTotal)} ={' '}
+                  {formatCurrency(round2(sum + tipsTotal))}
+                </span>
+              </div>
+            )}
             <div
               className={cn(
                 'flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium',
@@ -607,7 +750,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                 onClick={handleSubmit}
               >
                 {submitting ? <Loader2 className="animate-spin" /> : <CreditCard />}
-                {t('pos.charge')} {formatCurrency(sum)}
+                {t('pos.charge')} {formatCurrency(tipsTotal > 0 ? round2(sum + tipsTotal) : sum)}
               </Button>
             </div>
           </div>
@@ -675,6 +818,14 @@ function toSubmitRow(r: EditableRow): SubmitRow {
     amount: parseAmount(r.amount),
     ...(r.method === 'card' && r.reference.trim() ? { reference: r.reference.trim() } : {}),
   }
+}
+
+/** Parse a custom tip input: null = invalid (blocks submit), '' = 0, else ≥ 0 rounded. */
+function parseTipInput(s: string): number | null {
+  if (s.trim() === '') return 0
+  const v = Number(s)
+  if (!Number.isFinite(v) || v < 0) return null
+  return round2(v)
 }
 
 function PayRow({

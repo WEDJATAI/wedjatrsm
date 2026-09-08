@@ -75,6 +75,8 @@ export const common: DictPair = {
     'nav.attendance': 'Attendance',
     'nav.settings': 'Settings',
     'nav.activity': 'Activity',
+    'nav.cashdrawer': 'Cash Drawer',
+    'nav.modifiers': 'Modifier Groups',
     'nav.admin': 'Admin',
     'nav.logout': 'Log out',
     'nav.home': 'Home',
@@ -142,6 +144,26 @@ export const common: DictPair = {
     'money.revenue': 'Revenue',
     'money.orders': 'Orders',
     'money.guests': 'Guests',
+    'money.tip': 'Tip',
+    'money.grandTotal': 'Grand total',
+    'money.profit': 'Profit',
+    'money.margin': 'Margin',
+
+    // R8 allergens (red warning badges — POS tiles, cart, KDS)
+    'allergen.gluten': 'Gluten',
+    'allergen.dairy': 'Dairy',
+    'allergen.eggs': 'Eggs',
+    'allergen.fish': 'Fish',
+    'allergen.shellfish': 'Shellfish',
+    'allergen.nuts': 'Nuts',
+    'allergen.soy': 'Soy',
+    'allergen.sesame': 'Sesame',
+
+    // R8 dietary tags (green badges)
+    'dietary.vegetarian': 'Vegetarian',
+    'dietary.vegan': 'Vegan',
+    'dietary.halal': 'Halal',
+    'dietary.spicy': 'Spicy',
 
     // language
     'lang.toggle': 'عربي',
@@ -266,6 +288,8 @@ export const common: DictPair = {
     'nav.attendance': 'الحضور والانصراف',
     'nav.settings': 'الإعدادات',
     'nav.activity': 'السجل',
+    'nav.cashdrawer': 'درج النقدية',
+    'nav.modifiers': 'مجموعات الخيارات',
     'nav.admin': 'الإدارة',
     'nav.logout': 'تسجيل الخروج',
     'nav.home': 'الرئيسية',
@@ -333,6 +357,26 @@ export const common: DictPair = {
     'money.revenue': 'الإيرادات',
     'money.orders': 'الطلبات',
     'money.guests': 'الضيوف',
+    'money.tip': 'إكرامية',
+    'money.grandTotal': 'الإجمالي الكلي',
+    'money.profit': 'الربح',
+    'money.margin': 'هامش الربح',
+
+    // مسببات الحساسية (R8)
+    'allergen.gluten': 'غلوتين',
+    'allergen.dairy': 'ألبان',
+    'allergen.eggs': 'بيض',
+    'allergen.fish': 'أسماك',
+    'allergen.shellfish': 'محار',
+    'allergen.nuts': 'مكسرات',
+    'allergen.soy': 'صويا',
+    'allergen.sesame': 'سمسم',
+
+    // وسوم غذائية (R8)
+    'dietary.vegetarian': 'نباتي',
+    'dietary.vegan': 'نباتي صرف',
+    'dietary.halal': 'حلال',
+    'dietary.spicy': 'حار',
 
     // language
     'lang.toggle': 'عربي',

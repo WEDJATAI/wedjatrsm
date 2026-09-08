@@ -31,14 +31,16 @@ import { useI18n } from '@/lib/i18n'
 import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import type { FloorPlan, Order, Product, RestaurantTable, SessionUser } from '@/lib/types'
+import type { FloorPlan, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
 import CartPanel from './cart-panel'
 import CheckModal from './check-modal'
+import ModifierSheet, { type ModifierSheetSelection } from './modifier-sheet'
 import PaymentModal from './payment-modal'
+import MyShiftSheet from './my-shift-sheet'
 import ReceiptModal from './receipt-modal'
 import ProductGrid from './product-grid'
 import TableSelect from './table-select'
-import { guessCourse, newDraftKey, round2, type DraftItem } from './pos-utils'
+import { guessCourse, modifierSignature, newDraftKey, round2, type DraftItem } from './pos-utils'
 
 /** Who the guests dialog edits: a fresh table draft, the unsent draft guest
  *  count, the persisted guests value of an existing order, or a Seat Party
@@ -72,6 +74,8 @@ export default function PosView({ active = true }: { active?: boolean }) {
 
   // Guests dialog (create-before-order-mode + edit on the order screen).
   const [guestsDialogOpen, setGuestsDialogOpen] = useState(false)
+  // R8: per-server shift closeout sheet ("My shift" button on the floor)
+  const [myShiftOpen, setMyShiftOpen] = useState(false)
   const [guestsValue, setGuestsValue] = useState(2)
   const [guestsTarget, setGuestsTarget] = useState<GuestsTarget>(null)
 
@@ -91,6 +95,10 @@ export default function PosView({ active = true }: { active?: boolean }) {
   const [checkOrder, setCheckOrder] = useState<Order | null>(null)
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
+
+  // R8: product tapped on the grid that has option groups — the modifier
+  // sheet opens instead of an instant add (plain products add directly).
+  const [sheetProduct, setSheetProduct] = useState<Product | null>(null)
 
   // ── Round 7: history-aware navigation (browser/OS back button) ────
   // Unsent drafts stashed per context (table:N / takeaway) so going back
@@ -250,6 +258,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
     setCheckOrder(null)
     setCancelOpen(false)
     setTransferOrderId(null)
+    setSheetProduct(null)
     setPendingSeatTables(null)
     setSeatingTables(null)
     readyRef.current = null
@@ -400,13 +409,25 @@ export default function PosView({ active = true }: { active?: boolean }) {
     setGuestsTarget(null)
   }
 
-  const addProduct = (p: Product) => {
+  /** Append (or merge into) a draft line. Merging happens ONLY when the
+   *  product + course match, the line has no notes AND the modifier
+   *  signature is identical (same option ids in the same order) — otherwise
+   *  the optioned item becomes its own line. `price` stays the BASE product
+   *  price; `modifiers` carries the deltas (see lineUnitPrice). */
+  const appendDraftLine = (p: Product, quantity: number, modifiers?: SelectedModifier[]) => {
+    const sig = modifierSignature(modifiers)
     setDraft((prev) => {
       const course = guessCourse(p)
-      const existing = prev.find((d) => d.productId === p.id && !d.notes && d.course === course)
+      const existing = prev.find(
+        (d) =>
+          d.productId === p.id &&
+          !d.notes &&
+          d.course === course &&
+          modifierSignature(d.modifiers) === sig,
+      )
       if (existing) {
         return prev.map((d) =>
-          d.key === existing.key ? { ...d, quantity: round2(d.quantity + 1) } : d,
+          d.key === existing.key ? { ...d, quantity: round2(d.quantity + quantity) } : d,
         )
       }
       return [
@@ -417,12 +438,28 @@ export default function PosView({ active = true }: { active?: boolean }) {
           name: p.name,
           nameAr: p.nameAr ?? null,
           price: p.price,
-          quantity: 1,
+          quantity,
           notes: '',
           course,
+          modifiers,
         },
       ]
     })
+  }
+
+  const addProduct = (p: Product) => {
+    // Products with (active) option groups open the customize sheet; the
+    // rest keep the classic one-tap add.
+    if ((p.modifierGroups ?? []).some((g) => g.active && g.modifiers.some((m) => m.active))) {
+      setSheetProduct(p)
+      return
+    }
+    appendDraftLine(p, 1)
+  }
+
+  const handleSheetConfirm = ({ product, quantity, modifiers }: ModifierSheetSelection) => {
+    appendDraftLine(product, quantity, modifiers.length > 0 ? modifiers : undefined)
+    setSheetProduct(null)
   }
 
   const draftToPayload = (d: DraftItem[]) =>
@@ -431,6 +468,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
       quantity: d.quantity,
       notes: d.notes.trim() || undefined,
       course: d.course,
+      selectedModifiers: d.modifiers?.length ? d.modifiers : undefined,
     }))
 
   const sendToKitchen = async (): Promise<Order | null> => {
@@ -811,7 +849,10 @@ export default function PosView({ active = true }: { active?: boolean }) {
           onTransferDone={handleTransferDone}
           onSeatParty={handleSeatParty}
           onSettleDeferred={handleSettleDeferred}
+          onMyShift={() => setMyShiftOpen(true)}
         />
+        {/* R8: per-server shift closeout — sales, tips & payment mix today */}
+        <MyShiftSheet open={myShiftOpen} onOpenChange={setMyShiftOpen} />
         {/* Guests quick dialog — shown BEFORE entering order mode on a free
             table (or after a Seat Party selection). */}
         <GuestsDialog
@@ -958,6 +999,18 @@ export default function PosView({ active = true }: { active?: boolean }) {
         onValueChange={setGuestsValue}
         onConfirm={confirmGuests}
         onCancel={cancelGuestsDialog}
+      />
+
+      {/* ── R8: item options (customize) sheet — keyed by product so every
+          open starts with a clean selection state ── */}
+      <ModifierSheet
+        key={sheetProduct?.id ?? 'closed'}
+        open={!!sheetProduct}
+        product={sheetProduct}
+        onOpenChange={(o) => {
+          if (!o) setSheetProduct(null)
+        }}
+        onConfirm={handleSheetConfirm}
       />
 
       {/* ── Cancel order confirmation ── */}

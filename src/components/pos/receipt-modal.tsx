@@ -27,7 +27,16 @@ type ReceiptModel = {
   tableName: string
   waiter: string
   date: string
-  items: { qty: string; name: string; nameAr: string | null; total: number; notes: string | null }[]
+  items: {
+    qty: string
+    name: string
+    nameAr: string | null
+    total: number
+    notes: string | null
+    /** R8: selected options — printed as indented sub-lines (bilingual) */
+    mods: string | null
+    modsAr: string | null
+  }[]
   subtotal: number
   discount: number
   /** 14% VAT */
@@ -35,8 +44,12 @@ type ReceiptModel = {
   /** 12% service tax (in addition to the VAT) */
   serviceTax: number
   total: number
-  payments: { label: string; amount: number }[]
+  payments: { label: string; amount: number; tip: number }[]
   paid: number
+  /** R8: Σ payment tips — gratuity is on top of the bill */
+  tipsTotal: number
+  /** R8: paid + tips — what the guest actually handed over */
+  grandTotal: number
   /** deferred check (client pays later) — stamped on the paper */
   deferred: boolean
   clientName: string | null
@@ -55,12 +68,23 @@ function buildReceiptModel(order: Order): ReceiptModel {
       let nameAr: string | null = null
       if (it.product?.nameAr && it.product.nameAr.trim()) nameAr = it.product.nameAr.trim()
       else if (!it.product) nameAr = fallbackItem.ar
+      // R8: options snapshot — English + Arabic name lists (null when none)
+      const mods = it.selectedModifiers?.length
+        ? it.selectedModifiers.map((m) => m.name).join(', ')
+        : null
+      const modsAr = it.selectedModifiers?.length
+        ? it.selectedModifiers
+            .map((m) => (m.nameAr && m.nameAr.trim() ? m.nameAr.trim() : m.name))
+            .join(', ')
+        : null
       return {
         qty: formatQty(it.quantity),
         name,
         nameAr: nameAr && nameAr !== name ? nameAr : null,
         total: round2(it.quantity * it.unitPrice),
         notes: it.notes,
+        mods,
+        modsAr: modsAr && modsAr !== mods ? modsAr : null,
       }
     }),
     subtotal: round2(order.subtotalAmount),
@@ -71,8 +95,11 @@ function buildReceiptModel(order: Order): ReceiptModel {
     payments: order.payments.map((p) => ({
       label: `${bilingualLabel(`status.payment.${p.method}`)}${p.reference ? ` (${p.reference})` : ''}`,
       amount: round2(p.amount),
+      tip: round2(p.tip ?? 0),
     })),
     paid: round2(order.paidAmount),
+    tipsTotal: round2(order.payments.reduce((sum, p) => sum + (p.tip ?? 0), 0)),
+    grandTotal: round2(order.paidAmount + order.payments.reduce((sum, p) => sum + (p.tip ?? 0), 0)),
     deferred: order.status === 'deferred',
     clientName: order.status === 'deferred' ? order.clientName : null,
   }
@@ -113,6 +140,8 @@ function buildReceiptHtml(
   for (const it of m.items) {
     lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
     if (it.nameAr) lines.push(`<p class="ar" dir="rtl">${escapeHtml(it.nameAr)}</p>`)
+    if (it.mods) lines.push(`<p class="note">  + ${escapeHtml(it.mods)}</p>`)
+    if (it.modsAr) lines.push(`<p class="ar">+ ${escapeHtml(it.modsAr)}</p>`)
     if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
   }
   lines.push(dashed)
@@ -128,8 +157,15 @@ function buildReceiptHtml(
   }
   if (m.payments.length > 0) {
     lines.push(dashed)
-    for (const p of m.payments) lines.push(row(`- ${p.label}`, formatCurrency(p.amount)))
+    for (const p of m.payments) {
+      lines.push(row(`- ${p.label}`, formatCurrency(p.amount)))
+      if (p.tip > 0) lines.push(row(`  + ${bilingualLabel('money.tip')}`, formatCurrency(p.tip)))
+    }
     lines.push(row(bilingualLabel('money.paid'), formatCurrency(m.paid), 'bold'))
+    if (m.tipsTotal > 0) {
+      lines.push(row(bilingualLabel('money.tip'), formatCurrency(m.tipsTotal)))
+      lines.push(row(bilingualLabel('money.grandTotal'), formatCurrency(m.grandTotal), 'bold'))
+    }
     lines.push(stamp)
   }
   lines.push(dashed)
@@ -200,6 +236,16 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
                   {it.nameAr}
                 </p>
               )}
+              {it.mods && <p className="ps-3 text-[11px] text-stone-500">+ {it.mods}</p>}
+              {it.modsAr && (
+                <p
+                  className="ps-3 text-left rtl:text-right text-[11px] text-stone-500"
+                  dir="rtl"
+                  lang="ar"
+                >
+                  + {it.modsAr}
+                </p>
+              )}
               {it.notes && <p className="ps-3 text-[11px] text-stone-500">* {it.notes}</p>}
             </div>
           ))}
@@ -234,9 +280,30 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
             <>
               <div className="my-2 border-t border-dashed border-stone-400" />
               {model.payments.map((p, i) => (
-                <ReceiptRow key={i} left={`- ${p.label}`} right={formatCurrency(p.amount)} />
+                <div key={i}>
+                  <ReceiptRow left={`- ${p.label}`} right={formatCurrency(p.amount)} />
+                  {p.tip > 0 && (
+                    <ReceiptRow
+                      left={`+ ${bilingualLabel('money.tip')}`}
+                      right={formatCurrency(p.tip)}
+                    />
+                  )}
+                </div>
               ))}
               <ReceiptRow left={bilingualLabel('money.paid')} right={formatCurrency(model.paid)} bold />
+              {model.tipsTotal > 0 && (
+                <>
+                  <ReceiptRow
+                    left={bilingualLabel('money.tip')}
+                    right={formatCurrency(model.tipsTotal)}
+                  />
+                  <ReceiptRow
+                    left={bilingualLabel('money.grandTotal')}
+                    right={formatCurrency(model.grandTotal)}
+                    bold
+                  />
+                </>
+              )}
               <div className="my-3 flex justify-center">
                 <span className="inline-flex -rotate-6 items-baseline gap-1.5 rounded border-2 border-emerald-700 px-3 py-1 text-sm font-bold text-emerald-700">
                   <span className={isRTL ? undefined : 'tracking-[0.3em]'}>{paidStamp.en}</span>

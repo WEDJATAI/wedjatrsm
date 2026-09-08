@@ -7,7 +7,14 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, type SessionPayload } from '@/lib/auth'
 import { COURSES, MONEY_EPSILON, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
-import type { FloorPlan, Order, OrderItem, Payment, RestaurantTable } from '@/lib/types'
+import type {
+  FloorPlan,
+  Order,
+  OrderItem,
+  Payment,
+  RestaurantTable,
+  SelectedModifier,
+} from '@/lib/types'
 
 /** Round a number to 2 decimal places (money persistence boundary). */
 export function round2(value: number): number {
@@ -41,7 +48,12 @@ export function sessionUserId(session: SessionPayload): number {
 // ─── Orders ─────────────────────────────────────────────────────────
 
 export const ORDER_INCLUDE = {
-  items: { include: { product: { select: { id: true, name: true, nameAr: true } } } },
+  // R8-b documented exception (approved in the task brief): `allergens` is
+  // added to the product sub-select so KDS/cart allergen badges can read it
+  // via a local cast — the ONLY change to this constant.
+  items: {
+    include: { product: { select: { id: true, name: true, nameAr: true, allergens: true } } },
+  },
   payments: true,
   table: { select: { id: true, name: true } },
   user: { select: { id: true, name: true } },
@@ -49,16 +61,13 @@ export const ORDER_INCLUDE = {
 
 export type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>
 
-export type OrderItemRow = Prisma.OrderItemGetPayload<{
-  include: { product: { select: { id: true; name: true; nameAr: true } } }
-}>
-
 /** A plain `payment` row (no relations) as loaded from Prisma. */
 export type PaymentRow = {
   id: number
   orderId: number
   method: string
   amount: number
+  tip?: number | null
   reference: string | null
   createdAt: Date
 }
@@ -69,8 +78,38 @@ export function serializePayment(payment: PaymentRow): Payment {
     orderId: payment.orderId,
     method: payment.method,
     amount: round2(payment.amount),
+    tip: round2(payment.tip ?? 0),
     reference: payment.reference,
     createdAt: payment.createdAt.toISOString(),
+  }
+}
+
+export type OrderItemRow = Prisma.OrderItemGetPayload<{
+  include: { product: { select: { id: true; name: true; nameAr: true } } }
+}>
+
+/** Parse the selected_modifiers JSON column into a clean list (R8). */
+export function parseSelectedModifiers(raw: string | null | undefined): SelectedModifier[] | null {
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed) || parsed.length === 0) return null
+    const list: SelectedModifier[] = []
+    for (const entry of parsed) {
+      const m = entry as { id?: unknown; name?: unknown; nameAr?: unknown; priceDelta?: unknown }
+      const id = Number(m.id)
+      const priceDelta = Number(m.priceDelta)
+      if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(priceDelta)) continue
+      list.push({
+        id,
+        name: String(m.name ?? ''),
+        nameAr: m.nameAr == null ? null : String(m.nameAr),
+        priceDelta: round2(priceDelta),
+      })
+    }
+    return list.length > 0 ? list : null
+  } catch {
+    return null
   }
 }
 
@@ -85,6 +124,7 @@ export function serializeOrderItem(item: OrderItemRow): OrderItem {
     notes: item.notes,
     course: item.course,
     status: item.status,
+    selectedModifiers: parseSelectedModifiers(item.selectedModifiers),
     createdAt: item.createdAt.toISOString(),
   }
 }
@@ -105,6 +145,7 @@ export function serializeOrder(order: OrderWithRelations): Order {
     discountAmount: round2(order.discountAmount),
     taxAmount: round2(order.taxAmount),
     serviceTaxAmount: round2(order.serviceTaxAmount),
+    discountReason: order.discountReason,
     clientName: order.clientName,
     extraTableIds: parseExtraTableIds(order.extraTableIds),
     paidAmount: round2(paidAmount),
@@ -247,18 +288,35 @@ export type ValidatedOrderItem = {
   unitPrice: number
   notes: string | null
   course: string
+  /** R8: option snapshots rebuilt from the DB (never trusting client data);
+   *  null when the item carries no options (today's behavior). */
+  selectedModifiers: SelectedModifier[] | null
+  /** R8: Σ snapshot priceDelta (0 when none) — unitPrice already includes it */
+  modifiersPriceDelta: number
 }
 
 /**
  * Validate an `items` array from a request body: non-empty, each product
  * must exist / be active / be sellable, quantity > 0 and course ∈ COURSES
- * (default 'main'). Returns normalized rows with unitPrice = product.price.
+ * (default 'main'). unitPrice = product.price.
+ *
+ * R8: each item may carry `selectedModifiers` [{ id }] — every id must be an
+ * ACTIVE Modifier of an ACTIVE group ATTACHED to the item's product; group
+ * minSelect/maxSelect are enforced per item; duplicates are rejected. The
+ * snapshot (name/nameAr/priceDelta) is always rebuilt from DB rows, and
+ * unitPrice = round2(product.price + Σ deltas).
  */
 export async function validateOrderItems(items: unknown): Promise<ValidatedOrderItem[]> {
   if (!Array.isArray(items) || items.length === 0) {
     throw new ApiError('Order must contain at least one item', 400)
   }
-  const raw = items as { productId?: unknown; quantity?: unknown; notes?: unknown; course?: unknown }[]
+  const raw = items as {
+    productId?: unknown
+    quantity?: unknown
+    notes?: unknown
+    course?: unknown
+    selectedModifiers?: unknown
+  }[]
 
   const productIds = new Set<number>()
   for (const item of raw) {
@@ -270,6 +328,9 @@ export async function validateOrderItems(items: unknown): Promise<ValidatedOrder
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new ApiError(`Invalid quantity for product ${productId}`, 400)
     }
+    if (item?.selectedModifiers != null && !Array.isArray(item.selectedModifiers)) {
+      throw new ApiError('selectedModifiers must be an array', 400)
+    }
     productIds.add(productId)
   }
 
@@ -279,7 +340,78 @@ export async function validateOrderItems(items: unknown): Promise<ValidatedOrder
   })
   const productById = new Map(products.map((p) => [p.id, p]))
 
-  return raw.map((item) => {
+  // ── R8 phase A: parse the requested option ids per item ────────────
+  // (integer ids > 0, no duplicates within one item — snapshots come later)
+  const requestedIdsPerItem: (number[] | null)[] = raw.map((item) => {
+    const list = item?.selectedModifiers
+    if (!Array.isArray(list) || list.length === 0) return null
+    const productId = Number(item.productId)
+    const productLabel = productById.get(productId)?.name ?? String(productId)
+    const ids: number[] = []
+    const seen = new Set<number>()
+    for (const entry of list) {
+      const id = Number((entry as { id?: unknown })?.id)
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new ApiError(`Invalid option for product "${productLabel}"`, 400)
+      }
+      if (seen.has(id)) {
+        throw new ApiError(
+          `Duplicate option id ${id} for product "${productLabel}"`,
+          400,
+        )
+      }
+      seen.add(id)
+      ids.push(id)
+    }
+    return ids
+  })
+
+  // ── R8 phase B: load every referenced modifier (with its group) and the
+  // group attachments of every product — two queries for the whole payload.
+  const allModifierIds = new Set<number>()
+  for (const ids of requestedIdsPerItem) {
+    if (ids) for (const id of ids) allModifierIds.add(id)
+  }
+  type ModifierRow = {
+    id: number
+    name: string
+    nameAr: string | null
+    priceDelta: number
+    active: boolean
+    groupId: number
+    group: { id: number; name: string; active: boolean }
+  }
+  const [modifierRows, linkRows] = await Promise.all([
+    allModifierIds.size === 0
+      ? Promise.resolve<ModifierRow[]>([])
+      : db.modifier.findMany({
+          where: { id: { in: Array.from(allModifierIds) } },
+          select: {
+            id: true,
+            name: true,
+            nameAr: true,
+            priceDelta: true,
+            active: true,
+            groupId: true,
+            group: { select: { id: true, name: true, active: true } },
+          },
+        }),
+    db.productModifierGroup.findMany({
+      where: { productId: { in: Array.from(productIds) } },
+      include: { modifierGroup: true },
+    }),
+  ])
+  const modifierById = new Map(modifierRows.map((m) => [m.id, m]))
+  // ACTIVE groups attached per product (constraints apply to these only)
+  const attachedGroupsByProduct = new Map<number, typeof linkRows[number]['modifierGroup'][]>()
+  for (const link of linkRows) {
+    if (!link.modifierGroup.active) continue
+    const list = attachedGroupsByProduct.get(link.productId) ?? []
+    list.push(link.modifierGroup)
+    attachedGroupsByProduct.set(link.productId, list)
+  }
+
+  return raw.map((item, index) => {
     const productId = Number(item.productId)
     const product = productById.get(productId)
     if (!product) throw new ApiError(`Product ${productId} not found`, 400)
@@ -290,12 +422,60 @@ export async function validateOrderItems(items: unknown): Promise<ValidatedOrder
     if (!(COURSES as readonly string[]).includes(course)) {
       throw new ApiError(`Invalid course "${course}"`, 400)
     }
+
+    // ── R8 phase C: snapshot from DB rows + group constraint checks ──
+    const requestedIds = requestedIdsPerItem[index]
+    const attached = attachedGroupsByProduct.get(productId) ?? []
+    const attachedGroupIds = new Set(attached.map((g) => g.id))
+    const selected: SelectedModifier[] = []
+    const countByGroup = new Map<number, number>()
+    if (requestedIds) {
+      for (const id of requestedIds) {
+        const mod = modifierById.get(id)
+        if (
+          !mod ||
+          !mod.active ||
+          !mod.group.active ||
+          !attachedGroupIds.has(mod.groupId)
+        ) {
+          throw new ApiError(`Invalid option for product "${product.name}"`, 400)
+        }
+        countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) ?? 0) + 1)
+        selected.push({
+          id: mod.id,
+          name: mod.name,
+          nameAr: mod.nameAr,
+          priceDelta: round2(mod.priceDelta),
+        })
+      }
+    }
+    for (const group of attached) {
+      const count = countByGroup.get(group.id) ?? 0
+      if (count < group.minSelect) {
+        throw new ApiError(
+          `Option group "${group.name}" for product "${product.name}" requires at least ${group.minSelect} option(s)`,
+          400,
+        )
+      }
+      if (count > group.maxSelect) {
+        throw new ApiError(
+          `Option group "${group.name}" for product "${product.name}" allows at most ${group.maxSelect} option(s)`,
+          400,
+        )
+      }
+    }
+
+    const modifiersPriceDelta = round2(
+      selected.reduce((sum, m) => sum + m.priceDelta, 0),
+    )
     return {
       productId,
       quantity: Number(item.quantity),
-      unitPrice: product.price,
+      unitPrice: round2(product.price + modifiersPriceDelta),
       notes: item.notes == null ? null : String(item.notes),
       course,
+      selectedModifiers: selected.length > 0 ? selected : null,
+      modifiersPriceDelta,
     }
   })
 }

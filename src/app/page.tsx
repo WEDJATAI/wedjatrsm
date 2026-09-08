@@ -24,6 +24,8 @@ import FloorPlansView from '@/components/admin/floorplans-view'
 import InventoryView from '@/components/admin/inventory-view'
 import RecipesView from '@/components/admin/recipes-view'
 import ReportsView from '@/components/admin/reports-view'
+import ModifiersView from '@/components/admin/modifiers-view'
+import CashDrawerView from '@/components/admin/cash-drawer-view'
 import UsersView from '@/components/admin/users-view'
 import RolesView from '@/components/admin/roles-view'
 import AttendanceView from '@/components/admin/attendance-view'
@@ -35,11 +37,13 @@ type View =
   | 'kitchen'
   | 'dashboard'
   | 'products'
+  | 'modifiers'
   | 'categories'
   | 'floorplans'
   | 'inventory'
   | 'recipes'
   | 'reports'
+  | 'cashdrawer'
   | 'users'
   | 'roles'
   | 'attendance'
@@ -52,11 +56,13 @@ const VIEW_PERMISSION: Record<View, string> = {
   kitchen: 'kitchen',
   dashboard: 'dashboard',
   products: 'products',
+  modifiers: 'products',
   categories: 'categories',
   floorplans: 'floorplans',
   inventory: 'inventory',
   recipes: 'recipes',
   reports: 'reports',
+  cashdrawer: 'cashdrawer',
   users: 'users',
   roles: 'roles',
   attendance: 'attendance',
@@ -67,11 +73,13 @@ const VIEW_PERMISSION: Record<View, string> = {
 const ADMIN_VIEWS: View[] = [
   'dashboard',
   'products',
+  'modifiers',
   'categories',
   'floorplans',
   'inventory',
   'recipes',
   'reports',
+  'cashdrawer',
   'users',
   'roles',
   'attendance',
@@ -85,10 +93,12 @@ const VIEW_PRIORITY: View[] = [
   'kitchen',
   'dashboard',
   'reports',
+  'cashdrawer',
   'inventory',
   'attendance',
   'activity',
   'products',
+  'modifiers',
   'categories',
   'floorplans',
   'recipes',
@@ -206,6 +216,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <DashboardView onNavigate={setView} />
       case 'products':
         return <ProductsView />
+      case 'modifiers':
+        return <ModifiersView />
       case 'categories':
         return <CategoriesView />
       case 'floorplans':
@@ -216,6 +228,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <RecipesView />
       case 'reports':
         return <ReportsView />
+      case 'cashdrawer':
+        return <CashDrawerView />
       case 'users':
         return <UsersView />
       case 'roles':

@@ -2,10 +2,27 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { ALLERGENS, DIETARY_TAGS } from '@/lib/constants'
 
 const PRODUCT_INCLUDE = {
   category: { select: { id: true, name: true, nameAr: true } },
-} as const
+  // R8: option groups offered with the product (ACTIVE groups + ACTIVE
+  // options only) ordered by the attach sortOrder (= group.sortOrder)
+  modifierGroups: {
+    where: { modifierGroup: { active: true } },
+    orderBy: [{ sortOrder: 'asc' }, { modifierGroupId: 'asc' }],
+    include: {
+      modifierGroup: {
+        include: {
+          modifiers: {
+            where: { active: true },
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.ProductInclude
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
   try {
@@ -68,6 +85,110 @@ function parseStringField(
   }
   const s = value.trim()
   return s === '' ? null : s
+}
+
+// ─── R8: allergen / dietary tags + option-group links ───────────────
+
+/** JSON string column → string[] (null/invalid → []). */
+function parseTagColumn(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return parsed.filter((v): v is string => typeof v === 'string')
+    }
+  } catch {
+    // invalid JSON → treated as empty
+  }
+  return []
+}
+
+/**
+ * Optional tag list (allergens/dietary) → deduped validated string[].
+ * undefined = absent (don't touch), [] = explicit clear.
+ */
+function parseTagList(
+  value: unknown,
+  allowed: readonly string[],
+  label: string,
+): string[] | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return []
+  if (!Array.isArray(value)) throw new ApiError(`${label} must be an array`, 400)
+  const out: string[] = []
+  for (const v of value) {
+    if (typeof v !== 'string' || !allowed.includes(v)) {
+      throw new ApiError(`${label} contains an invalid value: ${String(v)}`, 400)
+    }
+    if (!out.includes(v)) out.push(v)
+  }
+  return out
+}
+
+/** modifierGroupIds: undefined (absent) | deduped integer id list. */
+function parseModifierGroupIds(value: unknown): number[] | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return []
+  if (!Array.isArray(value)) {
+    throw new ApiError('modifierGroupIds must be an array', 400)
+  }
+  const ids: number[] = []
+  for (const v of value) {
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < 1) {
+      throw new ApiError('Invalid modifier group id', 400)
+    }
+    if (!ids.includes(n)) ids.push(n)
+  }
+  return ids
+}
+
+/** Validate every id is an ACTIVE ModifierGroup → [{id, sortOrder}] | null (absent). */
+async function resolveActiveGroups(
+  ids: number[] | undefined,
+): Promise<{ id: number; sortOrder: number }[] | null> {
+  if (ids === undefined) return null
+  if (ids.length === 0) return []
+  const groups = await db.modifierGroup.findMany({
+    where: { id: { in: ids }, active: true },
+    select: { id: true, sortOrder: true },
+  })
+  if (groups.length !== ids.length) {
+    throw new ApiError('One or more modifier groups are invalid or inactive', 400)
+  }
+  return groups
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+type ProductWithRelations = Prisma.ProductGetPayload<{ include: typeof PRODUCT_INCLUDE }>
+
+/** Product row → API payload: parsed tag arrays + ModifierGroupDTO[] (never raw JSON). */
+function serializeProduct(p: ProductWithRelations) {
+  return {
+    ...p,
+    allergens: parseTagColumn(p.allergens),
+    dietary: parseTagColumn(p.dietary),
+    modifierGroups: p.modifierGroups.map((link) => ({
+      id: link.modifierGroup.id,
+      name: link.modifierGroup.name,
+      nameAr: link.modifierGroup.nameAr,
+      minSelect: link.modifierGroup.minSelect,
+      maxSelect: link.modifierGroup.maxSelect,
+      active: link.modifierGroup.active,
+      sortOrder: link.modifierGroup.sortOrder,
+      modifiers: link.modifierGroup.modifiers.map((m) => ({
+        id: m.id,
+        name: m.name,
+        nameAr: m.nameAr,
+        priceDelta: round2(m.priceDelta),
+        active: m.active,
+        sortOrder: m.sortOrder,
+      })),
+    })),
+  }
 }
 
 export async function PUT(
@@ -142,12 +263,42 @@ export async function PUT(
       }
     }
 
-    const product = await db.product.update({
+    // R8: allergens / dietary — validated, stored as JSON (null when empty)
+    const allergens = parseTagList(body.allergens, ALLERGENS, 'Allergens')
+    if (allergens !== undefined) {
+      data.allergens = allergens.length > 0 ? JSON.stringify(allergens) : null
+    }
+    const dietary = parseTagList(body.dietary, DIETARY_TAGS, 'Dietary')
+    if (dietary !== undefined) {
+      data.dietary = dietary.length > 0 ? JSON.stringify(dietary) : null
+    }
+
+    // R8: option-group links — full replace, transactional
+    const modifierGroups = await resolveActiveGroups(
+      parseModifierGroupIds(body.modifierGroupIds),
+    )
+
+    await db.$transaction(async (tx) => {
+      await tx.product.update({ where: { id: productId }, data })
+      if (modifierGroups !== null) {
+        await tx.productModifierGroup.deleteMany({ where: { productId } })
+        if (modifierGroups.length > 0) {
+          await tx.productModifierGroup.createMany({
+            data: modifierGroups.map((g) => ({
+              productId,
+              modifierGroupId: g.id,
+              sortOrder: g.sortOrder,
+            })),
+          })
+        }
+      }
+    })
+
+    const product = await db.product.findUniqueOrThrow({
       where: { id: productId },
-      data,
       include: PRODUCT_INCLUDE,
     })
-    return NextResponse.json({ product })
+    return NextResponse.json({ product: serializeProduct(product) })
   } catch (err) {
     return errorResponse(err)
   }

@@ -100,10 +100,6 @@ export async function GET(req: NextRequest) {
       waiterAgg.set(order.userId, waiter)
     }
 
-    const byWaiter = Array.from(waiterAgg.values())
-      .map((w) => ({ ...w, net: round2(w.net) }))
-      .sort((a, b) => b.net - a.net)
-
     // 2. Orders cancelled in the window. The cancel route maintains closedAt
     //    (set on cancel); createdAt is the fallback for legacy rows only.
     const cancelledCount = await db.order.count({
@@ -118,14 +114,29 @@ export async function GET(req: NextRequest) {
 
     // 3 + 4. Payments received in the window (incl. settlements of deferred
     //    checks — parent order keeps clientName even after closing).
+    //    R8: tips are aggregated from the SAME payment set — per method for
+    //    the tips card and per order.userId for the byWaiter rows.
     const payments = await db.payment.findMany({
       where: { createdAt: { gte: dayStart, lt: dayEnd } },
-      select: { method: true, amount: true, order: { select: { clientName: true } } },
+      select: {
+        method: true,
+        amount: true,
+        tip: true,
+        order: {
+          select: { clientName: true, userId: true, user: { select: { name: true } } },
+        },
+      },
     })
 
     const methodAgg = new Map<string, { amount: number; count: number }>()
     let paymentsTotalRaw = 0
     let deferredSettledRaw = 0
+    let tipsTotalRaw = 0
+    let tipsCashRaw = 0
+    let tipsCardRaw = 0
+    let tipsOtherRaw = 0
+    const waiterTipAgg = new Map<number | null, number>()
+    const waiterTipName = new Map<number | null, string>()
     for (const payment of payments) {
       paymentsTotalRaw += payment.amount
 
@@ -135,6 +146,16 @@ export async function GET(req: NextRequest) {
       methodAgg.set(payment.method, agg)
 
       if (payment.order.clientName != null) deferredSettledRaw += payment.amount
+
+      // R8: gratuity (never part of `amount`) — tips by method + per server
+      const tip = payment.tip ?? 0
+      tipsTotalRaw += tip
+      if (payment.method === 'cash') tipsCashRaw += tip
+      else if (payment.method === 'card') tipsCardRaw += tip
+      else tipsOtherRaw += tip
+      const waiterId = payment.order.userId
+      waiterTipAgg.set(waiterId, (waiterTipAgg.get(waiterId) ?? 0) + tip)
+      if (payment.order.user?.name) waiterTipName.set(waiterId, payment.order.user.name)
     }
 
     // Only methods that actually took payments (same behavior as the sales
@@ -142,6 +163,23 @@ export async function GET(req: NextRequest) {
     const paymentsByMethod = Array.from(methodAgg.entries())
       .map(([method, v]) => ({ method, amount: round2(v.amount), count: v.count }))
       .sort((a, b) => b.amount - a.amount)
+
+    // Waiters with tips today but no closed orders yet (e.g. a tipped
+    // partial payment on a still-open check) still get a row so the
+    // per-server tips stay complete — orders/net 0, sorted to the bottom.
+    const byWaiter: ZReport['byWaiter'] = Array.from(waiterAgg.values())
+      .map((w) => ({ ...w, net: round2(w.net), tips: round2(waiterTipAgg.get(w.userId) ?? 0) }))
+    for (const [waiterId, tipRaw] of waiterTipAgg) {
+      if (waiterAgg.has(waiterId) || round2(tipRaw) <= 0) continue
+      byWaiter.push({
+        userId: waiterId,
+        name: waiterTipName.get(waiterId) ?? '—',
+        orders: 0,
+        net: 0,
+        tips: round2(tipRaw),
+      })
+    }
+    byWaiter.sort((a, b) => b.net - a.net)
 
     // 5. Deferred outstanding — LIVE liability snapshot (all deferred checks,
     //    regardless of date), remainder rounded per order then summed.
@@ -174,6 +212,14 @@ export async function GET(req: NextRequest) {
       deferredSettled: round2(deferredSettledRaw),
       deferredOutstanding,
       byWaiter,
+      // R8: gratuity totals for the day (real aggregation — same payment
+      // set as paymentsByMethod above; tips never count toward amounts)
+      tips: {
+        total: round2(tipsTotalRaw),
+        cash: round2(tipsCashRaw),
+        card: round2(tipsCardRaw),
+        other: round2(tipsOtherRaw),
+      },
     }
 
     return NextResponse.json({ report })

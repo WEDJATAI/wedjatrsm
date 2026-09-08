@@ -113,6 +113,60 @@ export const posDict: DictPair = {
     'pos.orderRestoredToast': 'Reopened order #{order}',
     'pos.draftRestoredToast': 'Unsent items restored for {table}.',
 
+    // R8: item modifiers (options) — selection sheet + cart display
+    'pos.options': 'Options',
+    'pos.customize': 'Customize',
+    'pos.customized': 'Customized',
+    'pos.modRequired': 'Required',
+    'pos.modOptional': 'optional',
+    'pos.modPickOne': 'Pick one',
+    'pos.modChooseUpTo': 'Choose up to {n}',
+    'pos.modChooseMin': 'Choose at least {n}',
+    'pos.modAddToOrder': 'Add to order',
+    'pos.modAddFor': 'Add · {price}',
+    'pos.modItemTotal': 'Item total',
+    'pos.modQty': 'Quantity',
+    'pos.modsIncluded': 'Included options',
+    'pos.noModsProduct': 'This item has no options.',
+
+    // R8: favorites on the POS grid
+    'pos.favorites': 'Favorites',
+    'pos.noFavorites': 'Star your best sellers — they show up here for one-tap add.',
+    'pos.addedToFavorites': 'Added to favorites',
+    'pos.removedFromFavorites': 'Removed from favorites',
+
+    // R8: tips on payments
+    'pos.tip': 'Tip',
+    'pos.tipOn': 'Tip for {name}',
+    'pos.tipHint': 'Added on top of the bill — it goes to your server.',
+    'pos.tipPresets': 'Quick tips',
+    'pos.noTip': 'No tip',
+    'pos.tipCustom': 'Custom',
+    'pos.tipTotal': 'Total with tips',
+    'pos.tipInvalid': 'Enter a valid tip amount',
+
+    // R8: manager approval for discounts
+    'pos.discountReasonLabel': 'Reason',
+    'pos.discountReasonPh': 'e.g. loyal guest, manager comp',
+    'pos.discountReasonRequired': 'A reason is required for a discount',
+    'pos.discountPinTitle': 'Manager approval',
+    'pos.discountPinDesc': 'Discounts need the manager 6-digit PIN.',
+
+    // R8: my shift (server closeout)
+    'pos.myShift': 'My shift',
+    'shift.title': 'My shift — today',
+    'shift.subtitle': 'Your sales and tips since midnight',
+    'shift.sales': 'Total sales',
+    'shift.paidSales': 'Collected (paid)',
+    'shift.openChecks': 'Open checks',
+    'shift.openValue': 'Open value',
+    'shift.tips': 'Tips earned',
+    'shift.orders': 'Orders',
+    'shift.avgCheck': 'Avg check',
+    'shift.byMethod': 'Collected by method',
+    'shift.noSales': 'No sales yet today — your shift starts with the first check.',
+    'shift.tipShare': 'Tips by method',
+
     // payment modal
     'pos.paymentDesc':
       'Split the bill or charge in one go. Print a check first if the customer wants to see it — printing never records a payment.',
@@ -491,5 +545,59 @@ export const posDict: DictPair = {
     'pos.pinPlaceholder': 'رمز من 6 أرقام',
     'pos.pinConfirm': 'إزالة العنصر',
     'pos.pinWrong': 'رمز غير صحيح',
+
+    // R8: خيارات الأصناف (المُعدِّلات)
+    'pos.options': 'خيارات',
+    'pos.customize': 'تخصيص',
+    'pos.customized': 'مخصص',
+    'pos.modRequired': 'مطلوب',
+    'pos.modOptional': 'اختياري',
+    'pos.modPickOne': 'اختر واحداً',
+    'pos.modChooseUpTo': 'اختر حتى {n}',
+    'pos.modChooseMin': 'اختر {n} على الأقل',
+    'pos.modAddToOrder': 'إضافة للطلب',
+    'pos.modAddFor': 'إضافة · {price}',
+    'pos.modItemTotal': 'إجمالي الصنف',
+    'pos.modQty': 'الكمية',
+    'pos.modsIncluded': 'الخيارات المختارة',
+    'pos.noModsProduct': 'لا توجد خيارات لهذا الصنف.',
+
+    // R8: المفضلة
+    'pos.favorites': 'المفضلة',
+    'pos.noFavorites': 'اضبط النجمة على الأصناف الأكثر بيعاً لتظهر هنا بضغطة واحدة.',
+    'pos.addedToFavorites': 'أُضيف إلى المفضلة',
+    'pos.removedFromFavorites': 'أُزيل من المفضلة',
+
+    // R8: الإكراميات
+    'pos.tip': 'إكرامية',
+    'pos.tipOn': 'إكرامية لـ {name}',
+    'pos.tipHint': 'تُضاف فوق قيمة الفاتورة — وتذهب للنادل.',
+    'pos.tipPresets': 'إكراميات سريعة',
+    'pos.noTip': 'بدون إكرامية',
+    'pos.tipCustom': 'مبلغ آخر',
+    'pos.tipTotal': 'الإجمالي مع الإكراميات',
+    'pos.tipInvalid': 'أدخل مبلغ إكرامية صحيحاً',
+
+    // R8: موافقة المدير على الخصومات
+    'pos.discountReasonLabel': 'السبب',
+    'pos.discountReasonPh': 'مثال: عميل دائم، خصم من المدير',
+    'pos.discountReasonRequired': 'السبب مطلوب لتطبيق الخصم',
+    'pos.discountPinTitle': 'موافقة المدير',
+    'pos.discountPinDesc': 'تتطلب الخصومات رمز المدير المكوّن من 6 أرقام.',
+
+    // R8: وردية النادل
+    'pos.myShift': 'ورديتي',
+    'shift.title': 'ورديتي — اليوم',
+    'shift.subtitle': 'مبيعاتك وإكرامياتك منذ منتصف الليل',
+    'shift.sales': 'إجمالي المبيعات',
+    'shift.paidSales': 'المُحصّلة (مدفوعة)',
+    'shift.openChecks': 'حسابات مفتوحة',
+    'shift.openValue': 'قيمة المفتوحة',
+    'shift.tips': 'الإكراميات',
+    'shift.orders': 'الطلبات',
+    'shift.avgCheck': 'متوسط الحساب',
+    'shift.byMethod': 'التحصيل حسب الطريقة',
+    'shift.noSales': 'لا مبيعات اليوم بعد — تبدأ ورديتك بأول حساب.',
+    'shift.tipShare': 'الإكراميات حسب الطريقة',
   },
 }

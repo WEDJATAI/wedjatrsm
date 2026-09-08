@@ -25,6 +25,10 @@ export const kitchenDict: DictPair = {
     'kds.loadFailed': 'Failed to load open orders',
     'kds.updateFailed': 'Failed to update item',
     'kds.item': 'Item',
+
+    // R8: modifiers + allergens on KDS cards
+    'kds.allergens': 'Allergens',
+    'kds.mods': 'options',
   },
   ar: {
     'kds.title': 'شاشة المطبخ',
@@ -46,5 +50,9 @@ export const kitchenDict: DictPair = {
     'kds.loadFailed': 'فشل تحميل الطلبات المفتوحة',
     'kds.updateFailed': 'فشل تحديث الصنف',
     'kds.item': 'صنف',
+
+    // R8: الخيارات ومسببات الحساسية
+    'kds.allergens': 'مسببات الحساسية',
+    'kds.mods': 'خيارات',
   },
 }

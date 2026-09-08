@@ -1,7 +1,8 @@
 // ─── POS shared helpers & types (client-side) ────────────────────────
 
 import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
-import type { Order, Product } from '@/lib/types'
+import { formatCurrency } from '@/lib/format'
+import type { Order, Product, SelectedModifier } from '@/lib/types'
 
 /** A local, not-yet-sent cart line. */
 export type DraftItem = {
@@ -15,6 +16,16 @@ export type DraftItem = {
   quantity: number
   notes: string
   course: string
+  /** R8: option snapshots chosen at add time (modifiers are picked once in
+   *  the sheet — the edit dialog only changes qty/notes/course). The BASE
+   *  product price stays in `price`; deltas are summed on the fly. */
+  modifiers?: SelectedModifier[]
+}
+
+/** Effective unit price of a draft line: base product price + Σ priceDelta. */
+export function lineUnitPrice(d: DraftItem): number {
+  const delta = d.modifiers?.reduce((sum, m) => sum + (m.priceDelta ?? 0), 0) ?? 0
+  return round2(d.price + delta)
 }
 
 /** Round to 2 decimals — all client-side money math goes through this. */
@@ -35,7 +46,21 @@ export type CartTotals = {
 }
 
 export function computeDraftSubtotal(draft: DraftItem[]): number {
-  return round2(draft.reduce((sum, d) => sum + d.quantity * d.price, 0))
+  return round2(draft.reduce((sum, d) => sum + d.quantity * lineUnitPrice(d), 0))
+}
+
+/** Modifier signature for draft-line merging: option ids joined in order.
+ *  Two lines merge only when their signatures match exactly (both empty =
+ *  plain items of the same product). */
+export function modifierSignature(mods?: SelectedModifier[] | null): string {
+  return (mods ?? []).map((m) => m.id).join(',')
+}
+
+/** Localized price-delta label: `+EGP 8` / `−EGP 3` / '' when zero. */
+export function modifierDeltaLabel(delta: number): string {
+  if (!Number.isFinite(delta) || delta === 0) return ''
+  const abs = formatCurrency(Math.abs(delta))
+  return delta > 0 ? `+${abs}` : `−${abs}`
 }
 
 /**

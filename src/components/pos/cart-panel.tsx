@@ -43,7 +43,7 @@ import { formatCurrency, formatQty } from '@/lib/format'
 import { useI18n, localizedName } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { Order, OrderItem } from '@/lib/types'
-import { computeCartTotals, round2, type DraftItem } from './pos-utils'
+import { computeCartTotals, lineUnitPrice, modifierDeltaLabel, round2, type DraftItem } from './pos-utils'
 
 type CartPanelProps = {
   order: Order | null
@@ -95,6 +95,10 @@ export default function CartPanel({
   const [discountTab, setDiscountTab] = useState<'percent' | 'fixed'>('percent')
   const [percentInput, setPercentInput] = useState('')
   const [fixedInput, setFixedInput] = useState('')
+  // R8: manager-approved discounts — justification + waiter PIN gate.
+  const [discountReason, setDiscountReason] = useState('')
+  const [discountReasonError, setDiscountReasonError] = useState(false)
+  const [discountPin, setDiscountPin] = useState('')
 
   // ── PIN-gated item deletion state ─────────────────────────────────
   // Sent items may only be removed with the admin's 6-digit PIN; the
@@ -190,12 +194,25 @@ export default function CartPanel({
     removeItem.mutate({ itemId: pinDialogItem.id, pin: pinInput })
   }
 
+  // R8: discounts with a resulting amount > 0 need a reason (+ manager PIN
+  // unless the logged-in user is an admin). Removing a discount (0) needs
+  // neither. Validation is mirrored server-side (PUT /api/orders/[id]).
+  const discountNeedsPin = userRole !== 'admin'
+
   const applyDiscount = useMutation({
-    mutationFn: (discountAmount: number) => {
+    mutationFn: (vars: { amount: number; reason: string | null; pin: string | null }) => {
       if (orderId == null) throw new Error(t('pos.noActiveOrder'))
       return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
         method: 'PUT',
-        body: { discountAmount },
+        body: {
+          discountAmount: vars.amount,
+          ...(vars.amount > 0
+            ? {
+                discountReason: vars.reason ?? undefined,
+                approvalPin: vars.pin ?? undefined,
+              }
+            : {}),
+        },
       })
     },
     onSuccess: async ({ order: updated }) => {
@@ -208,6 +225,19 @@ export default function CartPanel({
     },
     onError: (err: Error) => toast.error(err.message),
   })
+
+  const submitDiscount = () => {
+    const needsApproval = previewDiscount > 0
+    if (needsApproval && discountReason.trim().length < 2) {
+      setDiscountReasonError(true)
+      return
+    }
+    applyDiscount.mutate({
+      amount: previewDiscount,
+      reason: needsApproval ? discountReason.trim() : null,
+      pin: needsApproval && discountNeedsPin ? discountPin : null,
+    })
+  }
 
   // ── Item transfer mutation (move sent items to another open order) ──
   // Sends the per-row quantities so the server can split rows (partial moves).
@@ -344,6 +374,9 @@ export default function CartPanel({
     const subtotal = order?.subtotalAmount ?? 0
     setPercentInput(current > 0 && subtotal > 0 ? String(round2((current / subtotal) * 100)) : '')
     setFixedInput(current > 0 ? String(current) : '')
+    setDiscountReason(order?.discountReason ?? '')
+    setDiscountReasonError(false)
+    setDiscountPin('')
     setDiscountOpen(true)
   }
 
@@ -652,6 +685,33 @@ export default function CartPanel({
             <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {/* R8: chosen options are read-only here — remove + re-add the
+                line to change them (qty/notes/course stay editable). */}
+            {editing?.modifiers?.length ? (
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">{t('pos.modsIncluded')}</p>
+                <p
+                  className="flex flex-wrap items-center gap-1"
+                  title={editing.modifiers
+                    .map((m) => localizedName(m.name, m.nameAr, lang))
+                    .join(', ')}
+                >
+                  {editing.modifiers.map((m, i) => (
+                    <span
+                      key={`${m.id}-${i}`}
+                      className="rounded-full border border-[#714B67]/40 bg-[#714B67]/[0.06] px-2 py-0.5 text-xs text-[#714B67]"
+                    >
+                      {localizedName(m.name, m.nameAr, lang)}
+                      {m.priceDelta !== 0 && (
+                        <span className="ms-1 font-semibold tabular-nums">
+                          {modifierDeltaLabel(m.priceDelta)}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </p>
+              </div>
+            ) : null}
             <div className="flex items-center justify-center gap-3">
               <Button
                 variant="outline"
@@ -716,7 +776,7 @@ export default function CartPanel({
 
       {/* Discount dialog */}
       <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
             <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
@@ -758,6 +818,55 @@ export default function CartPanel({
               </div>
             </TabsContent>
           </Tabs>
+
+          {/* R8: reason — required whenever the resulting discount > 0 */}
+          {previewDiscount > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('pos.discountReasonLabel')}</p>
+              <Textarea
+                value={discountReason}
+                onChange={(e) => {
+                  setDiscountReason(e.target.value)
+                  if (discountReasonError) setDiscountReasonError(false)
+                }}
+                placeholder={t('pos.discountReasonPh')}
+                rows={2}
+                maxLength={120}
+                aria-invalid={discountReasonError || undefined}
+                className={cn(
+                  'h-auto rounded-xl',
+                  discountReasonError &&
+                    'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+                )}
+              />
+              {discountReasonError && (
+                <p className="text-xs font-medium text-destructive" role="alert">
+                  {t('pos.discountReasonRequired')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* R8: manager approval PIN — waiters only, admins are exempt */}
+          {previewDiscount > 0 && discountNeedsPin && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('pos.discountPinTitle')}</p>
+              <p className="text-xs text-muted-foreground">{t('pos.discountPinDesc')}</p>
+              <Input
+                type="password"
+                inputMode="numeric"
+                maxLength={DELETE_PIN_LENGTH}
+                value={discountPin}
+                onChange={(e) =>
+                  // digits only — a PIN is numeric by definition
+                  setDiscountPin(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+                }
+                placeholder={t('pos.pinPlaceholder')}
+                className="h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums"
+              />
+            </div>
+          )}
+
           <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
             <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
             <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
@@ -775,8 +884,11 @@ export default function CartPanel({
               {t('common.cancel')}
             </Button>
             <Button
-              onClick={() => applyDiscount.mutate(previewDiscount)}
-              disabled={applyDiscount.isPending}
+              onClick={submitDiscount}
+              disabled={
+                applyDiscount.isPending ||
+                (previewDiscount > 0 && discountNeedsPin && discountPin.length < DELETE_PIN_LENGTH)
+              }
             >
               {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
             </Button>
@@ -901,6 +1013,22 @@ function SentItemRow({
   const { t, lang } = useI18n()
   const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
   const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+  // R8: selected options sub-line (localized names + deltas). The product
+  // sub-object may carry allergens via ORDER_INCLUDE (raw JSON column or a
+  // parsed array) — a local cast + parse keeps the shared type untouched.
+  const mods = item.selectedModifiers ?? []
+  const rawAllergens =
+    (item.product as { allergens?: string[] | string | null } | null)?.allergens ?? []
+  let allergens: string[] = []
+  if (Array.isArray(rawAllergens)) allergens = rawAllergens
+  else {
+    try {
+      const parsed: unknown = JSON.parse(rawAllergens)
+      if (Array.isArray(parsed)) allergens = parsed.map(String)
+    } catch {
+      // invalid JSON — no badges
+    }
+  }
   // Partial-quantity stepper: only for selected rows holding more than 1 unit.
   const showMoveQty = moveMode && moveSelected && item.quantity > 1
   const qty = moveQty ?? item.quantity
@@ -944,6 +1072,51 @@ function SentItemRow({
               ? localizedName(item.product.name, item.product.nameAr, lang)
               : t('pos.item')}
           </p>
+          {mods.length > 0 && (
+            <p
+              className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+              title={mods.map((m) => localizedName(m.name, m.nameAr, lang)).join(', ')}
+            >
+              {mods.map((m, i) => (
+                <span
+                  key={`${m.id}-${i}`}
+                  className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4"
+                >
+                  {localizedName(m.name, m.nameAr, lang)}
+                  {m.priceDelta !== 0 && (
+                    <span
+                      className={cn(
+                        'ms-0.5 font-semibold',
+                        m.priceDelta > 0 ? 'text-emerald-700' : 'text-rose-600',
+                      )}
+                    >
+                      {modifierDeltaLabel(m.priceDelta)}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
+          {allergens.length > 0 && (
+            <p
+              className="mt-0.5 flex flex-wrap items-center gap-1"
+              title={allergens.map((a) => t(`allergen.${a}`)).join(', ')}
+            >
+              {allergens.slice(0, 2).map((a) => (
+                <span
+                  key={`al-${a}`}
+                  className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+                >
+                  {t(`allergen.${a}`)}
+                </span>
+              ))}
+              {allergens.length > 2 && (
+                <span className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700">
+                  +{allergens.length - 2}
+                </span>
+              )}
+            </p>
+          )}
           {item.notes && (
             <p className="flex items-center gap-1 truncate text-xs text-amber-600">
               <StickyNote className="size-3 shrink-0" />
@@ -1043,6 +1216,7 @@ function DraftRow({
   onRemove: () => void
 }) {
   const { t, lang } = useI18n()
+  const unit = lineUnitPrice(item)
   return (
     <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
       <div className="flex shrink-0 items-center gap-1">
@@ -1066,10 +1240,38 @@ function DraftRow({
           <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
           {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
         </p>
-        <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+        {item.modifiers?.length ? (
+          <p
+            className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+            title={item.modifiers
+              .map((m) => localizedName(m.name, m.nameAr, lang))
+              .join(', ')}
+          >
+            {item.modifiers.map((m, i) => (
+              <span
+                key={`${m.id}-${i}`}
+                className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4"
+              >
+                {localizedName(m.name, m.nameAr, lang)}
+                {m.priceDelta !== 0 && (
+                  <span
+                    className={cn(
+                      'ms-0.5 font-semibold',
+                      m.priceDelta > 0 ? 'text-emerald-700' : 'text-rose-600',
+                    )}
+                  >
+                    {modifierDeltaLabel(m.priceDelta)}
+                  </span>
+                )}
+              </span>
+            ))}
+          </p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+        )}
       </button>
       <span className="shrink-0 text-sm font-semibold tabular-nums">
-        {formatCurrency(round2(item.quantity * item.price))}
+        {formatCurrency(round2(item.quantity * unit))}
       </span>
       <Button
         variant="ghost"

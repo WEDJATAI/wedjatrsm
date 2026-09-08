@@ -124,6 +124,57 @@ export function KitchenOrderCard({
                     ? localizedName(item.product.name, item.product.nameAr, lang)
                     : t('kds.item')}
                 </span>
+                {/* R8: selected options — bold amber so the line sees them fast */}
+                {item.selectedModifiers?.length ? (
+                  <span
+                    className="min-w-0 max-w-full truncate text-xs font-semibold text-amber-300"
+                    title={item.selectedModifiers
+                      .map((m) => localizedName(m.name, m.nameAr, lang))
+                      .join(', ')}
+                  >
+                    •{' '}
+                    {item.selectedModifiers
+                      .map((m) => localizedName(m.name, m.nameAr, lang))
+                      .join(', ')}
+                  </span>
+                ) : null}
+                {/* R8: allergen warning chips — the product sub-object may
+                    carry `allergens` via ORDER_INCLUDE (raw JSON column or a
+                    parsed array); a local cast + parse keeps the shared
+                    OrderItem type untouched. */}
+                {(() => {
+                  const rawAllergens =
+                    (item.product as { allergens?: string[] | string | null } | null)
+                      ?.allergens ?? []
+                  let allergens: string[] = []
+                  if (Array.isArray(rawAllergens)) allergens = rawAllergens
+                  else {
+                    try {
+                      const parsed: unknown = JSON.parse(rawAllergens)
+                      if (Array.isArray(parsed)) allergens = parsed.map(String)
+                    } catch {
+                      // invalid JSON — no badges
+                    }
+                  }
+                  if (allergens.length === 0) return null
+                  return (
+                    <span
+                      className="flex min-w-0 flex-wrap items-center gap-1"
+                      title={`${t('kds.allergens')}: ${allergens
+                        .map((a) => t(`allergen.${a}`))
+                        .join(', ')}`}
+                    >
+                      {allergens.map((a) => (
+                        <span
+                          key={`al-${a}`}
+                          className="rounded border border-rose-500/40 bg-rose-500/15 px-1 py-0 text-[10px] font-semibold leading-4 text-rose-300"
+                        >
+                          {t(`allergen.${a}`)}
+                        </span>
+                      ))}
+                    </span>
+                  )
+                })()}
                 {item.notes ? (
                   <span
                     className="flex min-w-0 items-center gap-1 text-amber-300/90"

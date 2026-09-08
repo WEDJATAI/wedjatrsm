@@ -38,7 +38,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError('payments must be a non-empty array', 400)
     }
 
-    const rows: { method: string; amount: number; reference: string | null }[] = []
+    const rows: { method: string; amount: number; tip: number; reference: string | null }[] = []
     for (const raw of payments) {
       const method = String(raw?.method ?? '')
       if (!(PAYMENT_METHODS as readonly string[]).includes(method)) {
@@ -48,9 +48,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       if (!Number.isFinite(amount) || amount <= 0) {
         throw new ApiError('Payment amounts must be greater than zero', 400)
       }
+      // R8: optional gratuity ON TOP of the bill. Persisted on the payment
+      // row but NEVER counted toward paidAmount / the close-if-fully-paid
+      // check (that logic sums `amount` only, untouched below).
+      const tip = raw?.tip == null ? 0 : Number(raw.tip)
+      if (!Number.isFinite(tip) || tip < 0) {
+        throw new ApiError('Payment tips must be zero or greater', 400)
+      }
       rows.push({
         method,
         amount,
+        tip: round2(tip),
         reference: raw?.reference == null ? null : String(raw.reference),
       })
     }
@@ -74,6 +82,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         orderId,
         method: p.method,
         amount: p.amount,
+        tip: p.tip,
         reference: p.reference,
       })),
     })
@@ -86,7 +95,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       entity: 'order',
       entityId: orderId,
       details: `EGP ${round2(rows.reduce((sum, p) => sum + p.amount, 0)).toFixed(2)} (${rows
-        .map((p) => `${p.method} ${round2(p.amount).toFixed(2)}`)
+        .map(
+          (p) =>
+            `${p.method} ${round2(p.amount).toFixed(2)}${
+              p.tip > 0 ? ` (tip EGP ${round2(p.tip).toFixed(2)})` : ''
+            }`,
+        )
         .join(', ')}) on order #${orderId}${closed ? ' — closed' : ''}`,
     })
     if (wasDeferred && closed) {

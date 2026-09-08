@@ -19,7 +19,8 @@ import type { LucideIcon } from 'lucide-react'
 import { apiFetch, fetcher } from '@/lib/api'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
-import type { Category, Product } from '@/lib/types'
+import { ALLERGENS, DIETARY_TAGS } from '@/lib/constants'
+import type { Category, ModifierGroupDTO, Product } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -33,6 +34,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -82,6 +84,9 @@ type ProductForm = {
   imageUrl: string
   lowStockThreshold: string
   stock: string // create only
+  allergens: string[] // R8: allergen tag keys
+  dietary: string[] // R8: dietary tag keys
+  modifierGroupIds: number[] // R8: attached option groups
 }
 
 type ProductFormErrors = Partial<
@@ -100,6 +105,9 @@ const EMPTY_PRODUCT_FORM: ProductForm = {
   imageUrl: '',
   lowStockThreshold: '10',
   stock: '',
+  allergens: [],
+  dietary: [],
+  modifierGroupIds: [],
 }
 
 function toProductForm(p: Product): ProductForm {
@@ -115,6 +123,9 @@ function toProductForm(p: Product): ProductForm {
     imageUrl: p.imageUrl ?? '',
     lowStockThreshold: String(p.lowStockThreshold),
     stock: String(p.stock),
+    allergens: p.allergens ?? [],
+    dietary: p.dietary ?? [],
+    modifierGroupIds: (p.modifierGroups ?? []).map((g) => g.id),
   }
 }
 
@@ -259,6 +270,101 @@ function MissingArBadge({ label }: { label: string }) {
   )
 }
 
+// ─── R8: allergen / dietary tag chips + list badges ─────────────────
+
+const ALLERGEN_CHIP_SELECTED =
+  'border-rose-600/50 bg-rose-50 text-rose-700 dark:border-rose-500/50 dark:bg-rose-500/10 dark:text-rose-400'
+const DIETARY_CHIP_SELECTED =
+  'border-emerald-600/50 bg-emerald-50 text-emerald-700 dark:border-emerald-500/50 dark:bg-emerald-500/10 dark:text-emerald-400'
+
+/** Toggleable tag chip (form) — selected = filled outline, unselected = muted outline. */
+function TagChip({
+  label,
+  selected,
+  tone,
+  onToggle,
+}: {
+  label: string
+  selected: boolean
+  tone: 'warning' | 'success'
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={selected}
+      className={cn(
+        'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
+        selected
+          ? tone === 'warning'
+            ? ALLERGEN_CHIP_SELECTED
+            : DIETARY_CHIP_SELECTED
+          : 'text-muted-foreground hover:bg-muted/50',
+      )}
+    >
+      {label}
+    </button>
+  )
+}
+
+/** Compact allergen + dietary badges on product rows — max 2 each, then "+n". */
+function ProductTagBadges({
+  product,
+  t,
+}: {
+  product: Product
+  t: (key: string) => string
+}) {
+  const allergens = product.allergens ?? []
+  const dietary = product.dietary ?? []
+  if (allergens.length === 0 && dietary.length === 0) return null
+  const extraAllergens = allergens.slice(2)
+  const extraDietary = dietary.slice(2)
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {allergens.slice(0, 2).map((a) => (
+        <Badge
+          key={a}
+          variant="outline"
+          className="h-5 border-rose-600/30 px-1.5 text-[10px] font-medium text-rose-700 dark:border-rose-500/30 dark:text-rose-400"
+        >
+          {t(`allergen.${a}`)}
+        </Badge>
+      ))}
+      {extraAllergens.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="h-5 border-rose-600/30 px-1.5 text-[10px] font-medium text-rose-700 dark:border-rose-500/30 dark:text-rose-400">
+              +{extraAllergens.length}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>{extraAllergens.map((a) => t(`allergen.${a}`)).join(', ')}</TooltipContent>
+        </Tooltip>
+      )}
+      {dietary.slice(0, 2).map((d) => (
+        <Badge
+          key={d}
+          variant="outline"
+          className="h-5 border-emerald-600/30 px-1.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-500/30 dark:text-emerald-400"
+        >
+          {t(`dietary.${d}`)}
+        </Badge>
+      ))}
+      {extraDietary.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="h-5 border-emerald-600/30 px-1.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-500/30 dark:text-emerald-400">
+              +{extraDietary.length}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>{extraDietary.map((d) => t(`dietary.${d}`)).join(', ')}</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
 /** Product display name — Arabic primary when the UI is Arabic (falls back to English). */
 function ProductDisplayName({
   product,
@@ -346,6 +452,19 @@ export default function ProductsView() {
     queryFn: () => fetcher<{ categories: Category[] }>('/api/categories?all=1'),
   })
 
+  const modifierGroupsQuery = useQuery({
+    queryKey: ['modifier-groups'],
+    queryFn: () => fetcher<{ groups: ModifierGroupDTO[] }>('/api/modifier-groups'),
+  })
+
+  const activeModifierGroups = useMemo(
+    () =>
+      [...(modifierGroupsQuery.data?.groups ?? [])]
+        .filter((g) => g.active)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id),
+    [modifierGroupsQuery.data],
+  )
+
   const categories = useMemo(
     () =>
       [...(categoriesQuery.data?.categories ?? [])].sort(
@@ -379,6 +498,14 @@ export default function ProductsView() {
         cost: form.cost.trim() === '' ? 0 : Number(form.cost),
         isSellable: form.isSellable,
         isStockable: form.isStockable,
+        allergens: form.allergens,
+        dietary: form.dietary,
+        // sorted by the group's display order when the list is loaded
+        modifierGroupIds: [...form.modifierGroupIds].sort(
+          (a, b) =>
+            (activeModifierGroups.find((g) => g.id === a)?.sortOrder ?? a) -
+            (activeModifierGroups.find((g) => g.id === b)?.sortOrder ?? b),
+        ),
       }
       if (form.categoryId !== '') payload.categoryId = Number(form.categoryId)
       if (form.sku.trim() !== '') payload.sku = form.sku.trim()
@@ -399,6 +526,8 @@ export default function ProductsView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['products'] })
+      // attachments changed → group product counts are stale
+      void queryClient.invalidateQueries({ queryKey: ['modifier-groups'] })
       toast.success(editing === null ? t('admin.productCreated') : t('admin.productUpdated'))
       setFormOpen(false)
     },
@@ -426,6 +555,31 @@ export default function ProductsView() {
     setEditing(product)
     setForm(toProductForm(product))
     setFormOpen(true)
+  }
+
+  // R8 form toggles
+  function toggleTag(
+    key: 'allergens' | 'dietary',
+    value: string,
+  ) {
+    setForm((f) => {
+      const current = f[key]
+      return {
+        ...f,
+        [key]: current.includes(value)
+          ? current.filter((v) => v !== value)
+          : [...current, value],
+      }
+    })
+  }
+
+  function toggleModifierGroup(id: number, checked: boolean) {
+    setForm((f) => ({
+      ...f,
+      modifierGroupIds: checked
+        ? [...f.modifierGroupIds, id]
+        : f.modifierGroupIds.filter((v) => v !== id),
+    }))
   }
 
   const hasActiveFilters = search.trim() !== '' || categoryFilter !== 'all'
@@ -565,6 +719,7 @@ export default function ProductsView() {
                           {p.sku ? (
                             <div className="font-mono text-muted-foreground text-xs">{p.sku}</div>
                           ) : null}
+                          <ProductTagBadges product={p} t={t} />
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           {p.category ? (
@@ -651,6 +806,7 @@ export default function ProductsView() {
                       )}
                       {p.sku ? <span className="font-mono">{p.sku}</span> : null}
                     </div>
+                    <ProductTagBadges product={p} t={t} />
                   </div>
                   <div className="shrink-0 text-end font-medium tabular-nums">
                     {formatCurrency(p.price)}
@@ -852,6 +1008,84 @@ export default function ProductsView() {
                 )}
               </div>
             )}
+
+            {/* R8: option groups offered with this product */}
+            <div className="grid gap-2">
+              <Label>{t('admin.attachGroups')}</Label>
+              <p className="text-muted-foreground text-xs">{t('admin.attachGroupsHint')}</p>
+              <div className="rms-scroll max-h-48 overflow-y-auto rounded-lg border p-1">
+                {modifierGroupsQuery.isLoading ? (
+                  <div className="space-y-1 p-1">
+                    <Skeleton className="h-11 w-full" />
+                    <Skeleton className="h-11 w-full" />
+                  </div>
+                ) : activeModifierGroups.length === 0 ? (
+                  <p className="p-3 text-center text-muted-foreground text-sm">
+                    {t('admin.noGroupsAvailable')}
+                  </p>
+                ) : (
+                  activeModifierGroups.map((g) => (
+                    <label
+                      key={g.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-md p-2.5 hover:bg-muted/50"
+                    >
+                      <Checkbox
+                        checked={form.modifierGroupIds.includes(g.id)}
+                        onCheckedChange={(checked) => toggleModifierGroup(g.id, checked === true)}
+                        aria-label={g.name}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">
+                          {localizedName(g.name, g.nameAr, lang)}
+                        </span>
+                        <span className="block truncate text-muted-foreground text-xs">
+                          {g.minSelect >= 1 ? t('admin.requiredGroup') : t('admin.optionalGroup')} ·{' '}
+                          {g.maxSelect === 1
+                            ? t('admin.pickOne')
+                            : t('admin.pickUpTo', { n: g.maxSelect })}
+                        </span>
+                      </span>
+                      <Badge variant="outline" className="shrink-0 text-muted-foreground">
+                        {t('admin.attachedProducts', { n: g.productCount ?? 0 })}
+                      </Badge>
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* R8: allergens (warning chips) */}
+            <div className="grid gap-2">
+              <Label>{t('admin.allergens')}</Label>
+              <p className="text-muted-foreground text-xs">{t('admin.tagsHint')}</p>
+              <div className="flex flex-wrap gap-2">
+                {ALLERGENS.map((a) => (
+                  <TagChip
+                    key={a}
+                    label={t(`allergen.${a}`)}
+                    selected={form.allergens.includes(a)}
+                    tone="warning"
+                    onToggle={() => toggleTag('allergens', a)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* R8: dietary tags (green chips) */}
+            <div className="grid gap-2">
+              <Label>{t('admin.dietary')}</Label>
+              <div className="flex flex-wrap gap-2">
+                {DIETARY_TAGS.map((d) => (
+                  <TagChip
+                    key={d}
+                    label={t(`dietary.${d}`)}
+                    selected={form.dietary.includes(d)}
+                    tone="success"
+                    onToggle={() => toggleTag('dietary', d)}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
 
           <DialogFooter>

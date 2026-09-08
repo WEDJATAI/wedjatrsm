@@ -70,6 +70,12 @@ export type Product = {
   active: boolean
   lowStockThreshold: number
   stock: number
+  /** R8: parsed allergen tag keys (['gluten','dairy']…) — null when unset */
+  allergens?: string[] | null
+  /** R8: parsed dietary tag keys (['vegetarian']…) — null when unset */
+  dietary?: string[] | null
+  /** R8: option groups offered with this product (POS list endpoints) */
+  modifierGroups?: ModifierGroupDTO[]
 }
 
 export type RestaurantTable = {
@@ -114,6 +120,8 @@ export type OrderItem = {
   notes: string | null
   course: 'starter' | 'main' | 'dessert' | 'drink' | string
   status: 'new' | 'preparing' | 'ready' | 'served' | string
+  /** R8: selected options snapshot (name/priceDelta recorded at order time) */
+  selectedModifiers?: SelectedModifier[] | null
   createdAt: string
 }
 
@@ -122,6 +130,8 @@ export type Payment = {
   orderId: number
   method: 'cash' | 'card' | 'other' | string
   amount: number
+  /** R8: gratuity on top of the billed amount (not counted in paidAmount) */
+  tip?: number
   reference: string | null
   createdAt: string
 }
@@ -139,6 +149,8 @@ export type Order = {
   taxAmount: number
   /** 12% service tax (in addition to the 14% VAT) */
   serviceTaxAmount: number
+  /** R8: manager-approved discount justification */
+  discountReason?: string | null
   /** client name for deferred checks (pay later) */
   clientName: string | null
   /** extra table ids joined to this order (merged seating from the beginning) */
@@ -204,6 +216,122 @@ export type InventoryValueReport = {
   lowStockCount: number
 }
 
+// ─── R8: modifier groups (item options) ─────────────
+
+/** one option row inside a group */
+export type ModifierOptionDTO = {
+  id: number
+  name: string
+  nameAr?: string | null
+  priceDelta: number
+  active: boolean
+  sortOrder: number
+}
+
+/** a group with its options, as returned by the modifier-group APIs */
+export type ModifierGroupDTO = {
+  id: number
+  name: string
+  nameAr?: string | null
+  minSelect: number
+  maxSelect: number
+  active: boolean
+  sortOrder: number
+  modifiers: ModifierOptionDTO[]
+  /** attached product count (admin list endpoint) */
+  productCount?: number
+}
+
+/** snapshot stored on an order item (JSON column selected_modifiers) */
+export type SelectedModifier = {
+  id: number
+  name: string
+  nameAr?: string | null
+  priceDelta: number
+}
+
+// ─── R8: cash drawer sessions ───────────────────────
+
+export type CashDrawerEntryDTO = {
+  id: number
+  sessionId: number
+  type: 'paid_in' | 'paid_out' | string
+  amount: number
+  note: string | null
+  userId: number | null
+  user?: { id: number; name: string } | null
+  createdAt: string
+}
+
+export type CashDrawerSessionDTO = {
+  id: number
+  user?: { id: number; name: string } | null
+  openingFloat: number
+  openedAt: string
+  closedAt: string | null
+  countedCash: number | null
+  expectedCash: number | null
+  variance: number | null
+  note: string | null
+  entries?: CashDrawerEntryDTO[]
+}
+
+export type CashDrawerStatus = {
+  active: CashDrawerSessionDTO | null
+  expected: {
+    openingFloat: number
+    cashSales: number
+    cashTips: number
+    paidIn: number
+    paidOut: number
+    total: number
+  } | null
+  recentSessions: CashDrawerSessionDTO[]
+}
+
+// ─── R8: server shift report (My shift) ─────────────
+
+export type MyShiftReport = {
+  userId: number
+  userName: string
+  /** total of orders opened by this user today (paid + open, pre-discount totals) */
+  salesTotal: number
+  /** totalAmount of PAID orders opened today */
+  paidTotal: number
+  ordersCount: number
+  paidOrdersCount: number
+  openChecksCount: number
+  openValue: number
+  tipsTotal: number
+  avgCheck: number
+  byMethod: { method: string; amount: number; count: number; tip: number }[]
+}
+
+// ─── R8: menu engineering (reports) ─────────────────
+
+export type MenuItemStat = {
+  productId: number
+  name: string
+  nameAr?: string | null
+  soldQty: number
+  revenue: number
+  /** Σ qty × (unitPrice − product.cost) — approximate food profit */
+  profit: number
+  /** profit / revenue (0..1); 0 when revenue is 0 */
+  margin: number
+  /** share of total quantity sold (0..1) */
+  popularity: number
+  classification: 'star' | 'plowhorse' | 'puzzle' | 'dog'
+}
+
+export type MenuEngineeringReport = {
+  periodDays: number
+  totalSoldQty: number
+  avgMargin: number
+  avgPopularity: number
+  items: MenuItemStat[]
+}
+
 // ─── Request payload types ──────────────────────────
 
 export type NewOrderItemPayload = {
@@ -211,11 +339,15 @@ export type NewOrderItemPayload = {
   quantity: number
   notes?: string
   course?: string
+  /** R8: selected option snapshots (validated server-side) */
+  selectedModifiers?: SelectedModifier[]
 }
 
 export type NewPaymentPayload = {
   method: string
   amount: number
+  /** R8: gratuity on top of the billed amount */
+  tip?: number
   reference?: string
 }
 
@@ -256,7 +388,9 @@ export type ZReport = {
   paymentsTotal: number
   deferredSettled: number
   deferredOutstanding: number
-  byWaiter: { userId: number | null; name: string; orders: number; net: number }[]
+  byWaiter: { userId: number | null; name: string; orders: number; net: number; tips?: number }[]
+  /** R8: gratuity totals for the day */
+  tips: { total: number; cash: number; card: number; other: number }
 }
 
 // ─── Backups ────────────────────────────────────────

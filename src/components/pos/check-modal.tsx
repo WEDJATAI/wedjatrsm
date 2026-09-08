@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
-import { bilingualLabel, bothLabels, localizedName, useI18n } from '@/lib/i18n'
+import { bilingualLabel, bothLabels, localizedName, useI18n, type Lang } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
@@ -95,7 +95,15 @@ type CheckModel = {
   tableName: string
   waiter: string
   date: string
-  items: { qty: string; name: string; nameAr: string | null; total: number; notes: string | null }[]
+  items: {
+    qty: string
+    name: string
+    nameAr: string | null
+    total: number
+    notes: string | null
+    /** R8: selected options (localized names) shown as sub-lines */
+    mods: string | null
+  }[]
   subtotal: number
   discount: number
   /** 14% VAT */
@@ -123,6 +131,7 @@ function buildCheckModel(
     rows: CheckSplitRow[] | undefined
     eqPayers: number
     selectedIds: Set<number>
+    lang: Lang
   },
 ): CheckModel {
   // Paper item lines are bilingual: English primary + Arabic secondary.
@@ -146,6 +155,12 @@ function buildCheckModel(
       nameAr: nameAr && nameAr !== name ? nameAr : null,
       total: round2(it.quantity * it.unitPrice),
       notes: it.notes,
+      mods:
+        it.selectedModifiers && it.selectedModifiers.length > 0
+          ? it.selectedModifiers
+              .map((m) => localizedName(m.name, m.nameAr, opts.lang))
+              .join(', ')
+          : null,
     }
   })
   const orderSubtotal = round2(order.subtotalAmount)
@@ -250,6 +265,7 @@ function buildCheckHtml(
   for (const it of m.items) {
     lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
     if (it.nameAr) lines.push(`<p class="ar" dir="rtl">${escapeHtml(it.nameAr)}</p>`)
+    if (it.mods) lines.push(`<p class="note">  + ${escapeHtml(it.mods)}</p>`)
     if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
   }
   lines.push(dashed)
@@ -318,6 +334,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
     rows,
     eqPayers,
     selectedIds,
+    lang,
   })
 
   const clampPayers = (raw: number) => {
@@ -518,6 +535,14 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                               {it.product
                                 ? localizedName(it.product.name, it.product.nameAr, lang)
                                 : t('pos.item')}
+                              {it.selectedModifiers?.length ? (
+                                <span className="ms-1 text-xs text-muted-foreground">
+                                  +{' '}
+                                  {it.selectedModifiers
+                                    .map((m) => localizedName(m.name, m.nameAr, lang))
+                                    .join(', ')}
+                                </span>
+                              ) : null}
                             </span>
                             <span className="shrink-0 tabular-nums">
                               {formatCurrency(round2(it.quantity * it.unitPrice))}
@@ -572,6 +597,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                       {it.nameAr}
                     </p>
                   )}
+                  {it.mods && <p className="ps-3 text-[10px] text-stone-500">+ {it.mods}</p>}
                   {it.notes && <p className="ps-3 text-[10px] text-stone-500">* {it.notes}</p>}
                 </div>
               ))}

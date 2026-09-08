@@ -16,6 +16,30 @@ import {
 
 type Ctx = { params: Promise<{ id: string }> }
 
+/** Fire-and-forget audit row for manager-approved discounts (R8).
+ *  ('order.discount' is not in lib/audit's AUDIT_ACTIONS union and that
+ *  file is outside R8-b ownership — same direct-row approach as R8-a.) */
+async function logDiscountAudit(
+  user: { userId?: number; name?: string },
+  orderId: number,
+  details: string,
+): Promise<void> {
+  try {
+    await db.auditLog.create({
+      data: {
+        userId: user.userId ?? null,
+        userName: user.name ?? 'system',
+        action: 'order.discount',
+        entity: 'order',
+        entityId: orderId,
+        details,
+      },
+    })
+  } catch (err) {
+    console.error('[audit-log] failed to record order.discount', err)
+  }
+}
+
 export async function GET(req: NextRequest, ctx: Ctx) {
   try {
     await requireAuth(req)
@@ -36,7 +60,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     const existing = await db.order.findUnique({
       where: { id: orderId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, discountAmount: true },
     })
     if (!existing) throw new ApiError('Order not found', 404)
     if (existing.status !== 'open') {
@@ -61,6 +85,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
           notes: item.notes,
           course: item.course,
           status: 'new',
+          // R8: option snapshot (validated server-side by validateOrderItems)
+          selectedModifiers: item.selectedModifiers
+            ? JSON.stringify(item.selectedModifiers)
+            : undefined,
         })),
       })
     }
@@ -144,13 +172,49 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       }
     }
 
-    // Absolute discount in EGP (clamped to subtotal inside recomputeTotals)
+    // Absolute discount in EGP (clamped to subtotal inside recomputeTotals).
+    // R8: manager-approved discounts — whenever the resulting amount is > 0
+    // a reason (≥ 2 chars) is required and non-admin users must supply the
+    // manager 6-digit PIN (AppSetting 'deleteItemPin', same as item
+    // deletion). Removing a discount (0) needs neither.
     if (discountAmount != null) {
       const discount = Number(discountAmount)
       if (!Number.isFinite(discount) || discount < 0) {
         throw new ApiError('Discount amount must be a non-negative number', 400)
       }
-      await db.order.update({ where: { id: orderId }, data: { discountAmount: discount } })
+      const reason = body?.discountReason == null ? '' : String(body.discountReason).trim()
+      if (discount > 0 && reason.length < 2) {
+        throw new ApiError('A discount reason of at least 2 characters is required', 400)
+      }
+      const pinApproved = discount > 0 && user.role !== 'admin'
+      if (pinApproved) {
+        const pin = typeof body?.approvalPin === 'string' ? body.approvalPin : ''
+        if (!/^\d{6}$/.test(pin)) {
+          throw new ApiError('Manager PIN required', 403)
+        }
+        const pinRow = await db.appSetting.findUnique({ where: { key: DELETE_PIN_KEY } })
+        if (!pinRow || pinRow.value !== pin) {
+          throw new ApiError('Invalid manager PIN', 403)
+        }
+      }
+      await db.order.update({
+        where: { id: orderId },
+        data: {
+          discountAmount: discount,
+          discountReason: discount > 0 ? reason : null,
+        },
+      })
+      if (discount > 0) {
+        await logDiscountAudit(
+          user,
+          orderId,
+          `EGP ${discount.toFixed(2)} discount on order #${orderId} — ${reason}${
+            pinApproved ? ' (manager PIN verified)' : ' (admin)'
+          }`,
+        )
+      } else if ((existing?.discountAmount ?? 0) > 0) {
+        await logDiscountAudit(user, orderId, `Discount removed from order #${orderId}`)
+      }
     }
 
     // Number of guests seated on this order (integer 1-30)

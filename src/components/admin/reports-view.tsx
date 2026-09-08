@@ -11,13 +11,17 @@ import {
   CalendarDays,
   CalendarRange,
   CircleDollarSign,
+  Dog,
+  Flame,
   HandCoins,
   Hourglass,
   Info,
+  Lightbulb,
   Percent,
   Printer,
   Receipt,
   ReceiptText,
+  Star,
   TrendingUp,
   Users,
   Wallet,
@@ -36,9 +40,15 @@ import {
   YAxis,
 } from 'recharts'
 import { fetcher } from '@/lib/api'
-import type { InventoryValueReport, SalesReport, ZReport } from '@/lib/types'
+import type {
+  InventoryValueReport,
+  MenuEngineeringReport,
+  SalesReport,
+  ZReport,
+} from '@/lib/types'
 import { formatCurrency, formatDate, formatLocale, toDateInputValue } from '@/lib/format'
-import { useI18n } from '@/lib/i18n'
+import { localizedName, useI18n } from '@/lib/i18n'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -277,6 +287,10 @@ function ZReportSection() {
   const report = zreportQuery.data?.report
   const noData = report != null && report.ordersClosed === 0 && report.paymentsTotal === 0
   const paymentsCount = (report?.paymentsByMethod ?? []).reduce((sum, m) => sum + m.count, 0)
+  // R8: gratuity totals — 0 is a valid value (renders until the Z route
+  // aggregates real tips); per-method lines only when a method took tips.
+  const tips = report?.tips ?? { total: 0, cash: 0, card: 0, other: 0 }
+  const tipMethods = (['cash', 'card', 'other'] as const).filter((m) => tips[m] > 0)
 
   function handlePrint() {
     if (!report) return
@@ -414,7 +428,7 @@ function ZReportSection() {
 
             {/* Payments by method + deferred chips · Sales by waiter */}
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card className="gap-2 p-4">
+              <Card className="min-w-0 gap-2 p-4">
                 <p className="text-sm font-semibold">{t('admin.zreportPayments')}</p>
                 {report.paymentsByMethod.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">—</p>
@@ -470,9 +484,39 @@ function ZReportSection() {
                     </div>
                   </div>
                 </div>
+
+                {/* R8: tips for the day (total + per method when any) */}
+                <div className="flex flex-wrap items-center gap-3 border-t pt-4">
+                  <div className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-400">
+                    <HandCoins className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                    <div>
+                      <p className="text-xs font-medium">{t('admin.tipsTotal')}</p>
+                      <p className="text-sm font-bold tabular-nums">
+                        {formatCurrency(tips.total)}
+                      </p>
+                    </div>
+                  </div>
+                  {tipMethods.length > 0 ? (
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        {t('admin.tipsByMethod')}
+                      </p>
+                      {tipMethods.map((m) => (
+                        <p key={m} className="flex items-center justify-between gap-3 text-sm">
+                          <span className="text-muted-foreground">
+                            {t(`status.payment.${m}`)}
+                          </span>
+                          <span className="font-medium tabular-nums">
+                            {formatCurrency(tips[m])}
+                          </span>
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </Card>
 
-              <Card className="gap-2 p-4">
+              <Card className="min-w-0 gap-2 p-4">
                 <p className="text-sm font-semibold">{t('admin.zreportByWaiter')}</p>
                 {report.byWaiter.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">—</p>
@@ -483,6 +527,7 @@ function ZReportSection() {
                         <TableHead>{t('common.name')}</TableHead>
                         <TableHead className="text-end">{t('admin.zreportWaiterOrders')}</TableHead>
                         <TableHead className="text-end">{t('money.revenue')}</TableHead>
+                        <TableHead className="text-end">{t('admin.tipsTotal')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -493,6 +538,9 @@ function ZReportSection() {
                           <TableCell className="text-end tabular-nums">
                             {formatCurrency(w.net)}
                           </TableCell>
+                          <TableCell className="text-end tabular-nums">
+                            {formatCurrency(w.tips ?? 0)}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -502,6 +550,233 @@ function ZReportSection() {
             </div>
           </div>
         ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Menu engineering (Kasavana-Smith quadrants, R8) ───────────────
+
+const MENU_ENG_PERIODS = [7, 30, 90] as const
+
+type Classification = MenuEngineeringReport['items'][number]['classification']
+
+const CLASS_LABEL: Record<Classification, string> = {
+  star: 'admin.stars',
+  plowhorse: 'admin.plowhorses',
+  puzzle: 'admin.puzzles',
+  dog: 'admin.dogs',
+}
+
+const CLASS_CHIP_CLASS: Record<Classification, string> = {
+  star: 'border-amber-600/40 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400',
+  plowhorse:
+    'border-emerald-600/40 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-400',
+  puzzle: 'border-primary/40 bg-primary/10 text-primary',
+  dog: 'border-rose-600/40 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-400',
+}
+
+function MenuEngineeringSection() {
+  const { t, lang } = useI18n()
+  const [days, setDays] = useState<number>(7)
+
+  const menuEngQuery = useQuery({
+    queryKey: ['menu-engineering', days],
+    queryFn: () =>
+      fetcher<{ report: MenuEngineeringReport }>(`/api/reports/menu-engineering?days=${days}`),
+  })
+
+  const report = menuEngQuery.data?.report
+  const items = report?.items ?? []
+
+  const counts = useMemo(() => {
+    const c: Record<Classification, number> = { star: 0, plowhorse: 0, puzzle: 0, dog: 0 }
+    for (const item of items) c[item.classification] += 1
+    return c
+  }, [items])
+
+  const quadrants: {
+    key: Classification
+    label: string
+    desc: string
+    icon: typeof Star
+    iconClass: string
+    borderClass: string
+  }[] = [
+    {
+      key: 'star',
+      label: t('admin.stars'),
+      desc: t('admin.starsDesc'),
+      icon: Star,
+      iconClass: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400',
+      borderClass: 'border-amber-500/40',
+    },
+    {
+      key: 'plowhorse',
+      label: t('admin.plowhorses'),
+      desc: t('admin.plowDesc'),
+      icon: Flame,
+      iconClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400',
+      borderClass: 'border-emerald-600/30',
+    },
+    {
+      key: 'puzzle',
+      label: t('admin.puzzles'),
+      desc: t('admin.puzzleDesc'),
+      icon: Lightbulb,
+      iconClass: 'bg-primary/15 text-primary',
+      borderClass: 'border-primary/30',
+    },
+    {
+      key: 'dog',
+      label: t('admin.dogs'),
+      desc: t('admin.dogsDesc'),
+      icon: Dog,
+      iconClass: 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400',
+      borderClass: 'border-rose-600/30',
+    },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('admin.menuEngTitle')}</CardTitle>
+        <CardDescription>{t('admin.menuEngSubtitle')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Period chips + menu averages */}
+        <div className="flex flex-wrap items-center gap-2">
+          {MENU_ENG_PERIODS.map((p) => (
+            <Button
+              key={p}
+              variant={days === p ? 'default' : 'outline'}
+              size="sm"
+              className="h-9"
+              onClick={() => setDays(p)}
+            >
+              {t('admin.daysAgo', { n: p })}
+            </Button>
+          ))}
+          {report ? (
+            <p className="ms-auto text-xs text-muted-foreground tabular-nums">
+              {t('admin.soldQty')}: {report.totalSoldQty} · {t('money.margin')}:{' '}
+              {Math.round(report.avgMargin * 100)}% · {t('admin.popularity')}:{' '}
+              {(report.avgPopularity * 100).toFixed(1)}%
+            </p>
+          ) : null}
+        </div>
+
+        {menuEngQuery.isError ? (
+          <div className="flex flex-col items-start gap-3 py-2">
+            <p className="text-sm text-rose-600">
+              {(menuEngQuery.error as Error | null)?.message ?? t('common.error')}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void menuEngQuery.refetch()}
+            >
+              {t('common.retry')}
+            </Button>
+          </div>
+        ) : menuEngQuery.isLoading ? (
+          <div className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              {Array.from({ length: 4 }, (_, i) => (
+                <Skeleton key={i} className="h-24 rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-64 w-full rounded-xl" />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="flex h-[240px] flex-col items-center justify-center gap-2 text-center">
+            <BarChart3 className="size-8 text-muted-foreground/40" aria-hidden />
+            <p className="text-sm text-muted-foreground">{t('admin.menuEngEmpty')}</p>
+          </div>
+        ) : (
+          <>
+            {/* Quadrant summary — 2×2 on sm+ */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {quadrants.map((q) => (
+                <div
+                  key={q.key}
+                  className={`flex items-start gap-3 rounded-xl border ${q.borderClass} p-4`}
+                >
+                  <div className={`grid size-9 shrink-0 place-items-center rounded-lg ${q.iconClass}`}>
+                    <q.icon className="size-4.5" aria-hidden />
+                  </div>
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="flex items-baseline gap-2">
+                      <span className="text-2xl font-bold leading-none tabular-nums">
+                        {counts[q.key]}
+                      </span>
+                      <span className="text-sm font-semibold">{q.label}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">{q.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Item table */}
+            <div className="rms-scroll max-h-96 overflow-auto rounded-xl border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">{t('common.name')}</TableHead>
+                    <TableHead className="text-end text-xs">{t('admin.soldQty')}</TableHead>
+                    <TableHead className="text-end text-xs">{t('money.revenue')}</TableHead>
+                    <TableHead className="text-end text-xs">{t('money.profit')}</TableHead>
+                    <TableHead className="text-end text-xs">{t('money.margin')}</TableHead>
+                    <TableHead className="text-end text-xs">{t('admin.popularity')}</TableHead>
+                    <TableHead className="text-xs">{t('admin.classification')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.productId}>
+                      <TableCell className="max-w-56">
+                        <p className="truncate font-medium">
+                          {localizedName(item.name, item.nameAr, lang)}
+                        </p>
+                        {lang === 'en' && (item.nameAr ?? '').trim() ? (
+                          <p className="truncate text-xs text-muted-foreground" dir="rtl">
+                            {item.nameAr}
+                          </p>
+                        ) : lang === 'ar' && item.name !== localizedName(item.name, item.nameAr, lang) ? (
+                          <p className="truncate text-xs text-muted-foreground">{item.name}</p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-end tabular-nums">{item.soldQty}</TableCell>
+                      <TableCell className="text-end tabular-nums">
+                        {formatCurrency(item.revenue)}
+                      </TableCell>
+                      <TableCell className="text-end tabular-nums">
+                        {formatCurrency(item.profit)}
+                      </TableCell>
+                      <TableCell className="text-end tabular-nums">
+                        {Math.round(item.margin * 100)}%
+                      </TableCell>
+                      <TableCell className="text-end tabular-nums">
+                        {(item.popularity * 100).toFixed(1)}%
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`whitespace-nowrap ${CLASS_CHIP_CLASS[item.classification]}`}
+                        >
+                          {t(CLASS_LABEL[item.classification])}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
+
+        <p className="text-xs text-muted-foreground">{t('admin.quadrantHint')}</p>
       </CardContent>
     </Card>
   )
@@ -988,6 +1263,9 @@ export default function ReportsView() {
 
       {/* Z-Report — end-of-day cash reconciliation (manual date + print) */}
       <ZReportSection />
+
+      {/* Menu engineering — popularity vs. margin quadrants */}
+      <MenuEngineeringSection />
     </div>
   )
 }

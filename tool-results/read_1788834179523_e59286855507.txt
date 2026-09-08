@@ -1,0 +1,1086 @@
+     1→'use client'
+     2→
+     3→import { useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  ArrowLeftRight,
+     7→  Ban,
+     8→  Check,
+     9→  CreditCard,
+    10→  Loader2,
+    11→  Minus,
+    12→  Pencil,
+    13→  Plus,
+    14→  Printer,
+    15→  Send,
+    16→  ShieldAlert,
+    17→  ShoppingBag,
+    18→  StickyNote,
+    19→  Trash2,
+    20→  Users,
+    21→  X,
+    22→} from 'lucide-react'
+    23→
+    24→import { Badge } from '@/components/ui/badge'
+    25→import { Button } from '@/components/ui/button'
+    26→import {
+    27→  Dialog,
+    28→  DialogContent,
+    29→  DialogDescription,
+    30→  DialogFooter,
+    31→  DialogHeader,
+    32→  DialogTitle,
+    33→} from '@/components/ui/dialog'
+    34→import { Input } from '@/components/ui/input'
+    35→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    36→import { Skeleton } from '@/components/ui/skeleton'
+    37→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    38→import { Textarea } from '@/components/ui/textarea'
+    39→import { toast } from 'sonner'
+    40→import { apiFetch, fetcher } from '@/lib/api'
+    41→import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+    42→import { formatCurrency, formatQty } from '@/lib/format'
+    43→import { useI18n, localizedName } from '@/lib/i18n'
+    44→import { cn } from '@/lib/utils'
+    45→import type { Order, OrderItem } from '@/lib/types'
+    46→import { computeCartTotals, round2, type DraftItem } from './pos-utils'
+    47→
+    48→type CartPanelProps = {
+    49→  order: Order | null
+    50→  orderLoading?: boolean
+    51→  draft: DraftItem[]
+    52→  table: { id: number | null; name: string }
+    53→  onDraftChange: (draft: DraftItem[]) => void
+    54→  onSend: () => void
+    55→  onPay: () => void
+    56→  /** Open the pre-payment guest check (pos-view flushes the draft first). */
+    57→  onPrintCheck?: () => void
+    58→  onCancel: () => void
+    59→  canCancel?: boolean
+    60→  sending?: boolean
+    61→  userRole?: string
+    62→}
+    63→
+    64→const STATUS_CHIP: Record<string, string> = {
+    65→  new: 'bg-zinc-100 text-zinc-500',
+    66→  preparing: 'bg-amber-100 text-amber-700 animate-pulse',
+    67→  ready: 'bg-emerald-100 text-emerald-700',
+    68→  served: 'bg-muted text-muted-foreground',
+    69→}
+    70→
+    71→export default function CartPanel({
+    72→  order,
+    73→  orderLoading = false,
+    74→  draft,
+    75→  table,
+    76→  onDraftChange,
+    77→  onSend,
+    78→  onPay,
+    79→  onPrintCheck,
+    80→  onCancel,
+    81→  canCancel = false,
+    82→  sending = false,
+    83→  userRole,
+    84→}: CartPanelProps) {
+    85→  const queryClient = useQueryClient()
+    86→  const { t, lang } = useI18n()
+    87→  const orderId = order?.id ?? null
+    88→
+    89→  const [editing, setEditing] = useState<DraftItem | null>(null)
+    90→  const [editQty, setEditQty] = useState('1')
+    91→  const [editNotes, setEditNotes] = useState('')
+    92→  const [editCourse, setEditCourse] = useState('main')
+    93→
+    94→  const [discountOpen, setDiscountOpen] = useState(false)
+    95→  const [discountTab, setDiscountTab] = useState<'percent' | 'fixed'>('percent')
+    96→  const [percentInput, setPercentInput] = useState('')
+    97→  const [fixedInput, setFixedInput] = useState('')
+    98→
+    99→  // ── PIN-gated item deletion state ─────────────────────────────────
+   100→  // Sent items may only be removed with the admin's 6-digit PIN; the
+   101→  // dialog stays open on a wrong PIN so the user can retry.
+   102→  const [pinDialogItem, setPinDialogItem] = useState<OrderItem | null>(null)
+   103→  const [pinInput, setPinInput] = useState('')
+   104→  const [pinWrong, setPinWrong] = useState(false)
+   105→
+   106→  // ── Item transfer ("Move items") state ────────────────────────────
+   107→  // moveQty holds a per-row quantity to move (default = the row's full
+   108→  // quantity when selected); a partial value splits the row on the server —
+   109→  // the classic "wrong check" fix (e.g. move just 1 of 3 Koshari).
+   110→  const [moveMode, setMoveMode] = useState(false)
+   111→  const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+   112→  const [moveQty, setMoveQty] = useState<Record<number, number>>({})
+   113→  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+   114→
+   115→  const totals = computeCartTotals(order, draft)
+   116→  const noItems = (order?.items.length ?? 0) + draft.length === 0
+   117→
+   118→  // Open orders (for the move-items target picker) — only fetched while the
+   119→  // picker dialog is open; the query key matches the floor's live query.
+   120→  const { data: openOrdersData, isLoading: openOrdersLoading } = useQuery({
+   121→    queryKey: ['orders', 'open'],
+   122→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   123→    enabled: moveDialogOpen,
+   124→  })
+   125→  const otherOpenOrders = (openOrdersData?.orders ?? []).filter((o) => o.id !== orderId)
+   126→
+   127→  // ── Server mutations (sent items) ─────────────────────────────────
+   128→  const markServed = useMutation({
+   129→    mutationFn: (itemId: number) =>
+   130→      apiFetch<{ item: OrderItem }>(`/api/order-items/${itemId}`, {
+   131→        method: 'PUT',
+   132→        body: { status: 'served' },
+   133→      }),
+   134→    onSuccess: async (data) => {
+   135→      toast.success(
+   136→        t('pos.markedServedToast', {
+   137→          name: data.item.product
+   138→            ? localizedName(data.item.product.name, data.item.product.nameAr, lang)
+   139→            : t('pos.item'),
+   140→        }),
+   141→      )
+   142→      await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
+   143→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   144→    },
+   145→    onError: (err: Error) => toast.error(err.message),
+   146→  })
+   147→
+   148→  // Item removal is PIN-gated (PUT /api/orders/[id] { removeItemIds, removePin }):
+   149→  // the dialog collects the 6-digit PIN and the API verifies it server-side
+   150→  // (403 with a descriptive message on a wrong or missing PIN).
+   151→  const removeItem = useMutation({
+   152→    mutationFn: ({ itemId, pin }: { itemId: number; pin: string }) => {
+   153→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   154→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   155→        method: 'PUT',
+   156→        body: { removeItemIds: [itemId], removePin: pin },
+   157→      })
+   158→    },
+   159→    onSuccess: async ({ order: updated }) => {
+   160→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   161→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   162→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   163→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   164→      toast.success(t('pos.itemRemovedToast'))
+   165→      closePinDialog()
+   166→    },
+   167→    onError: (err: Error) => {
+   168→      // The API message is descriptive (403 wrong/missing PIN); the dialog
+   169→      // stays open with the inline wrong-PIN hint so the user can retry.
+   170→      toast.error(err.message)
+   171→      setPinWrong(true)
+   172→    },
+   173→  })
+   174→
+   175→  // ── PIN dialog helpers ────────────────────────────────────────────
+   176→  const openPinDialog = (item: OrderItem) => {
+   177→    setPinDialogItem(item)
+   178→    setPinInput('')
+   179→    setPinWrong(false)
+   180→  }
+   181→
+   182→  const closePinDialog = () => {
+   183→    setPinDialogItem(null)
+   184→    setPinInput('')
+   185→    setPinWrong(false)
+   186→  }
+   187→
+   188→  const confirmPin = () => {
+   189→    if (!pinDialogItem || pinInput.length < DELETE_PIN_LENGTH || removeItem.isPending) return
+   190→    removeItem.mutate({ itemId: pinDialogItem.id, pin: pinInput })
+   191→  }
+   192→
+   193→  const applyDiscount = useMutation({
+   194→    mutationFn: (discountAmount: number) => {
+   195→      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+   196→      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+   197→        method: 'PUT',
+   198→        body: { discountAmount },
+   199→      })
+   200→    },
+   201→    onSuccess: async ({ order: updated }) => {
+   202→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   203→      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+   204→      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+   205→      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+   206→      toast.success(t('pos.discountUpdatedToast'))
+   207→      setDiscountOpen(false)
+   208→    },
+   209→    onError: (err: Error) => toast.error(err.message),
+   210→  })
+   211→
+   212→  // ── Item transfer mutation (move sent items to another open order) ──
+   213→  // Sends the per-row quantities so the server can split rows (partial moves).
+   214→  const transferItems = useMutation({
+   215→    mutationFn: (vars: {
+   216→      sourceId: number
+   217→      items: { id: number; quantity: number }[]
+   218→      targetOrderId: number
+   219→      targetLabel: string
+   220→    }) =>
+   221→      apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
+   222→        method: 'POST',
+   223→        body: { items: vars.items, targetOrderId: vars.targetOrderId },
+   224→      }),
+   225→    onSuccess: async (_data, vars) => {
+   226→      const totalUnitsMoved = round2(vars.items.reduce((n, entry) => n + entry.quantity, 0))
+   227→      toast.success(
+   228→        t('pos.itemsMovedToast', { n: totalUnitsMoved, target: vars.targetLabel }),
+   229→      )
+   230→      await Promise.all([
+   231→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   232→        queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   233→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   234→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   235→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.sourceId] }),
+   236→        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.targetOrderId] }),
+   237→      ])
+   238→      exitMoveMode()
+   239→    },
+   240→    onError: (err: Error) => toast.error(err.message),
+   241→  })
+   242→
+   243→  // ── Move-items helpers ───────────────────────────────────────────
+   244→  const enterMoveMode = () => {
+   245→    setMoveMode(true)
+   246→    setMoveSelected(new Set())
+   247→    setMoveQty({})
+   248→  }
+   249→
+   250→  const exitMoveMode = () => {
+   251→    setMoveMode(false)
+   252→    setMoveSelected(new Set())
+   253→    setMoveQty({})
+   254→    setMoveDialogOpen(false)
+   255→  }
+   256→
+   257→  // Toggling a row ON seeds its move quantity with the FULL row quantity;
+   258→  // toggling OFF forgets the per-row quantity.
+   259→  const toggleMoveItem = (item: OrderItem) => {
+   260→    if (moveSelected.has(item.id)) {
+   261→      setMoveSelected((prev) => {
+   262→        const next = new Set(prev)
+   263→        next.delete(item.id)
+   264→        return next
+   265→      })
+   266→      setMoveQty((prev) => {
+   267→        const next = { ...prev }
+   268→        delete next[item.id]
+   269→        return next
+   270→      })
+   271→    } else {
+   272→      setMoveSelected((prev) => {
+   273→        const next = new Set(prev)
+   274→        next.add(item.id)
+   275→        return next
+   276→      })
+   277→      setMoveQty((prev) => ({ ...prev, [item.id]: item.quantity }))
+   278→    }
+   279→  }
+   280→
+   281→  // Only ids that still exist on the (live-polled) order — stale ids are dropped.
+   282→  const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
+   283→  const moveCount = selectedMoveIds.length
+   284→  const liveItemById = new Map((order?.items ?? []).map((i) => [i.id, i]))
+   285→
+   286→  // Effective units to move for a row: the stepper value when present,
+   287→  // clamped against the LIVE row quantity (polling may have changed it).
+   288→  const moveQtyFor = (id: number): number => {
+   289→    const live = liveItemById.get(id)
+   290→    if (!live) return 0
+   291→    return round2(Math.min(moveQty[id] ?? live.quantity, live.quantity))
+   292→  }
+   293→
+   294→  // Stepper handler — clamps between 1 and the live row quantity.
+   295→  const changeMoveQty = (item: OrderItem, delta: number) => {
+   296→    setMoveQty((prev) => {
+   297→      const current = prev[item.id] ?? item.quantity
+   298→      const next = Math.min(Math.max(round2(current + delta), 1), item.quantity)
+   299→      return { ...prev, [item.id]: round2(next) }
+   300→    })
+   301→  }
+   302→
+   303→  // Total UNITS selected to move (CTA label + moved toast).
+   304→  const moveUnits = round2(selectedMoveIds.reduce((n, id) => n + moveQtyFor(id), 0))
+   305→
+   306→  const pickMoveTarget = (target: Order) => {
+   307→    if (orderId == null || moveCount === 0) return
+   308→    transferItems.mutate({
+   309→      sourceId: orderId,
+   310→      items: selectedMoveIds.map((id) => ({ id, quantity: moveQtyFor(id) })),
+   311→      targetOrderId: target.id,
+   312→      targetLabel: target.table?.name ?? t('common.takeaway'),
+   313→    })
+   314→  }
+   315→
+   316→  // ── Draft helpers ─────────────────────────────────────────────────
+   317→  const updateDraft = (key: string, patch: Partial<DraftItem>) =>
+   318→    onDraftChange(draft.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+   319→
+   320→  const changeQty = (d: DraftItem, delta: number) => {
+   321→    const next = round2(d.quantity + delta)
+   322→    if (next <= 0) onDraftChange(draft.filter((x) => x.key !== d.key))
+   323→    else updateDraft(d.key, { quantity: next })
+   324→  }
+   325→
+   326→  const openEdit = (d: DraftItem) => {
+   327→    setEditing(d)
+   328→    setEditQty(String(d.quantity))
+   329→    setEditNotes(d.notes)
+   330→    setEditCourse(d.course)
+   331→  }
+   332→
+   333→  const saveEdit = () => {
+   334→    if (!editing) return
+   335→    const qty = round2(parseFloat(editQty))
+   336→    if (!Number.isFinite(qty) || qty <= 0) return
+   337→    updateDraft(editing.key, { quantity: qty, notes: editNotes.trim(), course: editCourse })
+   338→    setEditing(null)
+   339→  }
+   340→
+   341→  // Seed discount dialog inputs from the current order discount when opening.
+   342→  const openDiscountDialog = () => {
+   343→    const current = order?.discountAmount ?? 0
+   344→    const subtotal = order?.subtotalAmount ?? 0
+   345→    setPercentInput(current > 0 && subtotal > 0 ? String(round2((current / subtotal) * 100)) : '')
+   346→    setFixedInput(current > 0 ? String(current) : '')
+   347→    setDiscountOpen(true)
+   348→  }
+   349→
+   350→  // Effective discount from the dialog inputs (clamped to [0, order subtotal]).
+   351→  const orderSubtotal = round2(order?.subtotalAmount ?? 0)
+   352→  const previewDiscount = (() => {
+   353→    if (!order) return 0
+   354→    const raw =
+   355→      discountTab === 'percent'
+   356→        ? (orderSubtotal * (parseFloat(percentInput) || 0)) / 100
+   357→        : parseFloat(fixedInput) || 0
+   358→    if (!Number.isFinite(raw) || raw < 0) return 0
+   359→    return round2(Math.min(raw, orderSubtotal))
+   360→  })()
+   361→  const previewBase = round2(orderSubtotal - previewDiscount)
+   362→  const previewVat = round2(previewBase * TAX_RATE)
+   363→  const previewServiceTax = round2(previewBase * SERVICE_TAX_RATE)
+   364→
+   365→  return (
+   366→    <div className="flex min-h-0 flex-1 flex-col">
+   367→      {/* Header */}
+   368→      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E2E2E0] px-4 py-3">
+   369→        <div className="min-w-0">
+   370→          <p className="truncate text-base font-bold">{table.name}</p>
+   371→          {(order?.user?.name || userRole) && (
+   372→            <p className="text-[11px] text-muted-foreground">
+   373→              {t('pos.server')}:{' '}
+   374→              {order?.user?.name ?? (userRole ? t(`role.${userRole}`) : '')}
+   375→            </p>
+   376→          )}
+   377→        </div>
+   378→        {order ? (
+   379→          <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
+   380→            {t('common.order')} #{order.id}
+   381→          </Badge>
+   382→        ) : (
+   383→          <Badge variant="secondary" className="shrink-0">
+   384→            {t('pos.notSent')}
+   385→          </Badge>
+   386→        )}
+   387→      </div>
+   388→
+   389→      {/* Body */}
+   390→      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto px-4">
+   391→        {orderLoading && !order && draft.length === 0 ? (
+   392→          <div className="space-y-3 py-4">
+   393→            <Skeleton className="h-14 w-full" />
+   394→            <Skeleton className="h-14 w-full" />
+   395→            <Skeleton className="h-14 w-full" />
+   396→          </div>
+   397→        ) : noItems ? (
+   398→          <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+   399→            <ShoppingBag className="size-10 opacity-30" />
+   400→            <p className="text-sm">{t('pos.tapToAdd')}</p>
+   401→          </div>
+   402→        ) : (
+   403→          <>
+   404→            {/* Sent to kitchen */}
+   405→            {order && order.items.length > 0 && (
+   406→              <section className="py-2">
+   407→                <div className="flex items-center justify-between gap-2">
+   408→                  <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   409→                    {t('pos.sentItems')} ({order.items.length})
+   410→                  </h3>
+   411→                  <div className="flex shrink-0 items-center gap-1">
+   412→                    {!moveMode && (
+   413→                      <Button
+   414→                        variant="outline"
+   415→                        size="sm"
+   416→                        className="h-8 gap-1 px-2 text-xs border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   417→                        title={t('pos.transferItems')}
+   418→                        onClick={enterMoveMode}
+   419→                      >
+   420→                        <ArrowLeftRight className="size-3.5" /> {t('pos.transferItems')}
+   421→                      </Button>
+   422→                    )}
+   423→                    {moveMode ? (
+   424→                      <span className="text-[11px] text-muted-foreground">{t('pos.moveModeHint')}</span>
+   425→                    ) : (
+   426→                      canCancel && (
+   427→                        <Button
+   428→                          variant="ghost"
+   429→                          size="sm"
+   430→                          className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+   431→                          title={t('pos.cancelOrder')}
+   432→                          onClick={onCancel}
+   433→                        >
+   434→                          <Ban className="size-3.5" /> {t('pos.cancelOrder')}
+   435→                        </Button>
+   436→                      )
+   437→                    )}
+   438→                  </div>
+   439→                </div>
+   440→                {order.items.map((item) => (
+   441→                  <SentItemRow
+   442→                    key={item.id}
+   443→                    item={item}
+   444→                    onServed={() => markServed.mutate(item.id)}
+   445→                    onRemove={() => openPinDialog(item)}
+   446→                    servedPending={markServed.isPending && markServed.variables === item.id}
+   447→                    removePending={removeItem.isPending && removeItem.variables?.itemId === item.id}
+   448→                    moveMode={moveMode}
+   449→                    moveSelected={moveSelected.has(item.id)}
+   450→                    onToggleMove={() => toggleMoveItem(item)}
+   451→                    moveQty={moveMode && moveSelected.has(item.id) ? moveQtyFor(item.id) : undefined}
+   452→                    onMoveQty={
+   453→                      moveMode && moveSelected.has(item.id)
+   454→                        ? (delta: number) => changeMoveQty(item, delta)
+   455→                        : undefined
+   456→                    }
+   457→                  />
+   458→                ))}
+   459→              </section>
+   460→            )}
+   461→
+   462→            {/* New items (draft) */}
+   463→            {draft.length > 0 && (
+   464→              <section className="py-2">
+   465→                <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   466→                  {t('pos.newItemsNotSent')} ({draft.length})
+   467→                </h3>
+   468→                {draft.map((d) => (
+   469→                  <DraftRow
+   470→                    key={d.key}
+   471→                    item={d}
+   472→                    onQty={(delta) => changeQty(d, delta)}
+   473→                    onEdit={() => openEdit(d)}
+   474→                    onRemove={() => onDraftChange(draft.filter((x) => x.key !== d.key))}
+   475→                  />
+   476→                ))}
+   477→              </section>
+   478→            )}
+   479→          </>
+   480→        )}
+   481→      </div>
+   482→
+   483→      {/* Footer */}
+   484→      <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
+   485→        <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
+   486→        <div className="flex items-center justify-between text-sm">
+   487→          <span className="flex items-center gap-1 text-muted-foreground">
+   488→            {t('money.discount')}
+   489→            <Button
+   490→              variant="ghost"
+   491→              size="icon"
+   492→              className="size-7 text-muted-foreground"
+   493→              disabled={!order}
+   494→              title={order ? t('pos.applyDiscount') : t('pos.sendFirst')}
+   495→              onClick={openDiscountDialog}
+   496→            >
+   497→              <Pencil className="size-3.5" />
+   498→            </Button>
+   499→          </span>
+   500→          <span className="tabular-nums text-muted-foreground">
+   501→            − {formatCurrency(totals.discount)}
+   502→          </span>
+   503→        </div>
+   504→        <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
+   505→        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(totals.serviceTax)} />
+   506→        <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
+   507→          <span className="text-sm font-semibold">{t('money.total')}</span>
+   508→          <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
+   509→        </div>
+   510→        {order && order.paidAmount > 0 && (
+   511→          <>
+   512→            <SummaryRow
+   513→              label={t('money.paid')}
+   514→              value={formatCurrency(order.paidAmount)}
+   515→              valueClassName="text-emerald-600"
+   516→            />
+   517→            <SummaryRow
+   518→              label={t('money.remaining')}
+   519→              value={formatCurrency(Math.max(0, order.remainingAmount))}
+   520→              valueClassName="font-bold text-amber-600"
+   521→            />
+   522→          </>
+   523→        )}
+   524→
+   525→        {moveMode ? (
+   526→          /* ── Item-transfer footer ── */
+   527→          <div className="flex gap-2 pt-1">
+   528→            <Button
+   529→              variant="outline"
+   530→              className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   531→              onClick={exitMoveMode}
+   532→              disabled={transferItems.isPending}
+   533→            >
+   534→              {t('common.cancel')}
+   535→            </Button>
+   536→            <Button
+   537→              className="h-14 flex-[1.6] rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+   538→              disabled={moveCount === 0 || transferItems.isPending}
+   539→              onClick={() => setMoveDialogOpen(true)}
+   540→            >
+   541→              {transferItems.isPending ? (
+   542→                <Loader2 className="animate-spin" />
+   543→              ) : (
+   544→                <ArrowLeftRight className="size-5" />
+   545→              )}
+   546→              <span className="truncate">{t('pos.moveNUnits', { n: moveUnits })}</span>
+   547→            </Button>
+   548→          </div>
+   549→        ) : (
+   550→          /* ── Normal actions ── */
+   551→          <>
+   552→            <Button
+   553→              variant="secondary"
+   554→              className="h-11 w-full rounded-xl"
+   555→              disabled={draft.length === 0 || sending}
+   556→              onClick={onSend}
+   557→            >
+   558→              {sending ? <Loader2 className="animate-spin" /> : <Send />} {t('pos.sendToKitchen')}
+   559→              {draft.length > 0 && (
+   560→                <Badge className="ms-1 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+   561→                  {draft.reduce((n, d) => n + d.quantity, 0)}
+   562→                </Badge>
+   563→              )}
+   564→            </Button>
+   565→            <div className="flex gap-2">
+   566→              <Button
+   567→                variant="outline"
+   568→                className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+   569→                disabled={!order || sending || !onPrintCheck}
+   570→                title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
+   571→                onClick={onPrintCheck}
+   572→              >
+   573→                <Printer />
+   574→                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+   575→              </Button>
+   576→              <Button
+   577→                className="h-14 flex-[1.6] rounded-xl bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
+   578→                disabled={noItems || sending}
+   579→                onClick={onPay}
+   580→              >
+   581→                {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+   582→                <span className="truncate">
+   583→                  {t('pos.payment')} · {formatCurrency(totals.total)}
+   584→                </span>
+   585→              </Button>
+   586→            </div>
+   587→          </>
+   588→        )}
+   589→      </div>
+   590→
+   591→      {/* Move-items target picker dialog */}
+   592→      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+   593→        <DialogContent className="sm:max-w-md">
+   594→          <DialogHeader>
+   595→            <DialogTitle className="flex items-center gap-2">
+   596→              <ArrowLeftRight className="size-5 text-[#714B67]" /> {t('pos.moveItemsTitle')}
+   597→            </DialogTitle>
+   598→            <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
+   599→          </DialogHeader>
+   600→          <div className="rms-scroll max-h-[50dvh] space-y-2 overflow-y-auto">
+   601→            {openOrdersLoading ? (
+   602→              <div className="space-y-2">
+   603→                <Skeleton className="h-16 w-full" />
+   604→                <Skeleton className="h-16 w-full" />
+   605→              </div>
+   606→            ) : otherOpenOrders.length === 0 ? (
+   607→              <p className="py-6 text-center text-sm text-muted-foreground">
+   608→                {t('pos.noOtherOpenOrders')}
+   609→              </p>
+   610→            ) : (
+   611→              otherOpenOrders.map((o) => (
+   612→                <button
+   613→                  key={o.id}
+   614→                  type="button"
+   615→                  disabled={transferItems.isPending}
+   616→                  onClick={() => pickMoveTarget(o)}
+   617→                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+   618→                >
+   619→                  <div className="min-w-0">
+   620→                    <p className="truncate text-sm font-semibold">
+   621→                      {o.table?.name ?? t('common.takeaway')}
+   622→                    </p>
+   623→                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+   624→                      {t('common.order')} #{o.id}
+   625→                      <span className="inline-flex items-center gap-1">
+   626→                        <Users className="size-3.5" aria-hidden /> {o.guests} {t('common.people')}
+   627→                      </span>
+   628→                    </p>
+   629→                  </div>
+   630→                  <span className="shrink-0 text-sm font-bold tabular-nums text-[#714B67]">
+   631→                    {formatCurrency(o.totalAmount)}
+   632→                  </span>
+   633→                </button>
+   634→              ))
+   635→            )}
+   636→          </div>
+   637→          <DialogFooter>
+   638→            <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={transferItems.isPending}>
+   639→              {t('common.cancel')}
+   640→            </Button>
+   641→          </DialogFooter>
+   642→        </DialogContent>
+   643→      </Dialog>
+   644→
+   645→      {/* Draft item edit dialog */}
+   646→      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+   647→        <DialogContent className="sm:max-w-sm">
+   648→          <DialogHeader>
+   649→            <DialogTitle>
+   650→              {editing ? localizedName(editing.name, editing.nameAr, lang) : ''}
+   651→            </DialogTitle>
+   652→            <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
+   653→          </DialogHeader>
+   654→          <div className="space-y-4">
+   655→            <div className="flex items-center justify-center gap-3">
+   656→              <Button
+   657→                variant="outline"
+   658→                size="icon"
+   659→                className="size-11"
+   660→                onClick={() => setEditQty(String(Math.max(1, round2((parseFloat(editQty) || 1) - 1))))}
+   661→              >
+   662→                <Minus />
+   663→              </Button>
+   664→              <Input
+   665→                type="number"
+   666→                min={1}
+   667→                step={1}
+   668→                value={editQty}
+   669→                onChange={(e) => setEditQty(e.target.value)}
+   670→                className="h-11 w-20 text-center text-lg font-semibold tabular-nums"
+   671→              />
+   672→              <Button
+   673→                variant="outline"
+   674→                size="icon"
+   675→                className="size-11"
+   676→                onClick={() => setEditQty(String(round2((parseFloat(editQty) || 0) + 1)))}
+   677→              >
+   678→                <Plus />
+   679→              </Button>
+   680→            </div>
+   681→            <div className="space-y-1.5">
+   682→              <p className="text-sm font-medium">{t('common.notes')}</p>
+   683→              <Textarea
+   684→                value={editNotes}
+   685→                onChange={(e) => setEditNotes(e.target.value)}
+   686→                placeholder={t('pos.notesPlaceholder')}
+   687→                rows={2}
+   688→              />
+   689→            </div>
+   690→            <div className="space-y-1.5">
+   691→              <p className="text-sm font-medium">{t('pos.course')}</p>
+   692→              <Select value={editCourse} onValueChange={setEditCourse}>
+   693→                <SelectTrigger className="h-11 w-full">
+   694→                  <SelectValue />
+   695→                </SelectTrigger>
+   696→                <SelectContent>
+   697→                  {COURSES.map((c) => (
+   698→                    <SelectItem key={c} value={c}>
+   699→                      {t(`course.${c}`)}
+   700→                    </SelectItem>
+   701→                  ))}
+   702→                </SelectContent>
+   703→              </Select>
+   704→            </div>
+   705→          </div>
+   706→          <DialogFooter>
+   707→            <Button variant="outline" onClick={() => setEditing(null)}>
+   708→              {t('common.cancel')}
+   709→            </Button>
+   710→            <Button onClick={saveEdit} disabled={!(parseFloat(editQty) > 0)}>
+   711→              {t('common.save')}
+   712→            </Button>
+   713→          </DialogFooter>
+   714→        </DialogContent>
+   715→      </Dialog>
+   716→
+   717→      {/* Discount dialog */}
+   718→      <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
+   719→        <DialogContent className="sm:max-w-sm">
+   720→          <DialogHeader>
+   721→            <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
+   722→            <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
+   723→          </DialogHeader>
+   724→          <Tabs value={discountTab} onValueChange={(v) => setDiscountTab(v as 'percent' | 'fixed')}>
+   725→            <TabsList className="grid h-10 w-full grid-cols-2">
+   726→              <TabsTrigger value="percent">{t('pos.percent')}</TabsTrigger>
+   727→              <TabsTrigger value="fixed">{t('pos.fixed')}</TabsTrigger>
+   728→            </TabsList>
+   729→            <TabsContent value="percent" className="pt-3">
+   730→              <div className="flex items-center gap-2">
+   731→                <Input
+   732→                  type="number"
+   733→                  min={0}
+   734→                  max={100}
+   735→                  step={0.5}
+   736→                  value={percentInput}
+   737→                  onChange={(e) => setPercentInput(e.target.value)}
+   738→                  placeholder="0"
+   739→                  className="h-11 text-right text-base tabular-nums"
+   740→                />
+   741→                <span className="text-lg font-semibold text-muted-foreground">%</span>
+   742→              </div>
+   743→            </TabsContent>
+   744→            <TabsContent value="fixed" className="pt-3">
+   745→              <div className="flex items-center gap-2">
+   746→                <Input
+   747→                  type="number"
+   748→                  min={0}
+   749→                  step={0.5}
+   750→                  value={fixedInput}
+   751→                  onChange={(e) => setFixedInput(e.target.value)}
+   752→                  placeholder="0"
+   753→                  className="h-11 text-right text-base tabular-nums"
+   754→                />
+   755→                <span className="text-lg font-semibold text-muted-foreground">
+   756→                  {t('pos.currencySuffix')}
+   757→                </span>
+   758→              </div>
+   759→            </TabsContent>
+   760→          </Tabs>
+   761→          <div className="space-y-1.5 rounded-lg border bg-muted/40 p-3 text-sm">
+   762→            <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
+   763→            <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
+   764→            <SummaryRow label={t('money.tax')} value={formatCurrency(previewVat)} />
+   765→            <SummaryRow label={t('money.serviceTax')} value={formatCurrency(previewServiceTax)} />
+   766→            <div className="flex items-center justify-between border-t pt-1.5 font-bold">
+   767→              <span>{t('pos.newTotal')}</span>
+   768→              <span className="tabular-nums">
+   769→                {formatCurrency(round2(previewBase + previewVat + previewServiceTax))}
+   770→              </span>
+   771→            </div>
+   772→          </div>
+   773→          <DialogFooter>
+   774→            <Button variant="outline" onClick={() => setDiscountOpen(false)}>
+   775→              {t('common.cancel')}
+   776→            </Button>
+   777→            <Button
+   778→              onClick={() => applyDiscount.mutate(previewDiscount)}
+   779→              disabled={applyDiscount.isPending}
+   780→            >
+   781→              {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
+   782→            </Button>
+   783→          </DialogFooter>
+   784→        </DialogContent>
+   785→      </Dialog>
+   786→
+   787→      {/* PIN-gated item deletion dialog — sent items only (draft rows keep
+   788→          their instant remove; they were never sent to the kitchen). */}
+   789→      <Dialog open={!!pinDialogItem} onOpenChange={(o) => !o && closePinDialog()}>
+   790→        <DialogContent className="sm:max-w-xs">
+   791→          <DialogHeader>
+   792→            <DialogTitle className="flex items-center gap-2">
+   793→              <ShieldAlert className="size-5 text-destructive" /> {t('pos.pinTitle')}
+   794→            </DialogTitle>
+   795→            <DialogDescription>
+   796→              {t('pos.pinDesc', {
+   797→                name: pinDialogItem
+   798→                  ? pinDialogItem.product
+   799→                    ? localizedName(pinDialogItem.product.name, pinDialogItem.product.nameAr, lang)
+   800→                    : t('pos.item')
+   801→                  : '',
+   802→              })}
+   803→            </DialogDescription>
+   804→          </DialogHeader>
+   805→          <div className="space-y-1.5">
+   806→            <Input
+   807→              type="password"
+   808→              inputMode="numeric"
+   809→              autoFocus
+   810→              maxLength={DELETE_PIN_LENGTH}
+   811→              value={pinInput}
+   812→              onChange={(e) => {
+   813→                // digits only — a PIN is numeric by definition
+   814→                setPinInput(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+   815→                if (pinWrong) setPinWrong(false)
+   816→              }}
+   817→              onKeyDown={(e) => {
+   818→                if (e.key === 'Enter') {
+   819→                  e.preventDefault()
+   820→                  confirmPin()
+   821→                }
+   822→              }}
+   823→              placeholder={t('pos.pinPlaceholder')}
+   824→              aria-invalid={pinWrong || undefined}
+   825→              className={cn(
+   826→                'h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums',
+   827→                pinWrong && 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+   828→              )}
+   829→            />
+   830→            {pinWrong && (
+   831→              <p className="text-xs font-medium text-destructive" role="alert">
+   832→                {t('pos.pinWrong')}
+   833→              </p>
+   834→            )}
+   835→          </div>
+   836→          <DialogFooter>
+   837→            <Button variant="outline" onClick={closePinDialog} disabled={removeItem.isPending}>
+   838→              {t('common.cancel')}
+   839→            </Button>
+   840→            <Button
+   841→              variant="destructive"
+   842→              onClick={confirmPin}
+   843→              disabled={removeItem.isPending || pinInput.length < DELETE_PIN_LENGTH}
+   844→            >
+   845→              {removeItem.isPending ? (
+   846→                <Loader2 className="animate-spin" />
+   847→              ) : (
+   848→                <Trash2 className="size-4" />
+   849→              )}{' '}
+   850→              {t('pos.pinConfirm')}
+   851→            </Button>
+   852→          </DialogFooter>
+   853→        </DialogContent>
+   854→      </Dialog>
+   855→    </div>
+   856→  )
+   857→}
+   858→
+   859→function SummaryRow({
+   860→  label,
+   861→  value,
+   862→  valueClassName,
+   863→}: {
+   864→  label: string
+   865→  value: string
+   866→  valueClassName?: string
+   867→}) {
+   868→  return (
+   869→    <div className="flex items-center justify-between text-sm">
+   870→      <span className="text-muted-foreground">{label}</span>
+   871→      <span className={cn('tabular-nums', valueClassName)}>{value}</span>
+   872→    </div>
+   873→  )
+   874→}
+   875→
+   876→function SentItemRow({
+   877→  item,
+   878→  onServed,
+   879→  onRemove,
+   880→  servedPending,
+   881→  removePending,
+   882→  moveMode,
+   883→  moveSelected,
+   884→  onToggleMove,
+   885→  moveQty,
+   886→  onMoveQty,
+   887→}: {
+   888→  item: OrderItem
+   889→  onServed: () => void
+   890→  onRemove: () => void
+   891→  servedPending: boolean
+   892→  removePending: boolean
+   893→  moveMode: boolean
+   894→  moveSelected: boolean
+   895→  onToggleMove: () => void
+   896→  /** units to move for this row (partial move); defaults to the full row */
+   897→  moveQty?: number
+   898→  /** stepper delta — the parent clamps against the live row quantity */
+   899→  onMoveQty?: (delta: number) => void
+   900→}) {
+   901→  const { t, lang } = useI18n()
+   902→  const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
+   903→  const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+   904→  // Partial-quantity stepper: only for selected rows holding more than 1 unit.
+   905→  const showMoveQty = moveMode && moveSelected && item.quantity > 1
+   906→  const qty = moveQty ?? item.quantity
+   907→  return (
+   908→    <div
+   909→      onClick={moveMode ? onToggleMove : undefined}
+   910→      role={moveMode ? 'button' : undefined}
+   911→      aria-pressed={moveMode ? moveSelected : undefined}
+   912→      className={cn(
+   913→        'border-b border-border/60 last:border-b-0',
+   914→        moveMode && 'cursor-pointer rounded-lg transition-colors',
+   915→        moveMode && moveSelected && 'bg-[#714B67]/10',
+   916→      )}
+   917→    >
+   918→      <div className="flex items-start gap-2 py-2.5">
+   919→        {moveMode && (
+   920→          <span
+   921→            className={cn(
+   922→              'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+   923→              moveSelected
+   924→                ? 'border-[#714B67] bg-[#714B67] text-white'
+   925→                : 'border-[#E2E2E0] bg-white',
+   926→            )}
+   927→            aria-hidden
+   928→          >
+   929→            {moveSelected && <Check className="size-3.5" />}
+   930→          </span>
+   931→        )}
+   932→        <span
+   933→          className={cn(
+   934→            'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+   935→            chip,
+   936→          )}
+   937→        >
+   938→          {t(`status.item.${item.status}`)}
+   939→        </span>
+   940→        <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
+   941→          <p className="truncate text-sm font-medium">
+   942→            {formatQty(item.quantity)} ×{' '}
+   943→            {item.product
+   944→              ? localizedName(item.product.name, item.product.nameAr, lang)
+   945→              : t('pos.item')}
+   946→          </p>
+   947→          {item.notes && (
+   948→            <p className="flex items-center gap-1 truncate text-xs text-amber-600">
+   949→              <StickyNote className="size-3 shrink-0" />
+   950→              <span className="truncate">{item.notes}</span>
+   951→            </p>
+   952→          )}
+   953→        </div>
+   954→        <div className="flex shrink-0 flex-col items-end gap-1">
+   955→          <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
+   956→          {!moveMode && (
+   957→            <div className="flex gap-1">
+   958→              {item.status === 'ready' && (
+   959→                <Button
+   960→                  variant="ghost"
+   961→                  size="sm"
+   962→                  className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+   963→                  disabled={servedPending}
+   964→                  onClick={onServed}
+   965→                  title={t('pos.markServed')}
+   966→                >
+   967→                  {servedPending ? (
+   968→                    <Loader2 className="size-3.5 animate-spin" />
+   969→                  ) : (
+   970→                    <Check className="size-3.5" />
+   971→                  )}
+   972→                  {t('status.item.served')}
+   973→                </Button>
+   974→              )}
+   975→              <Button
+   976→                variant="ghost"
+   977→                size="icon"
+   978→                className="size-8 text-muted-foreground hover:text-destructive"
+   979→                disabled={removePending}
+   980→                onClick={onRemove}
+   981→                title={t('pos.removeItem')}
+   982→              >
+   983→                {removePending ? (
+   984→                  <Loader2 className="size-4 animate-spin" />
+   985→                ) : (
+   986→                  <Trash2 className="size-4" />
+   987→                )}
+   988→              </Button>
+   989→            </div>
+   990→          )}
+   991→        </div>
+   992→      </div>
+   993→      {showMoveQty && (
+   994→        /* Partial-quantity stepper — clicks here never toggle the selection. */
+   995→        <div
+   996→          role="group"
+   997→          aria-label={t('pos.moveQtyLabel')}
+   998→          title={t('pos.moveQtyLabel')}
+   999→          onClick={(e) => e.stopPropagation()}
+  1000→          className="mb-2 ms-7 flex items-center gap-2 rounded-b-lg bg-[#714B67]/[0.06] px-2 py-1.5"
+  1001→        >
+  1002→          <Button
+  1003→            variant="outline"
+  1004→            size="icon"
+  1005→            className="size-10 shrink-0"
+  1006→            disabled={qty <= 1}
+  1007→            onClick={() => onMoveQty?.(-1)}
+  1008→          >
+  1009→            <Minus className="size-4" />
+  1010→            <span className="sr-only">−</span>
+  1011→          </Button>
+  1012→          <span className="min-w-8 shrink-0 text-center text-sm font-semibold tabular-nums">
+  1013→            {formatQty(qty)}
+  1014→          </span>
+  1015→          <Button
+  1016→            variant="outline"
+  1017→            size="icon"
+  1018→            className="size-10 shrink-0"
+  1019→            disabled={qty >= item.quantity}
+  1020→            onClick={() => onMoveQty?.(1)}
+  1021→          >
+  1022→            <Plus className="size-4" />
+  1023→            <span className="sr-only">+</span>
+  1024→          </Button>
+  1025→          <span className="text-xs text-muted-foreground">
+  1026→            {t('pos.moveQtyOf', { qty: formatQty(item.quantity) })}
+  1027→          </span>
+  1028→        </div>
+  1029→      )}
+  1030→    </div>
+  1031→  )
+  1032→}
+  1033→
+  1034→function DraftRow({
+  1035→  item,
+  1036→  onQty,
+  1037→  onEdit,
+  1038→  onRemove,
+  1039→}: {
+  1040→  item: DraftItem
+  1041→  onQty: (delta: number) => void
+  1042→  onEdit: () => void
+  1043→  onRemove: () => void
+  1044→}) {
+  1045→  const { t, lang } = useI18n()
+  1046→  return (
+  1047→    <div className="flex items-center gap-2 border-b border-border/60 py-2.5 last:border-b-0">
+  1048→      <div className="flex shrink-0 items-center gap-1">
+  1049→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(-1)}>
+  1050→          <Minus className="size-3.5" />
+  1051→        </Button>
+  1052→        <span className="w-8 text-center text-sm font-semibold tabular-nums">
+  1053→          {formatQty(item.quantity)}
+  1054→        </span>
+  1055→        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(1)}>
+  1056→          <Plus className="size-3.5" />
+  1057→        </Button>
+  1058→      </div>
+  1059→      <button
+  1060→        type="button"
+  1061→        className="min-w-0 flex-1 text-start"
+  1062→        onClick={onEdit}
+  1063→        title={t('pos.editItemDesc')}
+  1064→      >
+  1065→        <p className="flex items-center gap-1 truncate text-sm font-medium">
+  1066→          <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
+  1067→          {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
+  1068→        </p>
+  1069→        <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+  1070→      </button>
+  1071→      <span className="shrink-0 text-sm font-semibold tabular-nums">
+  1072→        {formatCurrency(round2(item.quantity * item.price))}
+  1073→      </span>
+  1074→      <Button
+  1075→        variant="ghost"
+  1076→        size="icon"
+  1077→        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+  1078→        onClick={onRemove}
+  1079→        title={t('pos.removeLine')}
+  1080→      >
+  1081→        <X className="size-4" />
+  1082→      </Button>
+  1083→    </div>
+  1084→  )
+  1085→}
+  1086→

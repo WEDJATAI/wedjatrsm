@@ -31,6 +31,7 @@ export const PERMISSIONS = [
   'attendance',
   'settings',
   'audit',
+  'cashdrawer',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -50,6 +51,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   attendance: 'Attendance',
   settings: 'Settings',
   audit: 'Activity Log',
+  cashdrawer: 'Cash Drawer',
 }
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
@@ -140,6 +142,33 @@ export const LATE_GRACE_MINUTES = 15 // minutes of grace before a check-in count
 
 // Rounding tolerance for money comparisons
 export const MONEY_EPSILON = 0.02
+
+// ─── R8: item options (modifiers) ───────────────────────────────
+export const MAX_OPTIONS_PER_GROUP = 20
+
+// ─── R8: allergen + dietary tags on products ───────────────────
+export const ALLERGENS = [
+  'gluten',
+  'dairy',
+  'eggs',
+  'fish',
+  'shellfish',
+  'nuts',
+  'soy',
+  'sesame',
+] as const
+export type Allergen = (typeof ALLERGENS)[number]
+
+export const DIETARY_TAGS = ['vegetarian', 'vegan', 'halal', 'spicy'] as const
+export type DietaryTag = (typeof DIETARY_TAGS)[number]
+
+// ─── R8: tips on payments ──────────────────────────────────────
+/** quick-tip percentage presets shown in the payment modal (0 = no tip) */
+export const TIP_PRESETS = [0, 10, 12.5, 15] as const
+
+// ─── R8: cash drawer ───────────────────────────────────────────
+export const DRAWER_TYPES = ['paid_in', 'paid_out'] as const
+export type DrawerEntryType = (typeof DRAWER_TYPES)[number]
 
 // Guests bounds for an order (number of people)
 export const MIN_GUESTS = 1

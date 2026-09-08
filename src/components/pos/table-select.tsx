@@ -19,6 +19,7 @@ import {
   Plus,
   ShoppingBag,
   Users,
+  Wallet,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -55,6 +56,8 @@ type TableSelectProps = {
   onSeatParty: (tables: RestaurantTable[]) => void
   /** Deferred-check chip clicked — pos-view opens the payment modal to settle it. */
   onSettleDeferred: (order: Order) => void
+  /** "My shift" closeout — pos-view opens the per-server shift sheet (R8). */
+  onMyShift?: () => void
 }
 
 type ToolKind = 'transfer' | 'merge' | 'seat'
@@ -85,6 +88,7 @@ export default function TableSelect({
   onTransferDone,
   onSeatParty,
   onSettleDeferred,
+  onMyShift,
 }: TableSelectProps) {
   const queryClient = useQueryClient()
   const { t } = useI18n()
@@ -428,6 +432,16 @@ export default function TableSelect({
             >
               <Armchair className="text-violet-700" />
               <span className="hidden sm:inline">{t('pos.seatParty')}</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 rounded-xl border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-700"
+              disabled={!!tool}
+              onClick={onMyShift}
+              title={t('pos.myShift')}
+            >
+              <Wallet className="text-emerald-700" />
+              <span className="hidden sm:inline">{t('pos.myShift')}</span>
             </Button>
             <Button
               className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"

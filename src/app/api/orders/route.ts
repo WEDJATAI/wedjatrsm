@@ -126,6 +126,10 @@ export async function POST(req: NextRequest) {
               notes: item.notes,
               course: item.course,
               status: 'new',
+              // R8: option snapshot (validated server-side by validateOrderItems)
+              selectedModifiers: item.selectedModifiers
+                ? JSON.stringify(item.selectedModifiers)
+                : undefined,
             })),
           },
         },
