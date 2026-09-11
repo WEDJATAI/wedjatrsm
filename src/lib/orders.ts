@@ -690,6 +690,41 @@ export async function freeTableIfUnused(tableId: number, excludeOrderId?: number
   }
 }
 
+/**
+ * R9 vision: re-house an open order (primary + merged extras) at a single
+ * destination table — the exact semantics of POST /api/orders/[id]/transfer,
+ * extracted so the human-confirmed AI movement flow reuses them.
+ *
+ * Runs inside the caller's transaction: primary table moves, extras are
+ * released, previous tables are freed when no OTHER open order still
+ * references them, and the destination table is marked occupied.
+ */
+export async function rehouseOpenOrder(
+  tx: Prisma.TransactionClient,
+  order: { id: number; tableId: number | null; extraTableIds: string | null },
+  targetTableId: number,
+): Promise<void> {
+  const previousTableIds = orderTableIds(order)
+  await tx.order.update({
+    where: { id: order.id },
+    data: { tableId: targetTableId, extraTableIds: null },
+  })
+  for (const previousTableId of previousTableIds) {
+    if (previousTableId === targetTableId) continue
+    const stillOpen = await findOpenOrderOnTable(previousTableId, order.id)
+    if (!stillOpen) {
+      await tx.restaurantTable.update({
+        where: { id: previousTableId },
+        data: { status: 'free' },
+      })
+    }
+  }
+  await tx.restaurantTable.update({
+    where: { id: targetTableId },
+    data: { status: 'occupied' },
+  })
+}
+
 // ─── Tables & floor plans (polling extras) ──────────────────────────
 
 export type TableRow = {

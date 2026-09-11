@@ -1,0 +1,758 @@
+     1→'use client'
+     2→
+     3→// ─── Vision Zones tab — polygon zone editor over the floor schematic ─
+     4→// Draw normalized (0..1) polygons over the camera's floor-plan schematic
+     5→// (honest label: schematic calibration frame — the real edge processor
+     6→// streams the actual camera frame). Existing zones are clickable for
+     7→// editing with optimistic-version concurrency (409 on mismatch), zones
+     8→// can fire a test detection through the simulator API.
+     9→
+    10→import { useRef, useState } from 'react'
+    11→import { useMutation, useQueryClient } from '@tanstack/react-query'
+    12→import {
+    13→  Crosshair,
+    14→  Eraser,
+    15→  Loader2,
+    16→  MousePointerClick,
+    17→  Play,
+    18→  SquareDashed,
+    19→  Trash2,
+    20→} from 'lucide-react'
+    21→import { toast } from 'sonner'
+    22→
+    23→import {
+    24→  AlertDialog,
+    25→  AlertDialogAction,
+    26→  AlertDialogCancel,
+    27→  AlertDialogContent,
+    28→  AlertDialogDescription,
+    29→  AlertDialogFooter,
+    30→  AlertDialogHeader,
+    31→  AlertDialogTitle,
+    32→} from '@/components/ui/alert-dialog'
+    33→import { Badge } from '@/components/ui/badge'
+    34→import { Button } from '@/components/ui/button'
+    35→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+    36→import { Input } from '@/components/ui/input'
+    37→import { Label } from '@/components/ui/label'
+    38→import {
+    39→  Select,
+    40→  SelectContent,
+    41→  SelectItem,
+    42→  SelectTrigger,
+    43→  SelectValue,
+    44→} from '@/components/ui/select'
+    45→import { Skeleton } from '@/components/ui/skeleton'
+    46→import { Switch } from '@/components/ui/switch'
+    47→import { apiFetch } from '@/lib/api'
+    48→import { useI18n } from '@/lib/i18n'
+    49→import type { FloorPlan, RestaurantTable, VisionCameraDTO, VisionZoneDTO, VisionZonePoint } from '@/lib/types'
+    50→import { cn } from '@/lib/utils'
+    51→
+    52→import { VisionErrorCard } from './vision-shared'
+    53→import { VISION_ZONE_KINDS } from '@/lib/constants'
+    54→
+    55→const MAX_ZONE_POINTS = 24
+    56→const MIN_ZONE_POINTS = 3
+    57→
+    58→type Props = {
+    59→  cameras: VisionCameraDTO[]
+    60→  zones: VisionZoneDTO[]
+    61→  isLoading: boolean
+    62→  isError: boolean
+    63→  refetch: () => void
+    64→  floorPlans: FloorPlan[]
+    65→}
+    66→
+    67→const clamp01 = (n: number): number => Math.min(1, Math.max(0, n))
+    68→
+    69→/** POS-status → schematic table dot colors (warm palette). */
+    70→function tableDotClasses(status: string): string {
+    71→  switch (status) {
+    72→    case 'occupied':
+    73→      return 'border-amber-400 bg-amber-100 text-amber-800'
+    74→    case 'paid':
+    75→      return 'border-emerald-500 bg-emerald-100 text-emerald-800'
+    76→    case 'deferred':
+    77→      return 'border-violet-400 bg-violet-100 text-violet-800'
+    78→    case 'dirty':
+    79→      return 'border-amber-600 bg-amber-200 text-amber-900'
+    80→    case 'reserved':
+    81→      return 'border-amber-300 bg-amber-50 text-amber-700'
+    82→    default:
+    83→      return 'border-stone-300 bg-white text-stone-600'
+    84→  }
+    85→}
+    86→
+    87→export default function VisionZonesTab({
+    88→  cameras,
+    89→  zones,
+    90→  isLoading,
+    91→  isError,
+    92→  refetch,
+    93→  floorPlans,
+    94→}: Props) {
+    95→  const { t } = useI18n()
+    96→  const queryClient = useQueryClient()
+    97→  const svgRef = useRef<SVGSVGElement | null>(null)
+    98→
+    99→  const [cameraId, setCameraId] = useState<number | null>(null)
+   100→  const camera = cameras.find((c) => c.id === cameraId) ?? cameras[0] ?? null
+   101→  const floorPlan = floorPlans.find((fp) => fp.id === camera?.floorPlanId) ?? null
+   102→  const cameraZones = camera ? zones.filter((z) => z.cameraId === camera.id) : []
+   103→
+   104→  // drawing state
+   105→  const [drawing, setDrawing] = useState(false)
+   106→  const [points, setPoints] = useState<VisionZonePoint[]>([])
+   107→  const [draftPolygon, setDraftPolygon] = useState<VisionZonePoint[] | null>(null)
+   108→
+   109→  // zone form state (editing an existing zone OR composing a new one)
+   110→  const [editingZone, setEditingZone] = useState<VisionZoneDTO | null>(null)
+   111→  const [zoneName, setZoneName] = useState('')
+   112→  const [zoneKind, setZoneKind] = useState<string>('table')
+   113→  const [zoneTableId, setZoneTableId] = useState<string>('none')
+   114→  const [zoneSeats, setZoneSeats] = useState('')
+   115→  const [zoneActive, setZoneActive] = useState(true)
+   116→  const [deleteOpen, setDeleteOpen] = useState(false)
+   117→
+   118→  const invalidateZones = async () => {
+   119→    await Promise.all([
+   120→      queryClient.invalidateQueries({ queryKey: ['vision-zones'] }),
+   121→      queryClient.invalidateQueries({ queryKey: ['vision-overview'] }),
+   122→    ])
+   123→  }
+   124→
+   125→  const createZoneMutation = useMutation({
+   126→    mutationFn: (body: {
+   127→      cameraId: number
+   128→      name: string
+   129→      kind: string
+   130→      tableId?: number
+   131→      polygon: VisionZonePoint[]
+   132→      seats?: number
+   133→      active: boolean
+   134→    }) => apiFetch<{ zone: VisionZoneDTO }>('/api/vision/zones', { body }),
+   135→    onSuccess: async () => {
+   136→      toast.success(t('vision.zones.created'))
+   137→      resetZoneForm()
+   138→      await invalidateZones()
+   139→    },
+   140→    onError: (err: Error) => toast.error(err.message),
+   141→  })
+   142→
+   143→  const updateZoneMutation = useMutation({
+   144→    mutationFn: (vars: { id: number; version: number; body: Record<string, unknown> }) =>
+   145→      apiFetch<{ zone: VisionZoneDTO }>(`/api/vision/zones/${vars.id}`, {
+   146→        method: 'PUT',
+   147→        body: { ...vars.body, version: vars.version },
+   148→      }),
+   149→    onSuccess: async () => {
+   150→      toast.success(t('vision.zones.updated'))
+   151→      if (editingZone) resetZoneForm()
+   152→      await invalidateZones()
+   153→    },
+   154→    onError: async (err: Error) => {
+   155→      toast.error(`${err.message} — ${t('vision.zones.conflict')}`)
+   156→      await invalidateZones()
+   157→    },
+   158→  })
+   159→
+   160→  const deleteZoneMutation = useMutation({
+   161→    mutationFn: (id: number) => apiFetch<{ ok: boolean }>(`/api/vision/zones/${id}`, { method: 'DELETE' }),
+   162→    onSuccess: async () => {
+   163→      toast.success(t('vision.zones.deleted'))
+   164→      setDeleteOpen(false)
+   165→      resetZoneForm()
+   166→      await invalidateZones()
+   167→    },
+   168→    onError: (err: Error) => toast.error(err.message),
+   169→  })
+   170→
+   171→  const testDetectionMutation = useMutation({
+   172→    mutationFn: (tableId: number) =>
+   173→      apiFetch<{ results: { event_id: string; outcome: string; detail: string | null }[] }>(
+   174→        '/api/vision/simulate',
+   175→        { body: { scenario: 'seat', tableId, people: 1 } },
+   176→      ),
+   177→    onSuccess: async (data) => {
+   178→      const first = data.results[0]
+   179→      if (first) toast.info(t(`vision.outcome.${first.outcome}`))
+   180→      await Promise.all([
+   181→        queryClient.invalidateQueries({ queryKey: ['vision-overview'] }),
+   182→        queryClient.invalidateQueries({ queryKey: ['vision-movements'] }),
+   183→      ])
+   184→    },
+   185→    onError: (err: Error) => toast.error(err.message),
+   186→  })
+   187→
+   188→  const resetZoneForm = () => {
+   189→    setEditingZone(null)
+   190→    setDraftPolygon(null)
+   191→    setZoneName('')
+   192→    setZoneKind('table')
+   193→    setZoneTableId('none')
+   194→    setZoneSeats('')
+   195→    setZoneActive(true)
+   196→  }
+   197→
+   198→  const startDrawing = () => {
+   199→    resetZoneForm()
+   200→    setDrawing(true)
+   201→    setPoints([])
+   202→  }
+   203→
+   204→  const cancelDrawing = () => {
+   205→    setDrawing(false)
+   206→    setPoints([])
+   207→  }
+   208→
+   209→  const addPoint = (e: React.MouseEvent<SVGSVGElement>) => {
+   210→    if (!drawing) return
+   211→    const rect = svgRef.current?.getBoundingClientRect()
+   212→    if (!rect) return
+   213→    if (points.length >= MAX_ZONE_POINTS) {
+   214→      toast.info(t('vision.zones.maxPoints'))
+   215→      return
+   216→    }
+   217→    const x = clamp01((e.clientX - rect.left) / rect.width)
+   218→    const y = clamp01((e.clientY - rect.top) / rect.height)
+   219→    setPoints((prev) => [...prev, { x, y }])
+   220→  }
+   221→
+   222→  const commitPolygon = () => {
+   223→    if (points.length < MIN_ZONE_POINTS) return
+   224→    setDraftPolygon(points)
+   225→    setDrawing(false)
+   226→    setPoints([])
+   227→  }
+   228→
+   229→  const selectZone = (zone: VisionZoneDTO) => {
+   230→    setEditingZone(zone)
+   231→    setDraftPolygon(null)
+   232→    setDrawing(false)
+   233→    setPoints([])
+   234→    setZoneName(zone.name)
+   235→    setZoneKind(String(zone.kind))
+   236→    setZoneTableId(zone.tableId != null ? String(zone.tableId) : 'none')
+   237→    setZoneSeats(zone.seats != null ? String(zone.seats) : '')
+   238→    setZoneActive(zone.active)
+   239→  }
+   240→
+   241→  const prefillFromTable = (table: RestaurantTable) => {
+   242→    if (drawing) return
+   243→    setZoneTableId(String(table.id))
+   244→    if (!editingZone) setZoneName(`Z-${table.name}`)
+   245→  }
+   246→
+   247→  const tables = floorPlan?.tables.filter((tb) => tb.active) ?? []
+   248→  const formTableId = zoneTableId === 'none' ? null : Number(zoneTableId)
+   249→  const polygon = editingZone ? editingZone.polygon : draftPolygon
+   250→  const canSave =
+   251→    zoneName.trim() !== '' &&
+   252→    polygon != null &&
+   253→    polygon.length >= MIN_ZONE_POINTS &&
+   254→    camera != null
+   255→
+   256→  const submitZone = () => {
+   257→    if (!camera) return
+   258→    if (zoneName.trim() === '') {
+   259→      toast.error(t('vision.zones.nameRequired'))
+   260→      return
+   261→    }
+   262→    if (polygon == null || polygon.length < MIN_ZONE_POINTS) {
+   263→      toast.error(t('vision.zones.polygonRequired'))
+   264→      return
+   265→    }
+   266→    const seats = zoneSeats.trim() === '' ? undefined : Math.max(0, Math.floor(Number(zoneSeats)))
+   267→    const tableId = formTableId ?? undefined
+   268→    if (editingZone) {
+   269→      updateZoneMutation.mutate({
+   270→        id: editingZone.id,
+   271→        version: editingZone.version,
+   272→        body: {
+   273→          name: zoneName.trim(),
+   274→          kind: zoneKind,
+   275→          tableId,
+   276→          polygon,
+   277→          seats,
+   278→          active: zoneActive,
+   279→        },
+   280→      })
+   281→    } else {
+   282→      createZoneMutation.mutate({
+   283→        cameraId: camera.id,
+   284→        name: zoneName.trim(),
+   285→        kind: zoneKind,
+   286→        tableId,
+   287→        polygon,
+   288→        seats,
+   289→        active: zoneActive,
+   290→      })
+   291→    }
+   292→  }
+   293→
+   294→  const runTest = () => {
+   295→    if (formTableId == null) {
+   296→      toast.error(t('vision.zones.needTable'))
+   297→      return
+   298→    }
+   299→    testDetectionMutation.mutate(formTableId)
+   300→  }
+   301→
+   302→  if (isLoading) {
+   303→    return (
+   304→      <div className="space-y-4">
+   305→        <Skeleton className="h-11 w-64" />
+   306→        <Skeleton className="aspect-[4/3] w-full rounded-2xl" />
+   307→        <Skeleton className="h-64 w-full rounded-2xl" />
+   308→      </div>
+   309→    )
+   310→  }
+   311→  if (isError) {
+   312→    return <VisionErrorCard onRetry={refetch} />
+   313→  }
+   314→
+   315→  if (cameras.length === 0) {
+   316→    return (
+   317→      <Card className="border-dashed">
+   318→        <CardContent className="flex flex-col items-center gap-2 p-8 text-center">
+   319→          <SquareDashed className="size-8 text-muted-foreground/40" aria-hidden />
+   320→          <p className="font-medium">{t('vision.cameras.empty')}</p>
+   321→          <p className="text-sm text-muted-foreground">{t('vision.cameras.emptyHint')}</p>
+   322→        </CardContent>
+   323→      </Card>
+   324→    )
+   325→  }
+   326→
+   327→  return (
+   328→    <section className="space-y-4">
+   329→      <div className="flex flex-wrap items-end justify-between gap-3">
+   330→        <div className="space-y-1.5">
+   331→          <p className="text-sm text-muted-foreground">{t('vision.zones.subtitle')}</p>
+   332→          <div className="flex items-center gap-2">
+   333→            <Label htmlFor="zone-camera" className="text-xs">
+   334→              {t('vision.zones.camera')}
+   335→            </Label>
+   336→            <Select
+   337→              value={String(camera?.id ?? '')}
+   338→              onValueChange={(v) => {
+   339→                setCameraId(Number(v))
+   340→                resetZoneForm()
+   341→                cancelDrawing()
+   342→              }}
+   343→            >
+   344→              <SelectTrigger id="zone-camera" className="h-11 w-56">
+   345→                <SelectValue />
+   346→              </SelectTrigger>
+   347→              <SelectContent>
+   348→                {cameras.map((c) => (
+   349→                  <SelectItem key={c.id} value={String(c.id)}>
+   350→                    <span className="font-mono text-xs uppercase">{c.code}</span> · {c.name}
+   351→                  </SelectItem>
+   352→                ))}
+   353→              </SelectContent>
+   354→            </Select>
+   355→          </div>
+   356→        </div>
+   357→        {drawing ? (
+   358→          <div className="flex flex-wrap items-center gap-2">
+   359→            <span className="text-xs font-semibold text-amber-700 tabular-nums">
+   360→              {t('vision.zones.points', { n: points.length })} —{' '}
+   361→              {points.length < MIN_ZONE_POINTS ? t('vision.zones.needMin') : ''}
+   362→            </span>
+   363→            <Button
+   364→              variant="outline"
+   365→              className="h-11 gap-1.5"
+   366→              disabled={points.length === 0}
+   367→              onClick={() => setPoints((prev) => prev.slice(0, -1))}
+   368→            >
+   369→              <Eraser className="size-4" aria-hidden />
+   370→              {t('vision.zones.undoPoint')}
+   371→            </Button>
+   372→            <Button
+   373→              variant="outline"
+   374→              className="h-11 gap-1.5"
+   375→              onClick={cancelDrawing}
+   376→            >
+   377→              {t('vision.zones.cancelDraw')}
+   378→            </Button>
+   379→            <Button
+   380→              className="h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+   381→              disabled={points.length < MIN_ZONE_POINTS}
+   382→              title={t('vision.zones.closeSaveHint')}
+   383→              onClick={commitPolygon}
+   384→            >
+   385→              {t('vision.zones.closeSave')}
+   386→            </Button>
+   387→          </div>
+   388→        ) : (
+   389→          <Button variant="outline" className="h-11 gap-1.5" onClick={startDrawing}>
+   390→            <Crosshair className="size-4" aria-hidden />
+   391→            {t('vision.zones.draw')}
+   392→          </Button>
+   393→        )}
+   394→      </div>
+   395→
+   396→      <div className="grid items-start gap-4 xl:grid-cols-3">
+   397→        {/* ── schematic canvas ── */}
+   398→        <Card className="xl:col-span-2">
+   399→          <CardContent className="space-y-2 p-4">
+   400→            {floorPlan == null ? (
+   401→              <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-stone-300 bg-stone-50 text-center">
+   402→                <SquareDashed className="size-8 text-muted-foreground/40" aria-hidden />
+   403→                <p className="max-w-sm px-4 text-sm text-muted-foreground">
+   404→                  {t('vision.zones.noFloor')}
+   405→                </p>
+   406→              </div>
+   407→            ) : (
+   408→              <>
+   409→                <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border-2 border-stone-300 bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px]">
+   410→                  {floorPlan.backgroundImage && (
+   411→                    <img
+   412→                      src={floorPlan.backgroundImage}
+   413→                      alt={floorPlan.name}
+   414→                      className="absolute inset-0 h-full w-full object-contain opacity-60"
+   415→                    />
+   416→                  )}
+   417→
+   418→                  {/* zones overlay (SVG 0..100 normalized, stretched) */}
+   419→                  <svg
+   420→                    ref={svgRef}
+   421→                    viewBox="0 0 100 100"
+   422→                    preserveAspectRatio="none"
+   423→                    className={cn('absolute inset-0 h-full w-full', drawing && 'cursor-crosshair')}
+   424→                    onClick={addPoint}
+   425→                    aria-label={t('vision.zones.subtitle')}
+   426→                  >
+   427→                    {cameraZones.map((zone) => {
+   428→                      const selected = editingZone?.id === zone.id
+   429→                      const pts = zone.polygon.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
+   430→                      return (
+   431→                        <polygon
+   432→                          key={zone.id}
+   433→                          points={pts}
+   434→                          fill={selected ? 'rgba(5,150,105,0.20)' : 'rgba(180,83,9,0.18)'}
+   435→                          stroke={selected ? '#059669' : '#d97706'}
+   436→                          strokeWidth={selected ? 2 : 0.6}
+   437→                          className={cn(!drawing && 'cursor-pointer')}
+   438→                          style={{ pointerEvents: drawing ? 'none' : 'auto' }}
+   439→                          onClick={(e) => {
+   440→                            e.stopPropagation()
+   441→                            if (!drawing) selectZone(zone)
+   442→                          }}
+   443→                        >
+   444→                          <title>{zone.name}</title>
+   445→                        </polygon>
+   446→                      )
+   447→                    })}
+   448→
+   449→                    {/* committed draft / editing outline (emerald highlight) */}
+   450→                    {polygon && polygon.length >= MIN_ZONE_POINTS && (
+   451→                      <polygon
+   452→                        points={polygon.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')}
+   453→                        fill="rgba(5,150,105,0.10)"
+   454→                        stroke="#059669"
+   455→                        strokeWidth={0.8}
+   456→                        strokeDasharray="1.5,1"
+   457→                        style={{ pointerEvents: 'none' }}
+   458→                      />
+   459→                    )}
+   460→
+   461→                    {/* in-progress drawing */}
+   462→                    {drawing && points.length > 0 && (
+   463→                      <>
+   464→                        {points.length >= MIN_ZONE_POINTS && (
+   465→                          <polygon
+   466→                            points={points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')}
+   467→                            fill="rgba(180,83,9,0.10)"
+   468→                            stroke="#d97706"
+   469→                            strokeWidth={0.5}
+   470→                            strokeDasharray="1,1"
+   471→                            style={{ pointerEvents: 'none' }}
+   472→                          />
+   473→                        )}
+   474→                        <polyline
+   475→                          points={points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')}
+   476→                          fill="none"
+   477→                          stroke="#b45309"
+   478→                          strokeWidth={0.5}
+   479→                          style={{ pointerEvents: 'none' }}
+   480→                        />
+   481→                        {points.map((p, i) => (
+   482→                          <g key={i} style={{ pointerEvents: 'none' }}>
+   483→                            <circle cx={p.x * 100} cy={p.y * 100} r={0.9} fill="#b45309" />
+   484→                            <circle
+   485→                              cx={p.x * 100}
+   486→                              cy={p.y * 100}
+   487→                              r={2.2}
+   488→                              fill="none"
+   489→                              stroke="#b45309"
+   490→                              strokeWidth={0.35}
+   491→                            />
+   492→                          </g>
+   493→                        ))}
+   494→                      </>
+   495→                    )}
+   496→                  </svg>
+   497→
+   498→                  {/* schematic table dots (click → prefill the form) */}
+   499→                  {tables.map((tb) => (
+   500→                    <button
+   501→                      key={tb.id}
+   502→                      type="button"
+   503→                      disabled={drawing}
+   504→                      title={tb.name}
+   505→                      aria-label={`${tb.name} — ${t(`status.table.${tb.status}`)}`}
+   506→                      style={{ left: `${tb.positionX}%`, top: `${tb.positionY}%` }}
+   507→                      onClick={() => prefillFromTable(tb)}
+   508→                      className={cn(
+   509→                        'absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-lg border px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition',
+   510→                        tableDotClasses(tb.status),
+   511→                        formTableId === tb.id && 'ring-2 ring-emerald-500',
+   512→                        drawing ? 'pointer-events-none opacity-70' : 'hover:shadow-md',
+   513→                      )}
+   514→                    >
+   515→                      {tb.name}
+   516→                    </button>
+   517→                  ))}
+   518→                </div>
+   519→                <p className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground">
+   520→                  <MousePointerClick className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   521→                  {t('vision.zones.clickTableHint')} · {t('vision.zones.clickZoneHint')}
+   522→                </p>
+   523→                <p className="text-[11px] leading-snug text-muted-foreground">
+   524→                  {t('vision.zones.calibrationHint')}
+   525→                </p>
+   526→              </>
+   527→            )}
+   528→          </CardContent>
+   529→        </Card>
+   530→
+   531→        {/* ── zone form ── */}
+   532→        <Card>
+   533→          <CardHeader className="space-y-0">
+   534→            <CardTitle className="flex items-center gap-2 text-base">
+   535→              <SquareDashed className="size-4" aria-hidden />
+   536→              {editingZone
+   537→                ? t('vision.zones.editing', { name: editingZone.name })
+   538→                : t('vision.zones.newZone')}
+   539→            </CardTitle>
+   540→            <CardDescription className="text-[11px]">
+   541→              {polygon != null && polygon.length >= MIN_ZONE_POINTS
+   542→                ? t('vision.zones.points', { n: polygon.length })
+   543→                : t('vision.zones.polygonRequired')}
+   544→            </CardDescription>
+   545→          </CardHeader>
+   546→          <CardContent className="space-y-3">
+   547→            <div className="space-y-1.5">
+   548→              <Label htmlFor="zone-name">{t('vision.zones.zoneName')}</Label>
+   549→              <Input
+   550→                id="zone-name"
+   551→                className="h-11"
+   552→                placeholder="Z-T1"
+   553→                value={zoneName}
+   554→                onChange={(e) => setZoneName(e.target.value)}
+   555→              />
+   556→            </div>
+   557→            <div className="space-y-1.5">
+   558→              <Label htmlFor="zone-kind">{t('vision.zones.zoneKind')}</Label>
+   559→              <Select value={zoneKind} onValueChange={setZoneKind}>
+   560→                <SelectTrigger id="zone-kind" className="h-11 w-full">
+   561→                  <SelectValue />
+   562→                </SelectTrigger>
+   563→                <SelectContent>
+   564→                  {VISION_ZONE_KINDS.map((kind) => (
+   565→                    <SelectItem key={kind} value={kind}>
+   566→                      {t(`vision.zones.kind.${kind}`)}
+   567→                    </SelectItem>
+   568→                  ))}
+   569→                </SelectContent>
+   570→              </Select>
+   571→            </div>
+   572→            <div className="space-y-1.5">
+   573→              <Label htmlFor="zone-table">{t('vision.zones.linkedTable')}</Label>
+   574→              <Select value={zoneTableId} onValueChange={setZoneTableId}>
+   575→                <SelectTrigger id="zone-table" className="h-11 w-full">
+   576→                  <SelectValue />
+   577→                </SelectTrigger>
+   578→                <SelectContent>
+   579→                  <SelectItem value="none">{t('vision.zones.tableNone')}</SelectItem>
+   580→                  {tables.map((tb) => (
+   581→                    <SelectItem key={tb.id} value={String(tb.id)}>
+   582→                      {tb.name}
+   583→                    </SelectItem>
+   584→                  ))}
+   585→                  {editingZone?.tableId != null &&
+   586→                    !tables.some((tb) => tb.id === editingZone.tableId) && (
+   587→                      <SelectItem value={String(editingZone.tableId)}>
+   588→                        {editingZone.tableName ?? `#${editingZone.tableId}`}
+   589→                      </SelectItem>
+   590→                    )}
+   591→                </SelectContent>
+   592→              </Select>
+   593→              <p className="text-[11px] leading-snug text-muted-foreground">
+   594→                {t('vision.zones.tableHint')}
+   595→              </p>
+   596→            </div>
+   597→            <div className="flex items-end gap-3">
+   598→              <div className="flex-1 space-y-1.5">
+   599→                <Label htmlFor="zone-seats">{t('common.seats')}</Label>
+   600→                <Input
+   601→                  id="zone-seats"
+   602→                  type="number"
+   603→                  inputMode="numeric"
+   604→                  min={0}
+   605→                  max={30}
+   606→                  className="h-11"
+   607→                  value={zoneSeats}
+   608→                  onChange={(e) => setZoneSeats(e.target.value)}
+   609→                />
+   610→              </div>
+   611→              <div className="flex items-center gap-2 pb-3">
+   612→                <Switch
+   613→                  id="zone-active"
+   614→                  checked={zoneActive}
+   615→                  onCheckedChange={setZoneActive}
+   616→                  aria-label={t('common.active')}
+   617→                />
+   618→                <Label htmlFor="zone-active" className="text-xs">
+   619→                  {t('common.active')}
+   620→                </Label>
+   621→              </div>
+   622→            </div>
+   623→
+   624→            <div className="flex flex-col gap-2 pt-1">
+   625→              <Button
+   626→                className="h-11 w-full gap-1.5"
+   627→                disabled={!canSave || createZoneMutation.isPending || updateZoneMutation.isPending}
+   628→                onClick={submitZone}
+   629→              >
+   630→                {(createZoneMutation.isPending || updateZoneMutation.isPending) && (
+   631→                  <Loader2 className="size-4 animate-spin" aria-hidden />
+   632→                )}
+   633→                {editingZone ? t('vision.zones.save') : t('vision.zones.create')}
+   634→              </Button>
+   635→              <Button
+   636→                variant="outline"
+   637→                className="h-11 w-full gap-1.5"
+   638→                disabled={formTableId == null || testDetectionMutation.isPending}
+   639→                title={t('vision.zones.testHint')}
+   640→                onClick={runTest}
+   641→              >
+   642→                {testDetectionMutation.isPending ? (
+   643→                  <Loader2 className="size-4 animate-spin" aria-hidden />
+   644→                ) : (
+   645→                  <Play className="size-4" aria-hidden />
+   646→                )}
+   647→                {t('vision.zones.test')}
+   648→              </Button>
+   649→              {editingZone && (
+   650→                <Button
+   651→                  variant="outline"
+   652→                  className="h-11 w-full gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-700"
+   653→                  disabled={deleteZoneMutation.isPending}
+   654→                  onClick={() => setDeleteOpen(true)}
+   655→                >
+   656→                  <Trash2 className="size-4" aria-hidden />
+   657→                  {t('common.delete')}
+   658→                </Button>
+   659→              )}
+   660→            </div>
+   661→          </CardContent>
+   662→        </Card>
+   663→      </div>
+   664→
+   665→      {/* ── zones list for this camera ── */}
+   666→      <Card>
+   667→        <CardHeader className="space-y-0">
+   668→          <CardTitle className="text-base">{t('vision.zones.listTitle')}</CardTitle>
+   669→        </CardHeader>
+   670→        <CardContent>
+   671→          {cameraZones.length === 0 ? (
+   672→            <p className="rounded-lg border border-dashed border-stone-200 bg-stone-50 p-4 text-sm text-muted-foreground">
+   673→              {t('vision.zones.none')}
+   674→            </p>
+   675→          ) : (
+   676→            <ul className="rms-scroll max-h-72 divide-y divide-stone-100 overflow-y-auto pr-1">
+   677→              {cameraZones.map((zone) => (
+   678→                <li key={zone.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5">
+   679→                  <button
+   680→                    type="button"
+   681→                    className="font-medium underline-offset-2 hover:underline"
+   682→                    onClick={() => selectZone(zone)}
+   683→                  >
+   684→                    {zone.name}
+   685→                  </button>
+   686→                  <Badge
+   687→                    variant="outline"
+   688→                    className={cn(
+   689→                      zone.tableId != null
+   690→                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+   691→                        : 'border-stone-300 bg-stone-100 text-stone-500',
+   692→                    )}
+   693→                  >
+   694→                    {zone.tableName ?? t('vision.zones.tableNone')}
+   695→                  </Badge>
+   696→                  <Badge variant="secondary" className="text-[10px]">
+   697→                    {t(`vision.zones.kind.${zone.kind}`)}
+   698→                  </Badge>
+   699→                  <span className="text-xs text-muted-foreground tabular-nums">
+   700→                    {t('vision.zones.points', { n: zone.polygon.length })} ·{' '}
+   701→                    {t('vision.zones.version', { n: zone.version })}
+   702→                  </span>
+   703→                  <span className="ms-auto flex items-center gap-2">
+   704→                    <Switch
+   705→                      checked={zone.active}
+   706→                      aria-label={`${t('common.active')} — ${zone.name}`}
+   707→                      onCheckedChange={(checked) =>
+   708→                        updateZoneMutation.mutate({
+   709→                          id: zone.id,
+   710→                          version: zone.version,
+   711→                          body: { active: checked },
+   712→                        })
+   713→                      }
+   714→                    />
+   715→                  </span>
+   716→                </li>
+   717→              ))}
+   718→            </ul>
+   719→          )}
+   720→        </CardContent>
+   721→      </Card>
+   722→
+   723→      {/* ── delete zone confirm ── */}
+   724→      <AlertDialog
+   725→        open={deleteOpen}
+   726→        onOpenChange={(o) => {
+   727→          if (!o && !deleteZoneMutation.isPending) setDeleteOpen(false)
+   728→        }}
+   729→      >
+   730→        <AlertDialogContent>
+   731→          <AlertDialogHeader>
+   732→            <AlertDialogTitle>
+   733→              {t('vision.zones.deleteTitle', { name: editingZone?.name ?? '' })}
+   734→            </AlertDialogTitle>
+   735→            <AlertDialogDescription>{t('vision.zones.deleteDesc')}</AlertDialogDescription>
+   736→          </AlertDialogHeader>
+   737→          <AlertDialogFooter>
+   738→            <AlertDialogCancel disabled={deleteZoneMutation.isPending}>
+   739→              {t('common.cancel')}
+   740→            </AlertDialogCancel>
+   741→            <AlertDialogAction
+   742→              className="bg-rose-600 text-white hover:bg-rose-700"
+   743→              disabled={deleteZoneMutation.isPending}
+   744→              onClick={(e) => {
+   745→                e.preventDefault()
+   746→                if (editingZone) deleteZoneMutation.mutate(editingZone.id)
+   747→              }}
+   748→            >
+   749→              {deleteZoneMutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />}
+   750→              {t('common.delete')}
+   751→            </AlertDialogAction>
+   752→          </AlertDialogFooter>
+   753→        </AlertDialogContent>
+   754→      </AlertDialog>
+   755→    </section>
+   756→  )
+   757→}
+   758→

@@ -26,6 +26,21 @@ export const AUDIT_ACTIONS = [
   'role.update',
   'role.delete',
   'inventory.adjust',
+  // R9: AI vision — cameras/zones config, human-confirmed movements,
+  // overrides and edge settings (append-only trail)
+  'vision.cameraCreate',
+  'vision.cameraUpdate',
+  'vision.cameraDelete',
+  'vision.zoneCreate',
+  'vision.zoneUpdate',
+  'vision.zoneDelete',
+  'vision.movementConfirm',
+  'vision.movementReject',
+  'vision.movementUndo',
+  'vision.override',
+  'vision.configUpdate',
+  'vision.ingestKeyRotate',
+  'vision.simulate',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -33,7 +48,7 @@ export type AuditInput = {
   /** the session user performing the action (name snapshotted) */
   user?: Pick<SessionPayload, 'userId' | 'name'> | null
   action: AuditAction
-  entity: 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory'
+  entity: 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory' | 'vision'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null

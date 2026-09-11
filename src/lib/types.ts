@@ -400,3 +400,227 @@ export type BackupInfo = {
   sizeBytes: number
   createdAt: string
 }
+
+// ─── R9: AI vision / CCTV seating intelligence ──────────────────────
+// Contract shared by /api/vision/** routes and the vision UI. Vision is a
+// PARALLEL OBSERVATIONAL layer: it never writes operational table state
+// (`tables.status`) except via the human-confirmed movement flow.
+
+export type VisionCameraStatus = 'online' | 'offline' | 'error' | 'disabled'
+
+export type VisionCameraDTO = {
+  id: number
+  code: string
+  name: string
+  /** masked in API responses (credentials never returned) */
+  streamUrl: string | null
+  floorPlanId: number | null
+  floorPlanName: string | null
+  status: VisionCameraStatus | string
+  lastSeenAt: string | null
+  lastError: string | null
+  zoneCount: number
+  active: boolean
+  createdAt: string
+}
+
+export type VisionZoneKind = 'table' | 'entrance' | 'bar' | 'waiting' | 'other'
+
+export type VisionZonePoint = { x: number; y: number }
+
+export type VisionZoneDTO = {
+  id: number
+  cameraId: number
+  cameraCode: string
+  name: string
+  kind: VisionZoneKind | string
+  tableId: number | null
+  tableName: string | null
+  floorPlanId: number | null
+  /** normalized 0..1 camera-frame coords */
+  polygon: VisionZonePoint[]
+  seats: number | null
+  active: boolean
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type VisionObservationState = 'unknown' | 'empty' | 'occupied'
+
+export type VisionTableStateDTO = {
+  state: VisionObservationState | string
+  peopleCount: number
+  confidence: number
+  stateSince: string | null
+  lastEventAt: string | null
+  manualHoldUntil: string | null
+  /** false when the observing camera is offline/error/disabled/unknown */
+  cameraOnline: boolean
+}
+
+export type VisionTableMismatch = 'none' | 'seated_no_order' | 'left_check_open'
+
+export type VisionFloorTableDTO = RestaurantTable & {
+  zoneId: number | null
+  zoneName: string | null
+  cameraCode: string | null
+  vision: VisionTableStateDTO
+  mismatch: VisionTableMismatch | string
+}
+
+export type VisionFloorDTO = {
+  id: number
+  name: string
+  tables: VisionFloorTableDTO[]
+}
+
+export type VisionAlertKind = 'no_order' | 'left_check_open' | 'camera_offline' | 'camera_error'
+
+export type VisionAlertDTO = {
+  kind: VisionAlertKind | string
+  severity: 'info' | 'warning' | 'critical' | string
+  tableId: number | null
+  tableName: string | null
+  cameraCode: string | null
+  /** stable i18n key suffix for the message body */
+  messageKey: string
+  since: string | null
+  peopleCount: number | null
+}
+
+export type VisionConfigDTO = {
+  highConfidence: number
+  mediumConfidence: number
+  vacancyDelaySeconds: number
+  movementDedupeMinutes: number
+  movementCooldownMinutes: number
+  serviceDelayMinutes: number
+  maxEventAgeSeconds: number
+  manualHoldMinutes: number
+}
+
+export type VisionOverviewDTO = {
+  kpis: {
+    totalGuests: number
+    occupiedTables: number
+    availableTables: number
+    posOccupied: number
+    pendingMovements: number
+    reviewRequired: number
+    coveredTables: number
+    occupancyPct: number
+    avgDwellMinutes: number | null
+    camerasOnline: number
+    camerasTotal: number
+  }
+  cameras: VisionCameraDTO[]
+  floors: VisionFloorDTO[]
+  alerts: VisionAlertDTO[]
+  config: VisionConfigDTO
+  updatedAt: string
+}
+
+export type MovementCandidateStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'rejected'
+  | 'conflict'
+  | 'expired'
+
+export type MovementEvidence = {
+  cameraCode: string | null
+  eventIds: string[]
+  peopleCount: number
+  confidence: number
+} | null
+
+export type MovementCandidateDTO = {
+  id: number
+  fromTableId: number
+  fromTableName: string
+  toTableId: number
+  toTableName: string
+  peopleCount: number
+  confidence: number
+  orderId: number | null
+  orderTotal: number | null
+  detectedAt: string
+  status: MovementCandidateStatus | string
+  evidence: MovementEvidence
+  decidedByName: string | null
+  decidedAt: string | null
+  decisionReason: string | null
+  appliedAt: string | null
+  createdAt: string
+  /** live re-check of operational state at serialization time */
+  currentState: {
+    fromTableStatus: string
+    toTableStatus: string
+    orderStatus: string | null
+    orderTableId: number | null
+  }
+}
+
+export type VisionEventOutcome =
+  | 'applied'
+  | 'duplicate'
+  | 'stale'
+  | 'out_of_order'
+  | 'low_confidence'
+  | 'unknown_camera'
+  | 'unknown_zone'
+  | 'rejected'
+  | 'cooldown_suppressed'
+
+export type VisionEventDTO = {
+  id: number
+  eventId: string
+  type: string
+  cameraCode: string
+  zoneId: number | null
+  tableId: number | null
+  peopleCount: number | null
+  confidence: number | null
+  detectedAt: string
+  outcome: VisionEventOutcome | string
+  outcomeDetail: string | null
+  model: string | null
+  receivedAt: string
+}
+
+export type VisionIngestResult = {
+  event_id: string
+  outcome: VisionEventOutcome | string
+  detail: string | null
+}
+
+export type VisionAnalyticsDTO = {
+  from: string
+  to: string
+  totalGuestsObserved: number
+  avgDwellMinutes: number | null
+  avgTurnoverMinutes: number | null
+  occupiedTableHours: number
+  revenuePerOccupiedTableHour: number | null
+  occupancyByHour: { hour: number; occupiedPct: number; avgGuests: number }[]
+  movementStats: {
+    total: number
+    confirmed: number
+    rejected: number
+    pending: number
+    conflict: number
+    expired: number
+    confirmRate: number | null
+  }
+  eventStats: { total: number; applied: number; duplicates: number; stale: number; lowConfidence: number }
+  perTable: {
+    tableId: number
+    name: string
+    occupiedPeriods: number
+    totalDwellMinutes: number
+    avgDwellMinutes: number | null
+    turnoverCount: number
+  }[]
+  cameraUptime: { cameraCode: string; events: number; onlinePct: number; lastSeenAt: string | null }[]
+}

@@ -1,0 +1,916 @@
+     1→'use client'
+     2→
+     3→import { useMemo, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  Armchair,
+     7→  ArrowLeftRight,
+     8→  BadgeCheck,
+     9→  Brush,
+    10→  Check,
+    11→  ChevronLeft,
+    12→  ChevronRight,
+    13→  Clock,
+    14→  Combine,
+    15→  DoorOpen,
+    16→  Hourglass,
+    17→  Loader2,
+    18→  MapPin,
+    19→  Plus,
+    20→  ShoppingBag,
+    21→  Users,
+    22→  Wallet,
+    23→  X,
+    24→} from 'lucide-react'
+    25→import { toast } from 'sonner'
+    26→
+    27→import {
+    28→  AlertDialog,
+    29→  AlertDialogAction,
+    30→  AlertDialogCancel,
+    31→  AlertDialogContent,
+    32→  AlertDialogDescription,
+    33→  AlertDialogFooter,
+    34→  AlertDialogHeader,
+    35→  AlertDialogTitle,
+    36→} from '@/components/ui/alert-dialog'
+    37→import { Button } from '@/components/ui/button'
+    38→import { Skeleton } from '@/components/ui/skeleton'
+    39→import { apiFetch, fetcher } from '@/lib/api'
+    40→import { MAX_SEATING_TABLES } from '@/lib/constants'
+    41→import { elapsedSince, formatCurrency } from '@/lib/format'
+    42→import { useI18n } from '@/lib/i18n'
+    43→import { cn } from '@/lib/utils'
+    44→import type { FloorPlan, Order, RestaurantTable } from '@/lib/types'
+    45→
+    46→type TableSelectProps = {
+    47→  onSelectTable: (table: RestaurantTable) => void
+    48→  onTakeaway: () => void
+    49→  onOpenTakeawayOrder: (order: Order) => void
+    50→  /** When set, start directly in transfer step 2 (destination selection) for this order. */
+    51→  transferOrderId?: number | null
+    52→  /** Called after a transfer completes (pos-view resets its order screen state). */
+    53→  onTransferDone?: () => void
+    54→  /** Seat Party tool result — the free tables selected for the party, in
+    55→   *  selection order (primary table first). TableSelect exits the tool itself. */
+    56→  onSeatParty: (tables: RestaurantTable[]) => void
+    57→  /** Deferred-check chip clicked — pos-view opens the payment modal to settle it. */
+    58→  onSettleDeferred: (order: Order) => void
+    59→  /** "My shift" closeout — pos-view opens the per-server shift sheet (R8). */
+    60→  onMyShift?: () => void
+    61→}
+    62→
+    63→type ToolKind = 'transfer' | 'merge' | 'seat'
+    64→type SourcePick = { orderId: number }
+    65→
+    66→type TableInteraction = 'normal' | 'eligible' | 'ineligible'
+    67→
+    68→/** Per-shape tile silhouette classes — Odoo 17-style tiles. The floor grid
+    69→ *  keeps its responsive layout (tiles fill the grid cell width); only the
+    70→ *  silhouette changes (square/round/rectangle/oval). The admin floor-plan
+    71→ *  editor mirrors these exact strings. */
+    72→const SHAPE_TILE_CLASSES: Record<string, string> = {
+    73→  square: 'aspect-square rounded-2xl',
+    74→  round: 'aspect-square rounded-full',
+    75→  rectangle: 'h-24 rounded-2xl',
+    76→  oval: 'h-24 rounded-full',
+    77→}
+    78→
+    79→function shapeClasses(shape: string): string {
+    80→  return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+    81→}
+    82→
+    83→export default function TableSelect({
+    84→  onSelectTable,
+    85→  onTakeaway,
+    86→  onOpenTakeawayOrder,
+    87→  transferOrderId,
+    88→  onTransferDone,
+    89→  onSeatParty,
+    90→  onSettleDeferred,
+    91→  onMyShift,
+    92→}: TableSelectProps) {
+    93→  const queryClient = useQueryClient()
+    94→  const { t } = useI18n()
+    95→
+    96→  const [floorIdx, setFloorIdx] = useState(0)
+    97→  // When pos-view passes transferOrderId (Transfer clicked on the order
+    98→  // screen), this component mounts fresh in transfer step 2 (destination
+    99→  // selection) — pos-view only sets it right before switching to tables view,
+   100→  // so mount-time initialization is sufficient.
+   101→  const [tool, setTool] = useState<ToolKind | null>(transferOrderId != null ? 'transfer' : null)
+   102→  const [source, setSource] = useState<SourcePick | null>(
+   103→    transferOrderId != null ? { orderId: transferOrderId } : null,
+   104→  )
+   105→  // Seat Party: the free tables tapped so far, in selection order (the first
+   106→  // one becomes the primary table of the merged seating).
+   107→  const [seatSelection, setSeatSelection] = useState<RestaurantTable[]>([])
+   108→  // Paid/deferred tile tap-to-clear confirmation dialog target.
+   109→  const [clearTarget, setClearTarget] = useState<RestaurantTable | null>(null)
+   110→
+   111→  const { data: floorPlanData, isLoading } = useQuery({
+   112→    queryKey: ['floorplans'],
+   113→    queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
+   114→    refetchInterval: 3000, // LIVE table statuses
+   115→  })
+   116→
+   117→  const { data: openOrdersData } = useQuery({
+   118→    queryKey: ['orders', 'open'],
+   119→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   120→    refetchInterval: 3000,
+   121→  })
+   122→
+   123→  // Outstanding deferred checks (client left, payment pending) — settle chips.
+   124→  const { data: deferredOrdersData } = useQuery({
+   125→    queryKey: ['orders', 'deferred'],
+   126→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=deferred'),
+   127→    refetchInterval: 3000,
+   128→    enabled: !tool,
+   129→  })
+   130→
+   131→  const floorPlans = floorPlanData?.floorPlans ?? []
+   132→  const openOrders = openOrdersData?.orders ?? []
+   133→  const deferredOrders = deferredOrdersData?.orders ?? []
+   134→  const takeawayOrders = useMemo(
+   135→    () => openOrders.filter((o) => o.tableId === null),
+   136→    [openOrders],
+   137→  )
+   138→
+   139→  const idx = floorPlans.length > 0 ? Math.min(floorIdx, floorPlans.length - 1) : 0
+   140→  const plan = floorPlans[idx] ?? null
+   141→
+   142→  const sourceOrder = source ? openOrders.find((o) => o.id === source.orderId) ?? null : null
+   143→  const sourceLabel = source ? sourceOrder?.table?.name ?? t('common.takeaway') : null
+   144→
+   145→  // ── Manual table turnover (two clicks): paid/deferred → bus → amber
+   146→  // 'dirty' (needs cleaning) → clean → free. Audit-logged server-side.
+   147→  const clearTableMutation = useMutation({
+   148→    mutationFn: (vars: { id: number; name: string; phase: 'bus' | 'clean' }) =>
+   149→      apiFetch<{ table: RestaurantTable }>(`/api/tables/${vars.id}/clear`, {
+   150→        method: 'POST',
+   151→        body: { action: vars.phase },
+   152→      }),
+   153→    onSuccess: async (_data, vars) => {
+   154→      toast.success(
+   155→        vars.phase === 'bus'
+   156→          ? t('pos.tableBussedToast', { table: vars.name })
+   157→          : t('pos.tableCleanedToast', { table: vars.name }),
+   158→      )
+   159→      setClearTarget(null)
+   160→      await Promise.all([
+   161→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   162→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   163→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   164→      ])
+   165→    },
+   166→    onError: (err: Error) => toast.error(err.message),
+   167→  })
+   168→
+   169→  // ── Transfer & merge mutations ───────────────────────────────────
+   170→  const invalidateAfterMove = async (...orderIds: number[]) => {
+   171→    await Promise.all([
+   172→      queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   173→      queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   174→      queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   175→      queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   176→      ...orderIds.map((id) => queryClient.invalidateQueries({ queryKey: ['pos-order', id] })),
+   177→    ])
+   178→  }
+   179→
+   180→  const transferMutation = useMutation({
+   181→    mutationFn: (vars: { orderId: number; tableId: number; tableName: string }) =>
+   182→      apiFetch<{ order: Order }>(`/api/orders/${vars.orderId}/transfer`, {
+   183→        method: 'POST',
+   184→        body: { tableId: vars.tableId },
+   185→      }),
+   186→    onSuccess: async (_data, vars) => {
+   187→      toast.success(t('pos.transferToast', { order: vars.orderId, table: vars.tableName }))
+   188→      await invalidateAfterMove(vars.orderId)
+   189→      exitTool()
+   190→      onTransferDone?.()
+   191→    },
+   192→    onError: (err: Error) => toast.error(err.message),
+   193→  })
+   194→
+   195→  const mergeMutation = useMutation({
+   196→    mutationFn: (vars: { sourceId: number; targetId: number; targetLabel: string }) =>
+   197→      apiFetch<{ order: Order }>(`/api/orders/${vars.targetId}/merge`, {
+   198→        method: 'POST',
+   199→        body: { sourceOrderId: vars.sourceId },
+   200→      }),
+   201→    onSuccess: async (_data, vars) => {
+   202→      toast.success(t('pos.mergeToast', { table: vars.targetLabel }))
+   203→      await invalidateAfterMove(vars.sourceId, vars.targetId)
+   204→      exitTool()
+   205→    },
+   206→    onError: (err: Error) => toast.error(err.message),
+   207→  })
+   208→
+   209→  const busy = transferMutation.isPending || mergeMutation.isPending
+   210→
+   211→  // ── Tool mode helpers ────────────────────────────────────────────
+   212→  const exitTool = () => {
+   213→    setTool(null)
+   214→    setSource(null)
+   215→    setSeatSelection([])
+   216→  }
+   217→
+   218→  const startTransferTool = () => {
+   219→    setTool('transfer')
+   220→    setSource(null)
+   221→    setSeatSelection([])
+   222→  }
+   223→
+   224→  const startMergeTool = () => {
+   225→    setTool('merge')
+   226→    setSource(null)
+   227→    setSeatSelection([])
+   228→  }
+   229→
+   230→  const startSeatTool = () => {
+   231→    setTool('seat')
+   232→    setSource(null)
+   233→    setSeatSelection([])
+   234→  }
+   235→
+   236→  // Paid/deferred/dirty tables hold no open order — they await the manual
+   237→  // bussing/cleaning clicks (amber turnover flow).
+   238→  const isCleanupState = (t2: RestaurantTable) =>
+   239→    t2.status === 'paid' || t2.status === 'deferred' || t2.status === 'dirty'
+   240→
+   241→  const tableInteraction = (t2: RestaurantTable): TableInteraction => {
+   242→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   243→    if (tool === 'seat') {
+   244→      // Only free tables can host a new party.
+   245→      return t2.status === 'free' && t2.openOrderId == null ? 'normal' : 'ineligible'
+   246→    }
+   247→    if (tool === 'transfer') {
+   248→      if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   249→      // Destination: free/reserved tables with no open order (paid/deferred/
+   250→      // dirty tables await their turnover clicks, they are not destinations).
+   251→      return t2.openOrderId == null && t2.status !== 'occupied' && !isCleanupState(t2)
+   252→        ? 'eligible'
+   253→        : 'ineligible'
+   254→    }
+   255→    // Merge: source = any occupied table; target = another open order's table.
+   256→    if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   257→    return t2.openOrderId != null && t2.openOrderId !== source.orderId ? 'eligible' : 'ineligible'
+   258→  }
+   259→
+   260→  const takeawayInteraction = (o: Order): TableInteraction => {
+   261→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   262→    if (tool === 'seat') return 'ineligible'
+   263→    if (tool === 'transfer') {
+   264→      // Takeaway orders are valid transfer sources, never destinations.
+   265→      return source == null ? 'eligible' : 'ineligible'
+   266→    }
+   267→    if (source == null) return 'eligible'
+   268→    return o.id !== source.orderId ? 'eligible' : 'ineligible'
+   269→  }
+   270→
+   271→  const handleTableClick = (t2: RestaurantTable) => {
+   272→    if (busy) return
+   273→    if (tool === 'seat') {
+   274→      if (t2.status !== 'free' || t2.openOrderId != null) return
+   275→      setSeatSelection((prev) => {
+   276→        if (prev.some((s) => s.id === t2.id)) return prev.filter((s) => s.id !== t2.id)
+   277→        if (prev.length >= MAX_SEATING_TABLES) return prev // max 4 tables per seating
+   278→        return [...prev, t2]
+   279→      })
+   280→      return
+   281→    }
+   282→    if (tool === 'transfer') {
+   283→      if (source == null) {
+   284→        if (t2.openOrderId == null) return
+   285→        setSource({ orderId: t2.openOrderId })
+   286→        return
+   287→      }
+   288→      if (t2.openOrderId != null || t2.status === 'occupied' || isCleanupState(t2)) return
+   289→      transferMutation.mutate({ orderId: source.orderId, tableId: t2.id, tableName: t2.name })
+   290→      return
+   291→    }
+   292→    if (tool === 'merge') {
+   293→      if (source == null) {
+   294→        if (t2.openOrderId == null) return
+   295→        setSource({ orderId: t2.openOrderId })
+   296→        return
+   297→      }
+   298→      if (t2.openOrderId == null || t2.openOrderId === source.orderId) return
+   299→      mergeMutation.mutate({ sourceId: source.orderId, targetId: t2.openOrderId, targetLabel: t2.name })
+   300→      return
+   301→    }
+   302→    // Normal mode — paid/deferred tiles open the bussing dialog (→ amber
+   303→    // 'dirty'), dirty tiles the cleaning dialog (→ free).
+   304→    if (isCleanupState(t2) && t2.openOrderId == null) {
+   305→      setClearTarget(t2)
+   306→      return
+   307→    }
+   308→    onSelectTable(t2)
+   309→  }
+   310→
+   311→  const handleTakeawayClick = (o: Order) => {
+   312→    if (busy) return
+   313→    if (tool === 'seat') return
+   314→    if (tool === 'transfer') {
+   315→      if (source == null) setSource({ orderId: o.id })
+   316→      return
+   317→    }
+   318→    if (tool === 'merge') {
+   319→      if (source == null) {
+   320→        setSource({ orderId: o.id })
+   321→      } else if (o.id !== source.orderId) {
+   322→        mergeMutation.mutate({
+   323→          sourceId: source.orderId,
+   324→          targetId: o.id,
+   325→          targetLabel: t('common.takeaway'),
+   326→        })
+   327→      }
+   328→      return
+   329→    }
+   330→    onOpenTakeawayOrder(o)
+   331→  }
+   332→
+   333→  // Seat Party: hand the selection (in order) to pos-view, then exit the tool.
+   334→  const continueSeat = () => {
+   335→    if (seatSelection.length === 0) return
+   336→    const selected = seatSelection
+   337→    exitTool()
+   338→    onSeatParty(selected)
+   339→  }
+   340→
+   341→  // ── Banner text (transfer/merge — seat has its own banner) ────────
+   342→  const bannerText = busy
+   343→    ? tool === 'transfer'
+   344→      ? t('pos.transferring')
+   345→      : t('pos.merging')
+   346→    : tool === 'transfer'
+   347→      ? source
+   348→        ? sourceLabel
+   349→          ? t('pos.transferDest', { order: source.orderId, label: sourceLabel })
+   350→          : t('pos.transferDestNoLabel', { order: source.orderId })
+   351→        : t('pos.transferPick')
+   352→      : source
+   353→        ? t('pos.mergeTarget', {
+   354→            source: sourceLabel ?? `#${source.orderId}`,
+   355→          })
+   356→        : t('pos.mergePick')
+   357→
+   358→  const tables = plan?.tables ?? []
+   359→
+   360→  // ── Hall stats (current floor) + Seat Party availability ─────────
+   361→  const hallFreeCount = tables.filter(
+   362→    (tb) => tb.status === 'free' && tb.openOrderId == null,
+   363→  ).length
+   364→  const hallOccupiedCount = tables.filter(
+   365→    (tb) => tb.status === 'occupied' || tb.openOrderId != null,
+   366→  ).length
+   367→  const hallSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   368→  const hallDirtyCount = tables.filter(
+   369→    (tb) => tb.status === 'dirty' && tb.openOrderId == null,
+   370→  ).length
+   371→  const hasFreeTable = hallFreeCount > 0
+   372→  const seatSeats = seatSelection.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   373→
+   374→  return (
+   375→    <div className="rms-scroll h-full overflow-y-auto">
+   376→      <div className="mx-auto flex w-full max-w-6xl flex-col">
+   377→        {/* ── Control bar ── */}
+   378→        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E2E0] bg-white px-4 py-3">
+   379→          {/* Floor switcher */}
+   380→          <div className="flex items-center gap-2">
+   381→            <Button
+   382→              variant="outline"
+   383→              size="icon"
+   384→              className="h-11 w-11 rounded-xl"
+   385→              disabled={idx <= 0}
+   386→              onClick={() => setFloorIdx(idx - 1)}
+   387→              aria-label={t('pos.prevFloor')}
+   388→            >
+   389→              <ChevronLeft className="size-5 rtl:rotate-180" />
+   390→            </Button>
+   391→            <span className="min-w-[110px] text-center text-lg font-bold">
+   392→              {plan?.name ?? t('pos.floors')}
+   393→            </span>
+   394→            <Button
+   395→              variant="outline"
+   396→              size="icon"
+   397→              className="h-11 w-11 rounded-xl"
+   398→              disabled={idx >= floorPlans.length - 1}
+   399→              onClick={() => setFloorIdx(idx + 1)}
+   400→              aria-label={t('pos.nextFloor')}
+   401→            >
+   402→              <ChevronRight className="size-5 rtl:rotate-180" />
+   403→            </Button>
+   404→          </div>
+   405→
+   406→          {/* Actions */}
+   407→          <div className="flex flex-wrap items-center gap-2">
+   408→            <Button
+   409→              variant="outline"
+   410→              className="h-11 rounded-xl"
+   411→              disabled={openOrders.length === 0 || !!tool}
+   412→              onClick={startTransferTool}
+   413→            >
+   414→              <ArrowLeftRight className="text-[#714B67]" />
+   415→              <span className="hidden sm:inline">{t('pos.transfer')}</span>
+   416→            </Button>
+   417→            <Button
+   418→              variant="outline"
+   419→              className="h-11 rounded-xl"
+   420→              disabled={openOrders.length < 2 || !!tool}
+   421→              onClick={startMergeTool}
+   422→            >
+   423→              <Combine className="text-[#714B67]" />
+   424→              <span className="hidden sm:inline">{t('pos.merge')}</span>
+   425→            </Button>
+   426→            <Button
+   427→              variant="outline"
+   428→              className="h-11 rounded-xl border-violet-400 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   429→              disabled={!hasFreeTable || !!tool}
+   430→              onClick={startSeatTool}
+   431→              title={t('pos.seatParty')}
+   432→            >
+   433→              <Armchair className="text-violet-700" />
+   434→              <span className="hidden sm:inline">{t('pos.seatParty')}</span>
+   435→            </Button>
+   436→            <Button
+   437→              variant="outline"
+   438→              className="h-11 rounded-xl border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-700"
+   439→              disabled={!!tool}
+   440→              onClick={onMyShift}
+   441→              title={t('pos.myShift')}
+   442→            >
+   443→              <Wallet className="text-emerald-700" />
+   444→              <span className="hidden sm:inline">{t('pos.myShift')}</span>
+   445→            </Button>
+   446→            <Button
+   447→              className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+   448→              disabled={!!tool}
+   449→              onClick={onTakeaway}
+   450→            >
+   451→              <Plus /> {t('pos.newTakeaway')}
+   452→            </Button>
+   453→          </div>
+   454→        </div>
+   455→
+   456→        {/* ── Seat Party banner (violet) ── */}
+   457→        {tool === 'seat' ? (
+   458→          <div
+   459→            className="flex flex-wrap items-center gap-2 bg-violet-600 px-4 py-3 text-white sm:gap-3"
+   460→            role="status"
+   461→          >
+   462→            <Armchair className="size-5 shrink-0" aria-hidden />
+   463→            <div className="min-w-0 flex-1">
+   464→              <p className="text-sm font-semibold">{t('pos.seatPick')}</p>
+   465→              <p className="text-xs font-medium tabular-nums text-white/80">
+   466→                {t('pos.seatTables', { n: seatSelection.length, seats: seatSeats })}
+   467→              </p>
+   468→            </div>
+   469→            <Button
+   470→              className="h-11 shrink-0 rounded-xl bg-white px-4 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   471→              disabled={seatSelection.length === 0}
+   472→              onClick={continueSeat}
+   473→              title={seatSelection.length === 0 ? t('pos.seatNeedOne') : t('pos.seatContinue')}
+   474→            >
+   475→              {t('pos.seatContinue')}
+   476→            </Button>
+   477→            <Button
+   478→              variant="ghost"
+   479→              size="icon"
+   480→              className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   481→              onClick={exitTool}
+   482→              aria-label={t('pos.seatCancel')}
+   483→              title={t('common.cancel')}
+   484→            >
+   485→              <X className="size-5" />
+   486→            </Button>
+   487→          </div>
+   488→        ) : (
+   489→          /* ── Transfer/merge banner ── */
+   490→          tool && (
+   491→            <div
+   492→              className="flex items-center gap-3 bg-[#714B67] px-4 py-3 text-white"
+   493→              role="status"
+   494→            >
+   495→              {busy ? (
+   496→                <Loader2 className="size-5 shrink-0 animate-spin" aria-hidden />
+   497→              ) : tool === 'transfer' ? (
+   498→                <ArrowLeftRight className="size-5 shrink-0" aria-hidden />
+   499→              ) : (
+   500→                <Combine className="size-5 shrink-0" aria-hidden />
+   501→              )}
+   502→              <p className="min-w-0 flex-1 text-sm font-semibold">{bannerText}</p>
+   503→              <Button
+   504→                variant="ghost"
+   505→                size="icon"
+   506→                className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   507→                onClick={exitTool}
+   508→                disabled={busy}
+   509→                aria-label={t('pos.cancelTool')}
+   510→                title={t('common.cancel')}
+   511→              >
+   512→                <X className="size-5" />
+   513→              </Button>
+   514→            </div>
+   515→          )
+   516→        )}
+   517→
+   518→        {/* ── Hall panel: tables grid + takeaway + deferred checks ── */}
+   519→        <div className="p-4 sm:p-6">
+   520→          <div className="relative rounded-2xl border border-[#E2E2E0] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] p-4 sm:p-6">
+   521→            {/* Hall stats bar — current floor */}
+   522→            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-stone-500">
+   523→              <span className="tabular-nums">{t('admin.hallStatsTables', { n: tables.length })}</span>
+   524→              <span className="tabular-nums font-semibold text-emerald-700">
+   525→                {t('admin.hallStatsFree', { n: hallFreeCount })}
+   526→              </span>
+   527→              <span className="tabular-nums font-semibold text-amber-700">
+   528→                {t('admin.hallStatsOccupied', { n: hallOccupiedCount })}
+   529→              </span>
+   530→              {hallDirtyCount > 0 && (
+   531→                <span className="tabular-nums font-semibold text-amber-600">
+   532→                  {t('admin.hallStatsDirty', { n: hallDirtyCount })}
+   533→                </span>
+   534→              )}
+   535→              <span className="flex items-center gap-1 tabular-nums">
+   536→                <Users className="size-3.5" aria-hidden />
+   537→                {hallSeats} {t('common.seats')}
+   538→              </span>
+   539→            </div>
+   540→
+   541→            {isLoading ? (
+   542→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   543→                {Array.from({ length: 8 }, (_, i) => (
+   544→                  <Skeleton key={i} className="aspect-square rounded-2xl" />
+   545→                ))}
+   546→              </div>
+   547→            ) : floorPlans.length === 0 ? (
+   548→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   549→                <MapPin className="size-8 opacity-40" />
+   550→                <p className="text-sm">{t('pos.noTables')}</p>
+   551→              </div>
+   552→            ) : tables.length === 0 ? (
+   553→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   554→                <MapPin className="size-8 opacity-40" />
+   555→                <p className="text-sm">{t('pos.noTablesFloor')}</p>
+   556→              </div>
+   557→            ) : (
+   558→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   559→                {tables.map((t2) => (
+   560→                  <TableTile
+   561→                    key={t2.id}
+   562→                    table={t2}
+   563→                    interaction={tableInteraction(t2)}
+   564→                    selected={tool === 'seat' && seatSelection.some((s) => s.id === t2.id)}
+   565→                    onClick={() => handleTableClick(t2)}
+   566→                  />
+   567→                ))}
+   568→              </div>
+   569→            )}
+   570→
+   571→            {(takeawayOrders.length > 0 || deferredOrders.length > 0) && (
+   572→              <div className="mt-6 space-y-6 pb-2">
+   573→                {/* ── Open takeaway orders ── */}
+   574→                {takeawayOrders.length > 0 && (
+   575→                  <section>
+   576→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-stone-500">
+   577→                      <ShoppingBag className="size-4" /> {t('pos.openTakeaways')}
+   578→                    </h3>
+   579→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   580→                      {takeawayOrders.map((o) => {
+   581→                        const interaction = takeawayInteraction(o)
+   582→                        return (
+   583→                          <button
+   584→                            key={o.id}
+   585→                            type="button"
+   586→                            disabled={interaction === 'ineligible'}
+   587→                            onClick={() => handleTakeawayClick(o)}
+   588→                            className={cn(
+   589→                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#E2E2E0] bg-white px-4 shadow-sm transition active:scale-95',
+   590→                              interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   591→                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   592→                            )}
+   593→                          >
+   594→                            <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
+   595→                            <span className="text-sm font-semibold">#{o.id}</span>
+   596→                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+   597→                              {formatCurrency(o.remainingAmount)}
+   598→                            </span>
+   599→                            <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
+   600→                          </button>
+   601→                        )
+   602→                      })}
+   603→                    </div>
+   604→                  </section>
+   605→                )}
+   606→
+   607→                {/* ── Deferred checks (pay later, settle via chip) ── */}
+   608→                {deferredOrders.length > 0 && (
+   609→                  <section>
+   610→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-violet-700">
+   611→                      <Hourglass className="size-4" aria-hidden /> {t('pos.deferredChecks')}
+   612→                    </h3>
+   613→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   614→                      {deferredOrders.map((o) => (
+   615→                        <button
+   616→                          key={o.id}
+   617→                          type="button"
+   618→                          disabled={!!tool}
+   619→                          onClick={() => onSettleDeferred(o)}
+   620→                          title={t('pos.deferredSettleHint')}
+   621→                          className="flex h-11 shrink-0 items-center gap-2 rounded-full border border-violet-300 bg-violet-50 px-4 text-violet-900 shadow-sm transition hover:ring-2 hover:ring-violet-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+   622→                        >
+   623→                          <Hourglass className="size-4 text-violet-500" aria-hidden />
+   624→                          <span className="text-sm font-semibold">#{o.id}</span>
+   625→                          <span className="max-w-[110px] truncate text-sm">{o.clientName}</span>
+   626→                          {o.table?.name && (
+   627→                            <span className="text-xs text-violet-700/70">{o.table.name}</span>
+   628→                          )}
+   629→                          <span className="text-sm font-bold tabular-nums text-violet-700">
+   630→                            {formatCurrency(o.remainingAmount)}
+   631→                          </span>
+   632→                          <span className="rounded-full border border-violet-300 bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-600">
+   633→                            {t('pos.deferredChip')}
+   634→                          </span>
+   635→                        </button>
+   636→                      ))}
+   637→                    </div>
+   638→                  </section>
+   639→                )}
+   640→              </div>
+   641→            )}
+   642→
+   643→            {/* Entrance marker — centered on the panel's bottom border */}
+   644→            <div className="absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 shadow-sm">
+   645→              <DoorOpen className="size-3.5 text-stone-400" aria-hidden />
+   646→              <span className="whitespace-nowrap text-[11px] font-medium text-stone-400">
+   647→                {t('admin.hallEntrance')}
+   648→              </span>
+   649→            </div>
+   650→          </div>
+   651→        </div>
+   652→      </div>
+   653→
+   654→      {/* ── Manual turnover dialogs: bussing (paid/deferred → amber) &
+   655→          cleaning (dirty → free) — two separate confirmations ── */}
+   656→      <AlertDialog
+   657→        open={clearTarget != null}
+   658→        onOpenChange={(o) => {
+   659→          if (!o && !clearTableMutation.isPending) setClearTarget(null)
+   660→        }}
+   661→      >
+   662→        <AlertDialogContent>
+   663→          <AlertDialogHeader>
+   664→            <AlertDialogTitle>
+   665→              {clearTarget?.status === 'dirty'
+   666→                ? t('pos.cleanTableTitle', { table: clearTarget?.name ?? '' })
+   667→                : t('pos.busTableTitle', { table: clearTarget?.name ?? '' })}
+   668→            </AlertDialogTitle>
+   669→            <AlertDialogDescription>
+   670→              {clearTarget?.status === 'dirty'
+   671→                ? t('pos.cleanTableDesc')
+   672→                : clearTarget?.status === 'paid'
+   673→                  ? t('pos.busTablePaidDesc')
+   674→                  : t('pos.clearTableDeferredDesc', {
+   675→                      client: clearTarget?.deferredClientName ?? '—',
+   676→                    })}
+   677→            </AlertDialogDescription>
+   678→          </AlertDialogHeader>
+   679→          <AlertDialogFooter>
+   680→            <AlertDialogCancel disabled={clearTableMutation.isPending}>
+   681→              {t('common.cancel')}
+   682→            </AlertDialogCancel>
+   683→            <AlertDialogAction
+   684→              className={cn(
+   685→                clearTarget?.status === 'dirty'
+   686→                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+   687→                  : 'bg-amber-600 text-white hover:bg-amber-700',
+   688→              )}
+   689→              disabled={clearTableMutation.isPending}
+   690→              onClick={(e) => {
+   691→                e.preventDefault()
+   692→                if (clearTarget) {
+   693→                  clearTableMutation.mutate({
+   694→                    id: clearTarget.id,
+   695→                    name: clearTarget.name,
+   696→                    phase: clearTarget.status === 'dirty' ? 'clean' : 'bus',
+   697→                  })
+   698→                }
+   699→              }}
+   700→            >
+   701→              {clearTableMutation.isPending && <Loader2 className="size-4 animate-spin" />}{' '}
+   702→              {clearTarget?.status === 'dirty' ? t('pos.markCleanedFree') : t('pos.sendToCleaning')}
+   703→            </AlertDialogAction>
+   704→          </AlertDialogFooter>
+   705→        </AlertDialogContent>
+   706→      </AlertDialog>
+   707→    </div>
+   708→  )
+   709→}
+   710→
+   711→function TableTile({
+   712→  table,
+   713→  interaction,
+   714→  selected,
+   715→  onClick,
+   716→}: {
+   717→  table: RestaurantTable
+   718→  interaction: TableInteraction
+   719→  /** Seat Party: this free table is part of the current selection. */
+   720→  selected?: boolean
+   721→  onClick: () => void
+   722→}) {
+   723→  const { t } = useI18n()
+   724→  const occupied = table.status === 'occupied' || table.openOrderId != null
+   725→  const reserved = table.status === 'reserved' && table.openOrderId == null
+   726→  // Round5/6: bill settled (awaiting bussing) / deferred check (client left)
+   727→  // / dirty = bussed, amber, awaiting the cleaning click.
+   728→  const paid = table.status === 'paid' && table.openOrderId == null
+   729→  const deferred = table.status === 'deferred' && table.openOrderId == null
+   730→  const dirty = table.status === 'dirty' && table.openOrderId == null
+   731→  // Round/oval silhouettes get extra horizontal padding so the centered
+   732→  // content stays inside the circle (overflow-hidden + truncation clip it).
+   733→  const isRound = table.shape === 'round' || table.shape === 'oval'
+   734→  // Corner badges: on circles the top corner is clipped by the silhouette,
+   735→  // so they sit at the top-center edge instead.
+   736→  const cornerBadgePos = isRound ? 'left-1/2 top-1 -translate-x-1/2' : 'end-1 top-1'
+   737→
+   738→  // Odoo duration "heat": occupied tables tint by how long guests are seated.
+   739→  const mins =
+   740→    occupied && table.openOrderSince
+   741→      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+   742→      : 0
+   743→
+   744→  const heat = occupied
+   745→    ? mins < 15
+   746→      ? {
+   747→          tile: 'border-emerald-200 bg-emerald-50',
+   748→          text: 'text-emerald-900',
+   749→          amount: 'text-emerald-700',
+   750→          meta: 'text-emerald-600',
+   751→        }
+   752→      : mins < 45
+   753→        ? {
+   754→            tile: 'border-amber-200 bg-amber-50',
+   755→            text: 'text-amber-900',
+   756→            amount: 'text-amber-700',
+   757→            meta: 'text-amber-600',
+   758→          }
+   759→        : mins < 90
+   760→          ? {
+   761→              tile: 'border-orange-300 bg-orange-100',
+   762→              text: 'text-orange-900',
+   763→              amount: 'text-orange-700',
+   764→              meta: 'text-orange-600',
+   765→            }
+   766→          : {
+   767→              tile: 'border-rose-300 bg-rose-100',
+   768→              text: 'text-rose-900',
+   769→              amount: 'text-rose-700',
+   770→              meta: 'text-rose-600',
+   771→            }
+   772→    : null
+   773→
+   774→  return (
+   775→    <button
+   776→      type="button"
+   777→      disabled={interaction === 'ineligible'}
+   778→      onClick={onClick}
+   779→      className={cn(
+   780→        'relative flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden border p-3 text-center shadow-sm transition hover:shadow-md active:scale-[0.97]',
+   781→        shapeClasses(table.shape),
+   782→        isRound && 'px-4',
+   783→        occupied && heat
+   784→          ? cn(heat.tile, heat.text)
+   785→          : paid
+   786→            ? 'border-emerald-600 bg-emerald-600 text-white'
+   787→            : deferred
+   788→              ? 'border-violet-400 bg-violet-100 text-violet-900 ring-1 ring-violet-400'
+   789→              : dirty
+   790→                ? 'border-amber-500 bg-amber-200 text-amber-900 ring-2 ring-amber-400'
+   791→                : reserved
+   792→                  ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
+   793→                  : 'border-[#E2E2E0] bg-white text-stone-500',
+   794→        interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   795→        interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   796→        selected && 'ring-2 ring-violet-600 ring-offset-1',
+   797→      )}
+   798→    >
+   799→      {/* FREE — clean white tile with capacity */}
+   800→      {!occupied && !reserved && !paid && !deferred && !dirty && (
+   801→        <>
+   802→          <p className="max-w-full truncate text-base font-bold leading-tight text-stone-500">
+   803→            {table.name}
+   804→          </p>
+   805→          <p className="flex items-center gap-1 text-xs text-stone-400">
+   806→            <Users className="size-3.5" aria-hidden />
+   807→            {table.capacity} {t('common.seats')}
+   808→          </p>
+   809→        </>
+   810→      )}
+   811→
+   812→      {/* OCCUPIED — duration "heat" tint, amount + guests + elapsed */}
+   813→      {occupied && (
+   814→        <>
+   815→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   816→          <p className={cn('text-lg font-extrabold tabular-nums leading-none', heat?.amount)}>
+   817→            {formatCurrency(table.openOrderTotal ?? 0)}
+   818→          </p>
+   819→          <p className={cn('flex items-center justify-center gap-1.5 text-[11px]', heat?.meta)}>
+   820→            <Users className="size-3.5" aria-hidden />
+   821→            {table.openOrderGuests ?? '—'}
+   822→            <span aria-hidden>·</span>
+   823→            <Clock className="size-3" aria-hidden />
+   824→            {table.openOrderSince ? elapsedSince(table.openOrderSince) : t('pos.open')}
+   825→          </p>
+   826→        </>
+   827→      )}
+   828→
+   829→      {/* RESERVED — amber outline ring + badge */}
+   830→      {reserved && (
+   831→        <>
+   832→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   833→          <p className="flex items-center gap-1 text-xs text-amber-600">
+   834→            <Users className="size-3.5" aria-hidden />
+   835→            {table.capacity} {t('common.seats')}
+   836→          </p>
+   837→          <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-600">
+   838→            <Clock className="size-3" aria-hidden />
+   839→            {t('status.table.reserved')}
+   840→          </span>
+   841→        </>
+   842→      )}
+   843→
+   844→      {/* PAID — solid emerald, tap to bus (→ amber cleaning) */}
+   845→      {paid && (
+   846→        <>
+   847→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   848→          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white ring-1 ring-white/30">
+   849→            <BadgeCheck className="size-3.5" aria-hidden />
+   850→            {t('pos.tablePaidBadge')}
+   851→          </span>
+   852→          <p className="max-w-full truncate text-[10px] leading-tight text-white/80">
+   853→            {t('pos.paidHint')}
+   854→          </p>
+   855→        </>
+   856→      )}
+   857→
+   858→      {/* DEFERRED — violet, client name, tap to bus (→ amber cleaning) */}
+   859→      {deferred && (
+   860→        <>
+   861→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   862→          <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+   863→            <Hourglass className="size-3" aria-hidden />
+   864→            {t('pos.tableDeferredBadge')}
+   865→          </span>
+   866→          <p className="max-w-full truncate text-xs font-semibold leading-tight">
+   867→            {table.deferredClientName ?? '—'}
+   868→          </p>
+   869→          <p className="max-w-full truncate text-[10px] leading-tight text-violet-700/80">
+   870→            {t('pos.deferredHint', { client: table.deferredClientName ?? '—' })}
+   871→          </p>
+   872→        </>
+   873→      )}
+   874→
+   875→      {/* DIRTY — strong amber, bussed & awaiting the cleaning click */}
+   876→      {dirty && (
+   877→        <>
+   878→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+   879→          <span className="inline-flex items-center gap-1 rounded-full border border-amber-600/40 bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+   880→            <Brush className="size-3" aria-hidden />
+   881→            {t('pos.tableDirtyBadge')}
+   882→          </span>
+   883→          <p className="max-w-full truncate text-[10px] font-semibold leading-tight text-amber-800/90">
+   884→            {t('pos.dirtyHint')}
+   885→          </p>
+   886→        </>
+   887→      )}
+   888→
+   889→      {/* MERGED — multi-table seating link badge (occupied tiles) */}
+   890→      {occupied && table.openOrderMerged && (
+   891→        <span
+   892→          className={cn(
+   893→            'absolute inline-flex items-center gap-0.5 rounded-full bg-black/10 px-1.5 py-0.5 text-[9px] font-bold uppercase',
+   894→            cornerBadgePos,
+   895→          )}
+   896→        >
+   897→          <Combine className="size-2.5" aria-hidden />
+   898→          {t('pos.mergedBadge')}
+   899→        </span>
+   900→      )}
+   901→
+   902→      {/* SEAT PARTY — selection check */}
+   903→      {selected && (
+   904→        <span
+   905→          className={cn(
+   906→            'absolute flex size-5 items-center justify-center rounded-full bg-violet-600 text-white shadow-sm',
+   907→            cornerBadgePos,
+   908→          )}
+   909→        >
+   910→          <Check className="size-3.5" aria-hidden />
+   911→        </span>
+   912→      )}
+   913→    </button>
+   914→  )
+   915→}
+   916→

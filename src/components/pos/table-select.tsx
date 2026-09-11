@@ -16,6 +16,7 @@ import {
   Hourglass,
   Loader2,
   MapPin,
+  PersonStanding,
   Plus,
   ShoppingBag,
   Users,
@@ -41,7 +42,9 @@ import { MAX_SEATING_TABLES } from '@/lib/constants'
 import { elapsedSince, formatCurrency } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import type { FloorPlan, Order, RestaurantTable } from '@/lib/types'
+import type { FloorPlan, MovementCandidateDTO, Order, RestaurantTable } from '@/lib/types'
+
+import MovementQuickDialog from '@/components/vision/movement-quick-dialog'
 
 type TableSelectProps = {
   onSelectTable: (table: RestaurantTable) => void
@@ -107,6 +110,8 @@ export default function TableSelect({
   const [seatSelection, setSeatSelection] = useState<RestaurantTable[]>([])
   // Paid/deferred tile tap-to-clear confirmation dialog target.
   const [clearTarget, setClearTarget] = useState<RestaurantTable | null>(null)
+  // R9: pending AI guest-move suggestion opened for quick review.
+  const [aiMove, setAiMove] = useState<MovementCandidateDTO | null>(null)
 
   const { data: floorPlanData, isLoading } = useQuery({
     queryKey: ['floorplans'],
@@ -127,6 +132,18 @@ export default function TableSelect({
     refetchInterval: 3000,
     enabled: !tool,
   })
+
+  // R9: pending AI guest-move suggestions (POS floor chips, amber). Hidden
+  // during transfer/merge/seat tools to avoid conflicting interactions —
+  // poll errors stay silent (the chips just disappear until data returns).
+  const { data: aiMovementsData } = useQuery({
+    queryKey: ['vision-movements', 'pending'],
+    queryFn: () =>
+      fetcher<{ movements: MovementCandidateDTO[] }>('/api/vision/movements?status=pending'),
+    refetchInterval: 15000,
+    enabled: !tool,
+  })
+  const aiMovements = aiMovementsData?.movements ?? []
 
   const floorPlans = floorPlanData?.floorPlans ?? []
   const openOrders = openOrdersData?.orders ?? []
@@ -556,15 +573,22 @@ export default function TableSelect({
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-                {tables.map((t2) => (
-                  <TableTile
-                    key={t2.id}
-                    table={t2}
-                    interaction={tableInteraction(t2)}
-                    selected={tool === 'seat' && seatSelection.some((s) => s.id === t2.id)}
-                    onClick={() => handleTableClick(t2)}
-                  />
-                ))}
+                {tables.map((t2) => {
+                  const aiMovement = tool
+                    ? null
+                    : (aiMovements.find((m) => m.fromTableId === t2.id) ?? null)
+                  return (
+                    <TableTile
+                      key={t2.id}
+                      table={t2}
+                      interaction={tableInteraction(t2)}
+                      selected={tool === 'seat' && seatSelection.some((s) => s.id === t2.id)}
+                      onClick={() => handleTableClick(t2)}
+                      movement={aiMovement}
+                      onMovementClick={() => setAiMove(aiMovement)}
+                    />
+                  )
+                })}
               </div>
             )}
 
@@ -704,6 +728,16 @@ export default function TableSelect({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── R9: pending AI guest-move quick review dialog (floor chips) ── */}
+      <MovementQuickDialog
+        movement={aiMove}
+        open={aiMove != null}
+        onOpenChange={(o) => {
+          if (!o) setAiMove(null)
+        }}
+        onDone={() => setAiMove(null)}
+      />
     </div>
   )
 }
@@ -713,12 +747,17 @@ function TableTile({
   interaction,
   selected,
   onClick,
+  movement,
+  onMovementClick,
 }: {
   table: RestaurantTable
   interaction: TableInteraction
   /** Seat Party: this free table is part of the current selection. */
   selected?: boolean
   onClick: () => void
+  /** R9: pending AI guest-move suggestion originating at this table. */
+  movement?: MovementCandidateDTO | null
+  onMovementClick?: () => void
 }) {
   const { t } = useI18n()
   const occupied = table.status === 'occupied' || table.openOrderId != null
@@ -908,6 +947,34 @@ function TableTile({
           )}
         >
           <Check className="size-3.5" aria-hidden />
+        </span>
+      )}
+
+      {/* R9 — pending AI guest-move chip (source table) → quick review.
+          Sits at the bottom corner so the MERGED top badge stays clear. */}
+      {movement && (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={t('vision.chipMoveAria', { table: table.name })}
+          onClick={(e) => {
+            e.stopPropagation()
+            onMovementClick?.()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              e.stopPropagation()
+              onMovementClick?.()
+            }
+          }}
+          className={cn(
+            'absolute z-10 inline-flex cursor-pointer items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800 shadow-sm',
+            isRound ? 'left-1/2 bottom-1 -translate-x-1/2' : 'start-1 bottom-1',
+          )}
+        >
+          <PersonStanding className="size-2.5" aria-hidden />
+          {t('vision.chipMove')}
         </span>
       )}
     </button>

@@ -125,6 +125,7 @@ model FloorPlan {
   backgroundImage String?  @map("background_image")
   active          Boolean  @default(true)
   tables          RestaurantTable[]
+  visionCameras   VisionCamera[] // R9 back-relation (additive)
 
   @@map("floor_plans")
 }
@@ -142,6 +143,11 @@ model RestaurantTable {
   status     String     @default("free") // 'free' | 'occupied' | 'reserved' | 'paid' (bill settled, awaiting bussing click) | 'deferred' (check deferred, client left) | 'dirty' (amber — bussed, awaiting the cleaned click)
   active     Boolean    @default(true)
   orders     Order[]
+  // R9 vision back-relations (additive)
+  visionZones     VisionZone[]
+  visionState     VisionTableState?
+  movementFrom    MovementCandidate[] @relation("MovementFrom")
+  movementTo      MovementCandidate[] @relation("MovementTo")
 
   @@index([floorPlanId])
   @@map("tables")
@@ -327,6 +333,133 @@ model AuditLog {
   @@index([action])
   @@index([userId])
   @@map("audit_logs")
+}
+
+// ─── R9: AI vision / CCTV seating intelligence ───────────────────────
+// Edge-processed camera events ONLY — no raw video is transported or
+// stored by RSM. These tables are a parallel OBSERVATIONAL layer:
+// operational table status (`tables.status`) is never written by vision
+// code except through the human-confirmed movement flow, which reuses
+// the same re-housing transaction as the POS table transfer.
+
+// Registered IP/CCTV camera (RTSP/ONVIF stream processed at the edge).
+// Credentials are never embedded in streamUrl — camera authentication
+// belongs to the edge vision processor.
+model VisionCamera {
+  id          Int          @id @default(autoincrement())
+  code        String       @unique // stable edge identifier, e.g. 'CAM-001'
+  name        String
+  streamUrl   String?      @map("stream_url") // rtsp:// or http(s):// endpoint (no userinfo)
+  floorPlanId Int?         @map("floor_plan_id")
+  floorPlan   FloorPlan?   @relation(fields: [floorPlanId], references: [id])
+  status      String       @default("offline") // 'online' | 'offline' | 'error' | 'disabled'
+  lastSeenAt  DateTime?    @map("last_seen_at")
+  lastError   String?      @map("last_error")
+  active      Boolean      @default(true)
+  zones       VisionZone[]
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  @@index([floorPlanId])
+  @@map("vision_cameras")
+}
+
+// A drawn polygon on a camera frame, associated with a dining area entity
+// (most zones map to one table). Coordinates are normalized 0..1.
+model VisionZone {
+  id        Int              @id @default(autoincrement())
+  cameraId  Int              @map("camera_id")
+  camera    VisionCamera     @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  name      String
+  kind      String           @default("table") // 'table'|'entrance'|'bar'|'waiting'|'other'
+  tableId   Int?             @map("table_id")
+  table     RestaurantTable? @relation(fields: [tableId], references: [id])
+  polygon   String // JSON [{x,y},…] normalized 0..1 camera-frame coords
+  seats     Int?
+  active    Boolean          @default(true)
+  version   Int              @default(1) // optimistic concurrency on config edits
+  createdBy String?          @map("created_by")
+  updatedBy String?          @map("updated_by")
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  @@index([cameraId])
+  @@index([tableId])
+  @@map("vision_zones")
+}
+
+// Every structured event received from an edge vision processor.
+// eventId is the edge-generated idempotency key — duplicates are recorded
+// (outcome 'duplicate') but never re-applied.
+model VisionEvent {
+  id            Int      @id @default(autoincrement())
+  eventId       String   @unique @map("event_id")
+  type          String // 'OCCUPANCY_CHANGED' | 'CAMERA_STATUS' | 'MOVEMENT_DETECTED'
+  cameraCode    String   @map("camera_code")
+  cameraId      Int?     @map("camera_id")
+  zoneId        Int?     @map("zone_id")
+  tableId       Int?     @map("table_id")
+  peopleCount   Int?     @map("people_count")
+  confidence    Float?
+  detectedAt    DateTime @map("detected_at")
+  outcome       String // 'applied'|'duplicate'|'stale'|'out_of_order'|'low_confidence'|'unknown_camera'|'unknown_zone'|'rejected'|'cooldown_suppressed'
+  outcomeDetail String?  @map("outcome_detail")
+  payload       String? // raw JSON snapshot for audit/evidence
+  model         String?
+  modelVersion  String?  @map("model_version")
+  receivedAt    DateTime @default(now()) @map("received_at")
+
+  @@index([detectedAt])
+  @@index([tableId])
+  @@index([cameraCode])
+  @@map("vision_events")
+}
+
+// Current observational occupancy state per table (one row per table).
+// Deliberately separate from `tables.status` (operational POS state).
+model VisionTableState {
+  tableId           Int              @id @map("table_id")
+  table             RestaurantTable  @relation(fields: [tableId], references: [id])
+  state             String           @default("unknown") // 'unknown'|'empty'|'occupied'
+  peopleCount       Int              @default(0)
+  confidence        Float            @default(0)
+  stateSince        DateTime         @default(now()) @map("state_since")
+  lastEventAt       DateTime?        @map("last_event_at")
+  // vacancy debounce: sustained-absence window before occupied → empty
+  pendingEmptySince DateTime?        @map("pending_empty_since")
+  // human override freeze: vision events recorded but display state held
+  manualHoldUntil   DateTime?        @map("manual_hold_until")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  @@map("vision_table_states")
+}
+
+// AI-detected possible customer movement between tables. NEVER applied
+// operationally without explicit human confirmation. correlationKey makes
+// ingestion idempotent and blocks duplicate/looping candidates.
+model MovementCandidate {
+  id             Int              @id @default(autoincrement())
+  correlationKey String           @unique @map("correlation_key")
+  fromTableId    Int              @map("from_table_id")
+  fromTable      RestaurantTable  @relation("MovementFrom", fields: [fromTableId], references: [id])
+  toTableId      Int              @map("to_table_id")
+  toTable        RestaurantTable  @relation("MovementTo", fields: [toTableId], references: [id])
+  orderId        Int?             @map("order_id")
+  peopleCount    Int              @default(0)
+  confidence     Float            @default(0)
+  status         String           @default("pending") // 'pending'|'confirmed'|'rejected'|'conflict'|'expired'
+  detectedAt     DateTime         @map("detected_at")
+  evidence       String? // JSON {cameraCode, eventIds, peopleCount, confidence}
+  decidedBy      Int?             @map("decided_by")
+  decidedByName  String?          @map("decided_by_name")
+  decidedAt      DateTime?        @map("decided_at")
+  decisionReason String?          @map("decision_reason")
+  appliedAt      DateTime?        @map("applied_at") // when the operational move actually committed
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([fromTableId])
+  @@index([toTableId])
+  @@map("movement_candidates")
 }
 
 // ─── Inventory transactions (stock movements) ────────────────────────

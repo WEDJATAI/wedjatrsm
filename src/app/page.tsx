@@ -26,6 +26,7 @@ import RecipesView from '@/components/admin/recipes-view'
 import ReportsView from '@/components/admin/reports-view'
 import ModifiersView from '@/components/admin/modifiers-view'
 import CashDrawerView from '@/components/admin/cash-drawer-view'
+import VisionView from '@/components/vision/vision-view'
 import UsersView from '@/components/admin/users-view'
 import RolesView from '@/components/admin/roles-view'
 import AttendanceView from '@/components/admin/attendance-view'
@@ -44,6 +45,7 @@ type View =
   | 'recipes'
   | 'reports'
   | 'cashdrawer'
+  | 'vision'
   | 'users'
   | 'roles'
   | 'attendance'
@@ -63,6 +65,7 @@ const VIEW_PERMISSION: Record<View, string> = {
   recipes: 'recipes',
   reports: 'reports',
   cashdrawer: 'cashdrawer',
+  vision: 'vision',
   users: 'users',
   roles: 'roles',
   attendance: 'attendance',
@@ -80,6 +83,7 @@ const ADMIN_VIEWS: View[] = [
   'recipes',
   'reports',
   'cashdrawer',
+  'vision',
   'users',
   'roles',
   'attendance',
@@ -94,6 +98,7 @@ const VIEW_PRIORITY: View[] = [
   'dashboard',
   'reports',
   'cashdrawer',
+  'vision',
   'inventory',
   'attendance',
   'activity',
@@ -230,6 +235,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <ReportsView />
       case 'cashdrawer':
         return <CashDrawerView />
+      case 'vision':
+        return <VisionView />
       case 'users':
         return <UsersView />
       case 'roles':

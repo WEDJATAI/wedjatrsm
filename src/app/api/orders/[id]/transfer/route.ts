@@ -7,8 +7,8 @@ import { logAudit } from '@/lib/audit'
 import {
   findOpenOrderOnTable,
   getOrderOr404,
-  orderTableIds,
   parseId,
+  rehouseOpenOrder,
   serializeOrder,
 } from '@/lib/orders'
 
@@ -42,29 +42,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError(`Table "${table.name}" already has an open order`, 400)
     }
 
-    const previousTableIds = orderTableIds(order)
-
     await db.$transaction(async (tx) => {
       // The whole seating (primary + merged extra tables) re-houses at the
       // single destination table: primary table moves, extras are released.
-      await tx.order.update({
-        where: { id: orderId },
-        data: { tableId, extraTableIds: null },
-      })
-      for (const previousTableId of previousTableIds) {
-        if (previousTableId === tableId) continue
-        const stillOpen = await findOpenOrderOnTable(previousTableId, orderId)
-        if (!stillOpen) {
-          await tx.restaurantTable.update({
-            where: { id: previousTableId },
-            data: { status: 'free' },
-          })
-        }
-      }
-      await tx.restaurantTable.update({
-        where: { id: tableId },
-        data: { status: 'occupied' },
-      })
+      // R9: shared with the human-confirmed AI movement flow (lib/vision.ts).
+      await rehouseOpenOrder(tx, order, tableId)
     })
 
     const fresh = await getOrderOr404(orderId)

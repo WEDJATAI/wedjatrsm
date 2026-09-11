@@ -32,6 +32,7 @@ export const PERMISSIONS = [
   'settings',
   'audit',
   'cashdrawer',
+  'vision',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -52,6 +53,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   settings: 'Settings',
   audit: 'Activity Log',
   cashdrawer: 'Cash Drawer',
+  vision: 'AI Vision — CCTV Occupancy',
 }
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
@@ -182,3 +184,41 @@ export const IDLE_LOGOUT_SECONDS = 60 // 1 minute countdown
 // Debug/E2E only (?idleTest=1 on the URL): 10s idle → 10s countdown.
 export const IDLE_TEST_WARN_MS = 10 * 1000
 export const IDLE_TEST_LOGOUT_SECONDS = 10
+
+// ─── R9: AI vision / CCTV seating intelligence ────────────────
+/** every AI-derived operational change is HUMAN-confirmed — no exceptions */
+export const VISION_EVENT_TYPES = ['OCCUPANCY_CHANGED', 'CAMERA_STATUS', 'MOVEMENT_DETECTED'] as const
+export type VisionEventType = (typeof VISION_EVENT_TYPES)[number]
+
+export const VISION_ZONE_KINDS = ['table', 'entrance', 'bar', 'waiting', 'other'] as const
+export type VisionZoneKindValue = (typeof VISION_ZONE_KINDS)[number]
+
+export const VISION_CAMERA_STATUSES = ['online', 'offline', 'error', 'disabled'] as const
+export type VisionCameraStatusValue = (typeof VISION_CAMERA_STATUSES)[number]
+
+export const VISION_OBSERVATION_STATES = ['unknown', 'empty', 'occupied'] as const
+export type VisionObservationStateValue = (typeof VISION_OBSERVATION_STATES)[number]
+
+export const MOVEMENT_CANDIDATE_STATUSES = ['pending', 'confirmed', 'rejected', 'conflict', 'expired'] as const
+export type MovementCandidateStatusValue = (typeof MOVEMENT_CANDIDATE_STATUSES)[number]
+
+/** AppSetting keys (existing settings mechanism is reused) */
+export const VISION_CONFIG_KEY = 'visionConfig' // JSON thresholds/timings
+export const VISION_INGEST_KEY = 'visionIngestKey' // edge authentication key
+
+/** default detection thresholds & timings (admin-tunable via /api/vision/config) */
+export const VISION_DEFAULT_CONFIG = {
+  highConfidence: 0.85, // ≥ → observational state auto-applies
+  mediumConfidence: 0.5, // ≥ → applies but flagged for review; below → recorded only
+  vacancyDelaySeconds: 45, // sustained absence before occupied → empty
+  movementDedupeMinutes: 10, // same from→to party merges into one pending candidate
+  movementCooldownMinutes: 15, // suppressed re-creation after a rejection
+  serviceDelayMinutes: 10, // seated-but-no-order alert threshold
+  maxEventAgeSeconds: 600, // older events are stale — never replayed blindly
+  manualHoldMinutes: 10, // human override freezes AI display state
+} as const
+
+/** ingest endpoint limits (best-effort edge protection) */
+export const VISION_INGEST_MAX_EVENTS = 100 // max events per batch POST
+export const VISION_INGEST_RATE_LIMIT = 120 // requests per minute per key/IP
+export const VISION_STREAM_URL_RE = /^(rtsp|rtsps|http|https|onvif):\/\/[^@\s]+$/i

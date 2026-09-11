@@ -26,6 +26,7 @@ import { authDict } from './dict/auth'
 import { posDict } from './dict/pos'
 import { kitchenDict } from './dict/kitchen'
 import { adminDict } from './dict/admin'
+import { visionDict } from './dict/vision'
 import { setFormatLocale, type FormatLang } from '@/lib/format'
 
 export type Lang = 'en' | 'ar'
@@ -66,7 +67,7 @@ const LANG_EVENT = 'rms-lang-change'
 export type Dict = Record<string, string>
 export type DictPair = { en: Dict; ar: Dict }
 
-const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict]
+const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict, visionDict]
 
 const FULL_DICT: Record<Lang, Dict> = { en: {}, ar: {} }
 for (const pair of DICT_PAIRS) {
