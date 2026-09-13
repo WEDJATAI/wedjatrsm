@@ -1186,3 +1186,21 @@ Work Log:
 
 Stage Summary:
 - R9 AI Vision is production-complete and integrated: edge-processed structured events (no raw video), idempotent + rate-limited ingestion, temporal occupancy interpretation (confidence gates, vacancy debounce, out-of-order/stale/low-confidence filtering, camera-outage fail-safe to 'unknown'), zone/camera registries with masked streams + no embedded credentials, human-confirmed table movements ONLY (reusing the exact POS transfer transaction, with live state re-validation, conflict states, cooldowns, undo, full audit), waiter-facing POS chips, live dashboard with floor overlay + mismatch alerts, analytics with honest provenance labels, and an edge simulator for hardware-free demos. Additive-only migrations; no existing functionality regressed.
+
+---
+Task ID: 10
+Agent: main (Z.ai Code) — COO / Project Manager
+Task: Round 10 — Database provisioning & deliverables: apply/verify ALL schema modifications, audit integrity, package the complete platform database into download/
+
+Work Log:
+- Phase 1 discovery: verified platform state — RSM fully built through R9 (POS/KDS/admin/inventory/cash/recipes/reports/modifiers/tips + AI Vision subsystem, E2E-verified per 9-a/9-b/9-final entries); dev server running on :3000; DB db/custom.db live with vision data.
+- Safety backup: backups/custom-round10-start-20260913-222550.db (393,216 bytes) before touching anything.
+- Applied all modifications: `bun run db:push` → "The database is already in sync with the Prisma schema" (all 25 tables from R3→R9 schema confirmed applied, data intact); regenerated Prisma Client v6.19.2.
+- NEW scripts/round10-provision.ts — one-shot provisioning auditor + packager: PRAGMA integrity_check (ok), PRAGMA foreign_key_check (0 violations), sqlite_master inventory vs schema (25/25, 0 missing/extra), per-table row counts, domain snapshot (users/floors/products/orders/revenue/vision), and HARD-FAIL safety invariants (bcrypt-only passwords, no credentials in camera stream URLs, every applied movement has a human decider, ingest key + config valid). Two script bugs fixed during dev (node:crypto import, orderBy SortOrder, BigInt serialization, camera-id select for zone counts).
+- Packaged deliverables into download/: rsm-platform-database.db (full copy, sha256 b0e382a48ac7c994…), rsm-database-manifest.json (checksums + counts + compliance), README.md (package documentation: verification results, contents, restore path, fresh-install alternative, demo logins).
+- Data-quality findings (flagged, deliberately NOT mutated): 2 live open orders #127/#128 (created 2026-09-13 21:38 — user session data, preserved); 3 empty floor-plan artifacts ("main", "1" active-empty, "Lilo Cafe" inactive-empty) documented in README for optional manual cleanup; vision table states lazily cover 5 zone-mapped tables by design.
+- E2E health verification (agent-browser): login admin@rms.com → dashboard → AI Vision view renders live (7 tabs, "Cameras 2/2 online", "Review required — 0 pending · 2 mismatches"), floor overlay (Main Hall tables 1-3 Available), Alerts tab shows 2 WARNING "Guests left — check still open" (matches the live open orders via CAM-001), Guest moves center "No Pending suggestions right now" (all 20 candidates human-decided); /api/vision/overview + /api/vision/movements polling 200; 0 console errors; 0 × 500 in dev.log; screenshot evidence screenshots/r10-vision-verified.png.
+- Quality gates: bun run lint → 0 findings; dev server untouched (single instance, port 3000).
+
+Stage Summary:
+- The platform needs exactly ONE database (embedded SQLite at db/custom.db — no external DB server to download or configure). All schema modifications from every build round are verified applied and in sync; physical integrity and referential consistency PASS; the AI-Vision safety invariants (bcrypt hashes, credential-free stream URLs, human-decided movements only) all hold on the live data. The complete database is now packaged as a downloadable deliverable set in download/ (DB file + SHA-256 manifest + documentation). Live operational data (2 open orders) intentionally preserved; cosmetic floor-plan artifacts flagged for the owner. Platform verified healthy end-to-end post-packaging.

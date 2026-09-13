@@ -1,0 +1,155 @@
+{
+  "package": "RSM (Restaurant System Management) — complete platform database",
+  "generatedAt": "2026-09-13T22:27:55.543Z",
+  "database": {
+    "engine": "SQLite (embedded, single file — no external DB server required)",
+    "file": "rsm-platform-database.db",
+    "sizeBytes": 393216,
+    "sha256": "b0e382a48ac7c9942df6d8657b73cf663949fe88e629bcf14743404f2a42dea3",
+    "schemaSha256": "b390b3ea62692931ebe0e35cb56e555a3a6d9d2ccc48ef8fa033600529380b8a",
+    "prismaClientVersion": "6.19.2",
+    "integrityCheck": "ok",
+    "foreignKeyViolations": 0,
+    "tablesExpected": 25,
+    "tablesFound": 25,
+    "missingTables": [],
+    "extraTables": [],
+    "tableCounts": {
+      "app_settings": 5,
+      "attendance": 0,
+      "audit_logs": 236,
+      "cash_drawer_entries": 2,
+      "cash_drawer_sessions": 2,
+      "categories": 5,
+      "floor_plans": 5,
+      "inventory_transactions": 140,
+      "modifier_groups": 7,
+      "modifiers": 23,
+      "movement_candidates": 20,
+      "order_items": 274,
+      "orders": 117,
+      "payments": 71,
+      "product_modifier_groups": 14,
+      "products": 39,
+      "recipe_components": 38,
+      "roles": 1,
+      "shifts": 2,
+      "tables": 15,
+      "users": 3,
+      "vision_cameras": 2,
+      "vision_events": 86,
+      "vision_table_states": 5,
+      "vision_zones": 6
+    }
+  },
+  "operations": {
+    "restaurant": {
+      "name": "Lilo Cafe and Restaurant",
+      "nameAr": "ليلو كافيه ومطعم"
+    },
+    "usersByRole": {
+      "admin": 1,
+      "waiter": 1,
+      "kitchen": 1
+    },
+    "activeUsers": 3,
+    "floorPlans": [
+      {
+        "name": "Main Hall",
+        "active": true,
+        "tables": 12
+      },
+      {
+        "name": "Terrace",
+        "active": false,
+        "tables": 3
+      },
+      {
+        "name": "Lilo Cafe",
+        "active": false,
+        "tables": 0
+      },
+      {
+        "name": "main",
+        "active": true,
+        "tables": 0
+      },
+      {
+        "name": "1",
+        "active": true,
+        "tables": 0
+      }
+    ],
+    "sellableProducts": 20,
+    "ingredientProducts": 19,
+    "stockableProducts": 22,
+    "ordersByStatus": {
+      "paid": 64,
+      "cancelled": 48,
+      "merged": 2,
+      "deferred": 1,
+      "open": 2
+    },
+    "historicalRevenuePaid": 29402.76,
+    "lowStockItems": 1,
+    "recipes": 38,
+    "modifierGroups": 7
+  },
+  "vision": {
+    "cameras": [
+      {
+        "code": "CAM-001",
+        "name": "Main Hall Cam",
+        "status": "online",
+        "zones": 3
+      },
+      {
+        "code": "CAM-002",
+        "name": "Terrace Cam",
+        "status": "online",
+        "zones": 3
+      }
+    ],
+    "zonesTotal": 6,
+    "zonesMappedToTables": 6,
+    "eventsTotal": 86,
+    "eventsByOutcome": {
+      "applied": 74,
+      "low_confidence": 3,
+      "stale": 2,
+      "unknown_camera": 2,
+      "rejected": 2,
+      "cooldown_suppressed": 3
+    },
+    "tableStates": {
+      "empty": 5
+    },
+    "movementsByStatus": {
+      "confirmed": 6,
+      "rejected": 10,
+      "conflict": 4
+    },
+    "pendingMovements": 0,
+    "ingestKeyConfigured": true,
+    "ingestKeyMasked": "rms-vision-c…9b8e (43 chars)",
+    "configValid": true,
+    "config": {
+      "highConfidence": 0.85,
+      "mediumConfidence": 0.5,
+      "vacancyDelaySeconds": 45,
+      "movementDedupeMinutes": 10,
+      "movementCooldownMinutes": 15,
+      "serviceDelayMinutes": 10,
+      "maxEventAgeSeconds": 600,
+      "manualHoldMinutes": 10
+    }
+  },
+  "compliance": {
+    "auditLogRows": 236,
+    "visionAuditRows": 122,
+    "passwordHashesAllBcrypt": true,
+    "streamUrlsNoCredentials": true,
+    "movementConfirmedCount": 6,
+    "movementAutoApplied": 0
+  }
+}
