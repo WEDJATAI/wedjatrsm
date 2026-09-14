@@ -33,6 +33,7 @@ export const PERMISSIONS = [
   'audit',
   'cashdrawer',
   'vision',
+  'reservations',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -54,6 +55,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   audit: 'Activity Log',
   cashdrawer: 'Cash Drawer',
   vision: 'AI Vision — CCTV Occupancy',
+  reservations: 'Reservations — Table Bookings',
 }
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
@@ -100,6 +102,41 @@ export const TABLE_STATUS_LABELS: Record<string, string> = {
   paid: 'Paid — awaiting bussing',
   deferred: 'Deferred check — client left',
   dirty: 'Needs cleaning',
+}
+
+// ─── R11: Order types (dine-in / takeaway / delivery) ──────────────
+export const ORDER_TYPES = ['dinein', 'takeaway', 'delivery'] as const
+export type OrderType = (typeof ORDER_TYPES)[number]
+export const ORDER_TYPE_LABELS: Record<string, string> = {
+  dinein: 'Dine-in',
+  takeaway: 'Takeaway',
+  delivery: 'Delivery',
+}
+
+// ─── R11: Preparation-station routing ───────────────────────────────
+// A category routes its items to a station screen. null/absent → 'kitchen'
+// (the default screen). PRESET destinations get first-class labels in the
+// admin UI; any other slug is a custom station (typed by the admin).
+export const PREP_STATION_PRESETS = ['kitchen', 'bar', 'shisha'] as const
+export type PrepStationPreset = (typeof PREP_STATION_PRESETS)[number]
+export const PREP_STATION_LABELS: Record<string, string> = {
+  kitchen: 'Kitchen',
+  bar: 'Bar',
+  shisha: 'Shisha Station',
+}
+/** Canonical station for a category's prep destination (null → kitchen). */
+export const prepStationOf = (destination?: string | null): string =>
+  destination && destination.trim() !== '' ? destination.trim() : 'kitchen'
+
+// ─── R11: Reservation statuses ───────────────────────────────────────
+export const RESERVATION_STATUSES = ['pending', 'seated', 'completed', 'cancelled', 'no_show'] as const
+export type ReservationStatus = (typeof RESERVATION_STATUSES)[number]
+export const RESERVATION_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  seated: 'Seated',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+  no_show: 'No-show',
 }
 
 export const TABLE_SHAPES = ['square', 'round', 'rectangle', 'oval'] as const

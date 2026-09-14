@@ -8,6 +8,7 @@ async function main() {
   console.log('Seeding RMS database...')
 
   // Clear existing data (order matters due to FKs)
+  await db.reservation.deleteMany()
   await db.inventoryTransaction.deleteMany()
   await db.payment.deleteMany()
   await db.orderItem.deleteMany()
@@ -50,14 +51,17 @@ async function main() {
   console.log('✓ users:', [admin.email, waiter.email, 'kitchen@rms.com'])
 
   // ── Categories (visible POS categories + a hidden ingredients group) ──
-  const catStarter = await db.category.create({ data: { name: 'Starters', displayOrder: 1 } })
-  const catMain = await db.category.create({ data: { name: 'Main Courses', displayOrder: 2 } })
-  const catDessert = await db.category.create({ data: { name: 'Desserts', displayOrder: 3 } })
-  const catBeverage = await db.category.create({ data: { name: 'Beverages', displayOrder: 4 } })
+  const catStarter = await db.category.create({ data: { name: 'Starters', displayOrder: 1, prepDestination: 'kitchen' } })
+  const catMain = await db.category.create({ data: { name: 'Main Courses', displayOrder: 2, prepDestination: 'kitchen' } })
+  const catDessert = await db.category.create({ data: { name: 'Desserts', displayOrder: 3, prepDestination: 'kitchen' } })
+  const catBeverage = await db.category.create({ data: { name: 'Beverages', displayOrder: 4, prepDestination: 'bar' } })
+  const catShisha = await db.category.create({
+    data: { name: 'Shisha', nameAr: 'شيشة', displayOrder: 5, prepDestination: 'shisha' },
+  })
   const catIngredient = await db.category.create({
     data: { name: 'Ingredients (internal)', displayOrder: 99, active: false },
   })
-  console.log('✓ categories: 5')
+  console.log('✓ categories: 6 (incl. shisha — routed to kitchen/bar/shisha stations)')
 
   // ── Ingredients (stockable, not sellable) ─────────────────────────
   const ing = async (name: string, cost: number, stock: number, threshold: number, sku: string) =>
@@ -143,7 +147,23 @@ async function main() {
   const softDrink = await dish({ name: 'Soft Drink (Can)', cat: catBeverage.id, price: 25, cost: 9, sku: 'BV-003', stockable: true, stock: 24, threshold: 12 })
   const water = await dish({ name: 'Mineral Water 600ml', cat: catBeverage.id, price: 20, cost: 6, sku: 'BV-004', stockable: true, stock: 30, threshold: 12 })
   const freshJuice = await dish({ name: 'Fresh Orange Juice', cat: catBeverage.id, price: 55, cost: 20, sku: 'BV-005' })
-  console.log('✓ sellable products: 18')
+
+  // ── Shisha flavors (routed to the shisha station) ──────────────
+  const shisha = (name: string, nameAr: string, price: number, cost: number, sku: string) =>
+    db.product.create({
+      data: { name, nameAr, categoryId: catShisha.id, price, cost, isSellable: true, sku },
+    })
+  await shisha('Double Apple (Maassel)', 'تفاحتين', 90, 28, 'SH-001')
+  await shisha('Fresh Mint', 'نعناع', 75, 22, 'SH-002')
+  await shisha('Grape & Mint', 'عنب ونعناع', 85, 25, 'SH-003')
+  await shisha('Watermelon', 'بطيخ', 85, 25, 'SH-004')
+  await shisha('Peach', 'خوخ', 85, 25, 'SH-005')
+  await shisha('Lemon & Mint', 'ليمون بالنعناع', 80, 24, 'SH-006')
+  await shisha('Mixed Fruit', 'فواكه مشكلة', 95, 30, 'SH-007')
+  await shisha('Jasmine', 'ياسمين', 90, 28, 'SH-008')
+  await shisha('Blueberry', 'بلوبيري', 95, 30, 'SH-009')
+  await shisha('Premium Head Upgrade', 'رأس بريميوم', 45, 12, 'SH-010')
+  console.log('✓ sellable products: 28 (incl. 10 shisha flavors)')
 
   // ── Recipes (BOM) ─────────────────────────────────────────────────
   const rc = (productId: number, ingredientId: number, quantity: number) =>
@@ -264,6 +284,7 @@ async function main() {
         data: {
           userId: waiter.id,
           status: 'paid',
+          orderType: 'takeaway', // seed history is table-less
           subtotalAmount: subtotal,
           discountAmount: discount,
           taxAmount: tax,

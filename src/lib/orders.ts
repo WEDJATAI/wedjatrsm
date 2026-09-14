@@ -51,8 +51,20 @@ export const ORDER_INCLUDE = {
   // R8-b documented exception (approved in the task brief): `allergens` is
   // added to the product sub-select so KDS/cart allergen badges can read it
   // via a local cast — the ONLY change to this constant.
+  // R11: `category.prepDestination` added so KDS station routing can read it
+  // (second documented exception, same pattern).
   items: {
-    include: { product: { select: { id: true, name: true, nameAr: true, allergens: true } } },
+    include: {
+      product: {
+        select: {
+          id: true,
+          name: true,
+          nameAr: true,
+          allergens: true,
+          category: { select: { prepDestination: true } },
+        },
+      },
+    },
   },
   payments: true,
   table: { select: { id: true, name: true } },
@@ -140,6 +152,10 @@ export function serializeOrder(order: OrderWithRelations): Order {
     userId: order.userId,
     user: order.user,
     status: order.status,
+    // R11: order type + delivery contact
+    orderType: order.orderType,
+    deliveryPhone: order.deliveryPhone,
+    deliveryAddress: order.deliveryAddress,
     subtotalAmount: round2(order.subtotalAmount),
     totalAmount: total,
     discountAmount: round2(order.discountAmount),

@@ -30,6 +30,19 @@ function parseNameAr(value: unknown): string | null | undefined {
   return s === '' ? null : s
 }
 
+/** R11: station routing — see categories/route.ts for semantics. */
+function parsePrepDestination(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw new ApiError('prepDestination must be a string', 400)
+  const s = value.trim().toLowerCase().replace(/\s+/g, '-')
+  if (s === '') return null
+  if (s.length > 30 || !/^[a-z0-9-_]+$/.test(s)) {
+    throw new ApiError('prepDestination must be 1-30 chars (letters, numbers, dashes)', 400)
+  }
+  return s
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -73,6 +86,9 @@ export async function PUT(
       data.active = body.active
     }
 
+    const prepDestination = parsePrepDestination(body.prepDestination)
+    if (prepDestination !== undefined) data.prepDestination = prepDestination
+
     const updated = await db.category.update({
       where: { id: categoryId },
       data,
@@ -86,6 +102,7 @@ export async function PUT(
         name: updated.name,
         nameAr: updated.nameAr,
         displayOrder: updated.displayOrder,
+        prepDestination: updated.prepDestination,
         active: updated.active,
         productCount: updated._count.products,
       },

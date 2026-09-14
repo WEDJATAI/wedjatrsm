@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { GripVertical, MoreHorizontal, Pencil, Plus, Tags, Trash2, TriangleAlert } from 'lucide-react'
 
 import { apiFetch, fetcher } from '@/lib/api'
+import { PREP_STATION_PRESETS, prepStationOf } from '@/lib/constants'
 import { localizedName, useI18n } from '@/lib/i18n'
 import type { Category } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -37,6 +38,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 
@@ -46,9 +54,15 @@ type CategoryForm = {
   name: string
   nameAr: string // '' = no Arabic name (clears it)
   displayOrder: string
+  /** R11: prep-station routing — preset slug or 'custom' (slug in customSlug). */
+  prepStation: string
+  customSlug: string // used when prepStation === 'custom'
 }
 
-type CategoryFormErrors = Partial<Record<'name' | 'displayOrder', string>>
+type CategoryFormErrors = Partial<Record<'name' | 'displayOrder' | 'prepStation', string>>
+
+/** R11: valid custom station slug (server contract). */
+const STATION_SLUG_RE = /^[a-z0-9-_]{1,30}$/
 
 function validateCategoryForm(
   form: CategoryForm,
@@ -59,6 +73,10 @@ function validateCategoryForm(
   const order = Number(form.displayOrder)
   if (form.displayOrder.trim() === '' || !Number.isInteger(order) || order < 0) {
     errors.displayOrder = t('admin.orderWhole')
+  }
+  // R11: custom station slugs are validated client-side (server re-checks)
+  if (form.prepStation === 'custom' && !STATION_SLUG_RE.test(form.customSlug.trim())) {
+    errors.prepStation = t('admin.stationInvalid')
   }
   return errors
 }
@@ -72,6 +90,37 @@ function BadgeOrder({ order }: { order: number }) {
   return (
     <Badge variant="outline" className="shrink-0 tabular-nums">
       {order}
+    </Badge>
+  )
+}
+
+/** R11: station routing badge on the category row — Kitchen subtle outline,
+ *  Bar emerald, Shisha violet, custom neutral (slug shown as-is). */
+function StationBadge({ station, t }: { station: string; t: (key: string) => string }) {
+  const label =
+    station === 'kitchen'
+      ? t('admin.stationKitchen')
+      : station === 'bar'
+        ? t('admin.stationBar')
+        : station === 'shisha'
+          ? t('admin.stationShisha')
+          : station
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        'h-5 shrink-0 px-1.5 text-[10px] font-medium',
+        station === 'bar' &&
+          'border-emerald-600/30 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400',
+        station === 'shisha' &&
+          'border-violet-600/30 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-400',
+        station !== 'kitchen' &&
+          station !== 'bar' &&
+          station !== 'shisha' &&
+          'border-stone-400/40 bg-stone-100 text-stone-600 dark:border-stone-500/40 dark:bg-stone-500/10 dark:text-stone-400',
+      )}
+    >
+      {label}
     </Badge>
   )
 }
@@ -96,7 +145,13 @@ export default function CategoriesView() {
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Category | null>(null)
-  const [form, setForm] = useState<CategoryForm>({ name: '', nameAr: '', displayOrder: '0' })
+  const [form, setForm] = useState<CategoryForm>({
+    name: '',
+    nameAr: '',
+    displayOrder: '0',
+    prepStation: 'kitchen',
+    customSlug: '',
+  })
   const [deleteTarget, setDeleteTarget] = useState<Category | null>(null)
 
   const categoriesQuery = useQuery({
@@ -124,10 +179,15 @@ export default function CategoriesView() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      // R11: prep-station routing — presets send their slug ('kitchen' is the
+      // default screen; null === kitchen on display), custom sends the slug.
+      const station =
+        form.prepStation === 'custom' ? form.customSlug.trim() : form.prepStation
       const payload = {
         name: form.name.trim(),
         nameAr: form.nameAr.trim(),
         displayOrder: Number(form.displayOrder),
+        prepDestination: station,
       }
       return editing === null
         ? apiFetch<{ category: Category }>('/api/categories', { method: 'POST', body: payload })
@@ -185,13 +245,28 @@ export default function CategoriesView() {
 
   function openCreate() {
     setEditing(null)
-    setForm({ name: '', nameAr: '', displayOrder: nextDisplayOrder() })
+    setForm({
+      name: '',
+      nameAr: '',
+      displayOrder: nextDisplayOrder(),
+      prepStation: 'kitchen',
+      customSlug: '',
+    })
     setFormOpen(true)
   }
 
   function openEdit(category: Category) {
     setEditing(category)
-    setForm({ name: category.name, nameAr: category.nameAr ?? '', displayOrder: String(category.displayOrder) })
+    // R11: canonical station (null → kitchen); non-preset slugs → custom
+    const station = prepStationOf(category.prepDestination)
+    const isPreset = (PREP_STATION_PRESETS as readonly string[]).includes(station)
+    setForm({
+      name: category.name,
+      nameAr: category.nameAr ?? '',
+      displayOrder: String(category.displayOrder),
+      prepStation: isPreset ? station : 'custom',
+      customSlug: isPreset ? '' : station,
+    })
     setFormOpen(true)
   }
 
@@ -280,6 +355,8 @@ export default function CategoriesView() {
                   </p>
                 </div>
                 <BadgeOrder order={c.displayOrder} />
+                {/* R11: prep-station routing badge (Kitchen/Bar/Shisha/custom) */}
+                <StationBadge station={prepStationOf(c.prepDestination)} t={t} />
                 <Switch
                   checked={c.active}
                   disabled={toggleMutation.isPending && toggleMutation.variables?.id === c.id}
@@ -364,6 +441,47 @@ export default function CategoriesView() {
               />
               <p className="text-muted-foreground text-xs">{t('admin.displayOrderHint')}</p>
               <FieldError message={errors.displayOrder} />
+            </div>
+
+            {/* R11: prep-station routing — where this category's items appear */}
+            <div className="grid gap-2">
+              <Label htmlFor="category-station">{t('admin.prepStation')}</Label>
+              <Select
+                value={form.prepStation}
+                onValueChange={(v) => setForm({ ...form, prepStation: v, customSlug: v === 'custom' ? form.customSlug : '' })}
+              >
+                <SelectTrigger id="category-station" className="h-11 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="kitchen">{t('admin.stationKitchen')}</SelectItem>
+                  <SelectItem value="bar">{t('admin.stationBar')}</SelectItem>
+                  <SelectItem value="shisha">{t('admin.stationShisha')}</SelectItem>
+                  <SelectItem value="custom">{t('admin.stationCustom')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">{t('admin.prepStationHint')}</p>
+              {form.prepStation === 'custom' && (
+                <div className="grid gap-2">
+                  <Label htmlFor="category-station-slug">{t('admin.stationSlugLabel')}</Label>
+                  <Input
+                    id="category-station-slug"
+                    value={form.customSlug}
+                    onChange={(e) =>
+                      setForm({ ...form, customSlug: e.target.value.toLowerCase() })
+                    }
+                    placeholder={t('admin.stationSlugPh')}
+                    className="h-11 font-mono"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={30}
+                    aria-invalid={errors.prepStation ? true : undefined}
+                  />
+                  <p className="text-muted-foreground text-xs">{t('admin.stationSlugHint')}</p>
+                  <FieldError message={errors.prepStation} />
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

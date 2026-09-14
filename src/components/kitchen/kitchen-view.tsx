@@ -5,10 +5,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChefHat } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { KitchenOrderCard, type CourseFilter } from '@/components/kitchen/kitchen-order-card'
+import {
+  KitchenOrderCard,
+  STATION_PILL_ACTIVE_CLASSES,
+  stationLabel,
+  type CourseFilter,
+  type StationFilter,
+} from '@/components/kitchen/kitchen-order-card'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch, fetcher } from '@/lib/api'
-import { COURSES, type ItemStatus } from '@/lib/constants'
+import { COURSES, prepStationOf, type ItemStatus } from '@/lib/constants'
 import { useI18n } from '@/lib/i18n'
 import type { Order, OrderItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -28,6 +34,10 @@ export default function KitchenView() {
   const { t, isRTL } = useI18n()
   const queryClient = useQueryClient()
   const [courseFilter, setCourseFilter] = useState<CourseFilter>('all')
+  // R11: station routing filter — 'all' or a station slug (kitchen/bar/
+  // shisha/custom). Filters the ITEMS inside the order cards exactly like
+  // the course filter does.
+  const [stationFilter, setStationFilter] = useState<StationFilter>('all')
   const [clock, setClock] = useState(() => new Date())
   const [tick, setTick] = useState(0)
 
@@ -50,6 +60,27 @@ export default function KitchenView() {
   })
 
   const orders = useMemo(() => data?.orders ?? [], [data])
+
+  // R11: distinct prep stations across the open orders' items (each item's
+  // product category routes it; null/absent → kitchen).
+  const stations = useMemo(() => {
+    const set = new Set<string>()
+    for (const order of orders) {
+      for (const item of order.items) {
+        set.add(prepStationOf(item.product?.category?.prepDestination))
+      }
+    }
+    // stable display order: presets first, then custom slugs alphabetically
+    const presetOrder = ['kitchen', 'bar', 'shisha']
+    return [...set].sort((a, b) => {
+      const ai = presetOrder.indexOf(a)
+      const bi = presetOrder.indexOf(b)
+      if (ai !== -1 && bi !== -1) return ai - bi
+      if (ai !== -1) return -1
+      if (bi !== -1) return 1
+      return a.localeCompare(b)
+    })
+  }, [orders])
 
   // Oldest first; fully-served orders sink to the end.
   const sortedOrders = useMemo(() => {
@@ -153,6 +184,35 @@ export default function KitchenView() {
         </div>
       </header>
 
+      {/* ── R11: station routing pills (kitchen / bar / shisha / custom) —
+          a second filter row; filters items inside the cards like courses ── */}
+      {stations.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {(['all', ...stations] as StationFilter[]).map((station) => {
+            const active = stationFilter === station
+            const label = station === 'all' ? t('kds.stationAll') : stationLabel(station, t)
+            return (
+              <button
+                key={station}
+                type="button"
+                onClick={() => setStationFilter(station)}
+                aria-pressed={active}
+                className={cn(
+                  'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
+                  active
+                    ? station === 'all'
+                      ? 'border-emerald-500 bg-emerald-500 text-zinc-950'
+                      : STATION_PILL_ACTIVE_CLASSES[station] ?? 'border-sky-400 bg-sky-400 text-zinc-950'
+                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200',
+                )}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {isError && (
         <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
           {error instanceof Error ? error.message : t('kds.loadFailed')}
@@ -181,6 +241,7 @@ export default function KitchenView() {
               order={order}
               tick={tick}
               courseFilter={courseFilter}
+              stationFilter={stationFilter}
               pendingItemId={pendingItemId}
               onUpdateItemStatus={(id, status) => statusMutation.mutate({ id, status })}
             />

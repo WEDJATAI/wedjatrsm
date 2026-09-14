@@ -79,6 +79,10 @@ model Category {
   name         String
   nameAr       String?   @map("name_ar") // optional Arabic display name (menu localization)
   displayOrder Int       @default(0) @map("display_order")
+  // R11: station routing — where this category's items are prepared/
+  // served. null/absent = default kitchen screen. Free-form key so admins
+  // can define custom stations ('bar', 'shisha', 'sushi', …).
+  prepDestination String? @map("prep_destination")
   active       Boolean   @default(true)
   products     Product[]
 
@@ -126,6 +130,7 @@ model FloorPlan {
   active          Boolean  @default(true)
   tables          RestaurantTable[]
   visionCameras   VisionCamera[] // R9 back-relation (additive)
+  reservations    Reservation[] // R11 back-relation (additive)
 
   @@map("floor_plans")
 }
@@ -148,6 +153,7 @@ model RestaurantTable {
   visionState     VisionTableState?
   movementFrom    MovementCandidate[] @relation("MovementFrom")
   movementTo      MovementCandidate[] @relation("MovementTo")
+  reservations    Reservation[] // R11 back-relation (additive)
 
   @@index([floorPlanId])
   @@map("tables")
@@ -161,6 +167,11 @@ model Order {
   userId         Int?               @map("user_id")
   user           User?              @relation(fields: [userId], references: [id])
   status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a merge) | 'deferred' (client pays later)
+  // R11: order type — 'dinein' (table-bound, default) | 'takeaway' |
+  // 'delivery' (customer phone/address attached)
+  orderType      String             @default("dinein") @map("order_type")
+  deliveryPhone  String?            @map("delivery_phone") // required when orderType = 'delivery'
+  deliveryAddress String?           @map("delivery_address")
   guests         Int                @default(1) // number of people seated on this order
   subtotalAmount Float              @default(0) @map("subtotal_amount")
   totalAmount    Float              @default(0) @map("total_amount")
@@ -176,10 +187,12 @@ model Order {
   items          OrderItem[]
   payments       Payment[]
   inventoryTransactions InventoryTransaction[]
+  reservation    Reservation? // R11 back-relation (additive)
 
   @@index([status])
   @@index([tableId])
   @@index([createdAt])
+  @@index([orderType])
   @@map("orders")
 }
 
@@ -476,4 +489,33 @@ model InventoryTransaction {
   @@index([productId])
   @@index([orderId])
   @@map("inventory_transactions")
+}
+
+// ─── R11: Table reservations (booking board) ─────────────────────────
+// Phone/walk-in bookings ahead of service. 'pending' → 'seated' (an open
+// order is created at the chosen table and linked) → 'completed' (derived:
+// the linked order closed). 'cancelled' / 'no_show' are terminal too.
+// This table NEVER touches POS order data directly — seating reuses the
+// same order-creation path as the POS floor.
+model Reservation {
+  id            Int       @id @default(autoincrement())
+  customerName  String    @map("customer_name")
+  customerPhone String?   @map("customer_phone")
+  partySize     Int       @default(2) @map("party_size")
+  floorPlanId   Int?      @map("floor_plan_id")
+  floorPlan     FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  tableId       Int?      @map("table_id")
+  table         RestaurantTable? @relation(fields: [tableId], references: [id])
+  reservedAt    DateTime  @map("reserved_at")
+  status        String    @default("pending") // 'pending'|'seated'|'completed'|'cancelled'|'no_show'
+  notes         String?
+  orderId       Int?      @unique @map("order_id")
+  order         Order?    @relation(fields: [orderId], references: [id])
+  createdBy     String?   @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([reservedAt])
+  @@map("reservations")
 }

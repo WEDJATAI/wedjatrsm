@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
-import { MAX_SEATING_TABLES } from '@/lib/constants'
+import { MAX_SEATING_TABLES, ORDER_TYPES } from '@/lib/constants'
 import {
   ORDER_INCLUDE,
   checkStockAvailability,
@@ -93,6 +93,36 @@ export async function POST(req: NextRequest) {
     const table = tables.length > 0 ? tables[0] : null
     const extraTables = tables.slice(1)
 
+    // R11: order type — defaults to the classic behavior (table → dine-in,
+    // table-less → takeaway). 'delivery' requires a contact phone.
+    let orderType: string = table != null ? 'dinein' : 'takeaway'
+    if (body?.orderType != null) {
+      const rawType = String(body.orderType)
+      if (!(ORDER_TYPES as readonly string[]).includes(rawType)) {
+        throw new ApiError(`orderType must be one of: ${ORDER_TYPES.join(', ')}`, 400)
+      }
+      orderType = rawType
+    }
+    if (table != null && orderType !== 'dinein') {
+      throw new ApiError(`${orderType} orders cannot be bound to a table`, 400)
+    }
+    let deliveryPhone: string | null = null
+    let deliveryAddress: string | null = null
+    if (orderType === 'delivery') {
+      const rawPhone = body?.deliveryPhone == null ? '' : String(body.deliveryPhone).trim()
+      if (rawPhone.length < 5 || rawPhone.length > 20) {
+        throw new ApiError('Delivery orders require a customer phone (5-20 characters)', 400)
+      }
+      deliveryPhone = rawPhone
+      if (body?.deliveryAddress != null) {
+        const rawAddress = String(body.deliveryAddress).trim()
+        if (rawAddress.length > 200) {
+          throw new ApiError('Delivery address is too long (max 200 characters)', 400)
+        }
+        deliveryAddress = rawAddress || null
+      }
+    }
+
     // Guests: integer 1-30, default 2 for table orders / 1 for takeaway
     let guests = table != null ? 2 : 1
     if (body?.guests != null) {
@@ -115,6 +145,9 @@ export async function POST(req: NextRequest) {
         data: {
           userId: sessionUserId(session),
           tableId: table?.id ?? null,
+          orderType,
+          deliveryPhone,
+          deliveryAddress,
           extraTableIds:
             extraTables.length > 0 ? JSON.stringify(extraTables.map((t) => t.id)) : null,
           guests,
@@ -146,6 +179,17 @@ export async function POST(req: NextRequest) {
     // Persist subtotal/tax/total from the created items
     const order = await recomputeTotals(created.id)
 
+    // R11: auto-link a seated reservation on this table to its new order
+    // (fire-and-forget — booking traceability must never block an order).
+    if (table != null) {
+      await db.reservation
+        .updateMany({
+          where: { tableId: table.id, status: 'seated', orderId: null },
+          data: { orderId: order.id },
+        })
+        .catch(() => undefined)
+    }
+
     await logAudit({
       user: session,
       action: 'order.create',
@@ -157,7 +201,9 @@ export async function POST(req: NextRequest) {
             ? `Tables ${tables.map((t) => t.name).join(' + ')} (merged seating)`
             : table
               ? `Table ${table.name}`
-              : 'takeaway'
+              : orderType === 'delivery'
+                ? `delivery (phone ${deliveryPhone})`
+                : 'takeaway'
         }, ${order.items.length} item(s), ${guests} guest(s)`,
     })
 

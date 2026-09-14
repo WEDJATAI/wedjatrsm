@@ -1238,8 +1238,16 @@ function DraftRow({
       >
         <p className="flex items-center gap-1 truncate text-sm font-medium">
           <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
-          {item.notes && <StickyNote className="size-3.5 shrink-0 text-amber-500" />}
         </p>
+        {item.notes && (
+          <p
+            className="flex items-center gap-1 truncate text-[11px] text-amber-600"
+            title={item.notes}
+          >
+            <StickyNote className="size-3 shrink-0" />
+            <span className="truncate">{item.notes}</span>
+          </p>
+        )}
         {item.modifiers?.length ? (
           <p
             className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"

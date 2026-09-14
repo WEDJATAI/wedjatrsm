@@ -167,6 +167,26 @@ export const posDict: DictPair = {
     'shift.noSales': 'No sales yet today — your shift starts with the first check.',
     'shift.tipShare': 'Tips by method',
 
+    // R11: special-request comment in the options sheet
+    'pos.modCommentLabel': 'Comment for the kitchen',
+    'pos.modCommentPh': 'e.g. extra sugar, no ice…',
+
+    // R11: split payment — customer-by-customer navigation
+    'pos.payerNext': 'Next',
+    'pos.payerPrev': 'Back',
+    'pos.payerOf': 'Customer {n} of {m}',
+
+    // R11: delivery orders (table-less, phone + address)
+    'pos.delivery': 'Delivery',
+    'pos.newDeliveryOrder': 'New Delivery Order',
+    'pos.deliveryPhone': 'Customer phone',
+    'pos.deliveryPhonePh': 'e.g. 0100 123 4567',
+    'pos.deliveryAddress': 'Address',
+    'pos.deliveryAddressPh': 'e.g. 12 Tahrir St., Dokki (optional)',
+    'pos.deliveryPhoneInvalid': 'Enter a phone number (5-20 characters)',
+    'pos.deliveryStart': 'Start order',
+    'pos.openDeliveries': 'Open delivery orders',
+
     // payment modal
     'pos.paymentDesc':
       'Split the bill or charge in one go. Print a check first if the customer wants to see it — printing never records a payment.',
@@ -599,5 +619,25 @@ export const posDict: DictPair = {
     'shift.byMethod': 'التحصيل حسب الطريقة',
     'shift.noSales': 'لا مبيعات اليوم بعد — تبدأ ورديتك بأول حساب.',
     'shift.tipShare': 'الإكراميات حسب الطريقة',
+
+    // R11: تعليق الطلب الخاص في ورقة الخيارات
+    'pos.modCommentLabel': 'تعليق للمطبخ',
+    'pos.modCommentPh': 'مثال: سكر زيادة، بدون ثلج…',
+
+    // R11: تقسيم الحساب — التنقل بين العملاء
+    'pos.payerNext': 'التالي',
+    'pos.payerPrev': 'السابق',
+    'pos.payerOf': 'العميل {n} من {m}',
+
+    // R11: طلبات الدليفري (بدون طاولة — هاتف وعنوان)
+    'pos.delivery': 'دليفري',
+    'pos.newDeliveryOrder': 'طلب دليفري جديد',
+    'pos.deliveryPhone': 'هاتف العميل',
+    'pos.deliveryPhonePh': 'مثال: 0100 123 4567',
+    'pos.deliveryAddress': 'العنوان',
+    'pos.deliveryAddressPh': 'مثال: 12 شارع التحرير، الدقي (اختياري)',
+    'pos.deliveryPhoneInvalid': 'أدخل رقم هاتف صحيحًا (من 5 إلى 20 خانة)',
+    'pos.deliveryStart': 'بدء الطلب',
+    'pos.openDeliveries': 'طلبات الدليفري المفتوحة',
   },
 }

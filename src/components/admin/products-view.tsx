@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  Check,
+  Loader2,
   MoreHorizontal,
   Package,
   PackageSearch,
@@ -13,6 +15,7 @@ import {
   Store,
   Trash2,
   TriangleAlert,
+  X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -216,6 +219,91 @@ function MarginCell({ product }: { product: Product }) {
 function StockCell({ product }: { product: Product }) {
   if (!product.isStockable) return <span className="text-muted-foreground">—</span>
   return <span className={cn('tabular-nums', stockColorClass(product))}>{formatQty(product.stock)}</span>
+}
+
+/** R11: inline quick price edit — click the price (or its pencil) to turn
+ *  the cell into a small input; ✓/Enter saves (PUT {price}), ✗/Esc cancels.
+ *  Validates finite ≥ 0, rounds to 2dp, and is a silent no-op when the
+ *  value did not change. */
+function QuickPriceCell({
+  product,
+  editValue,
+  saving,
+  onStart,
+  onChange,
+  onConfirm,
+  onCancel,
+  t,
+}: {
+  product: Product
+  editValue: string | null
+  saving: boolean
+  onStart: () => void
+  onChange: (v: string) => void
+  onConfirm: () => void
+  onCancel: () => void
+  t: (key: string) => string
+}) {
+  const editing = editValue != null
+  if (editing) {
+    return (
+      <span className="inline-flex items-center justify-end gap-1">
+        <Input
+          type="number"
+          step={0.01}
+          min={0}
+          inputMode="decimal"
+          value={editValue}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onConfirm()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              onCancel()
+            }
+          }}
+          autoFocus
+          aria-label={t('admin.quickEditPrice')}
+          className="h-11 w-24 text-right text-sm font-semibold tabular-nums"
+        />
+        <Button
+          size="icon"
+          className="size-11 shrink-0 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+          disabled={saving}
+          onClick={onConfirm}
+          title={t('admin.priceEditConfirm')}
+          aria-label={t('admin.priceEditConfirm')}
+        >
+          {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-11 shrink-0 rounded-lg text-muted-foreground hover:text-destructive"
+          disabled={saving}
+          onClick={onCancel}
+          title={t('admin.priceEditCancel')}
+          aria-label={t('admin.priceEditCancel')}
+        >
+          <X className="size-4" />
+        </Button>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onStart}
+      title={t('admin.quickEditPrice')}
+      aria-label={`${t('admin.quickEditPrice')} — ${product.name}`}
+      className="inline-flex h-11 items-center gap-1.5 rounded-lg px-1.5 text-sm font-medium tabular-nums transition-colors hover:bg-muted/60 hover:text-primary"
+    >
+      {formatCurrency(product.price)}
+      <Pencil className="size-3.5 text-muted-foreground/60" aria-hidden />
+    </button>
+  )
 }
 
 function FlagIcon({
@@ -436,6 +524,9 @@ export default function ProductsView() {
 
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null)
 
+  // R11: quick price edit — { productId, raw input text } while editing.
+  const [priceEdit, setPriceEdit] = useState<{ id: number; value: string } | null>(null)
+
   const productsQuery = useQuery({
     queryKey: ['products', { all: showInactive, category: categoryFilter }],
     queryFn: () =>
@@ -544,6 +635,36 @@ export default function ProductsView() {
     },
     onError: (err: Error) => toast.error(err.message),
   })
+
+  // R11: inline quick price edit — partial update {price} only.
+  const quickPriceMutation = useMutation({
+    mutationFn: (vars: { id: number; price: number }) =>
+      apiFetch<{ product: Product }>(`/api/products/${vars.id}`, {
+        method: 'PUT',
+        body: { price: vars.price },
+      }),
+    onSuccess: (_data, vars) => {
+      toast.success(t('admin.priceUpdated'))
+      setPriceEdit(null)
+      void queryClient.invalidateQueries({ queryKey: ['products'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const confirmQuickPrice = (product: Product) => {
+    if (priceEdit == null || priceEdit.id !== product.id) return
+    const parsed = Number(priceEdit.value)
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      toast.error(t('admin.priceInvalid'))
+      return
+    }
+    const next = Math.round(parsed * 100) / 100
+    if (Math.abs(next - product.price) < 0.005) {
+      setPriceEdit(null) // unchanged — silent no-op
+      return
+    }
+    quickPriceMutation.mutate({ id: product.id, price: next })
+  }
 
   function openCreate() {
     setEditing(null)
@@ -728,8 +849,17 @@ export default function ProductsView() {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-end font-medium tabular-nums">
-                          {formatCurrency(p.price)}
+                        <TableCell className="text-end">
+                          <QuickPriceCell
+                            product={p}
+                            editValue={priceEdit?.id === p.id ? priceEdit.value : null}
+                            saving={quickPriceMutation.isPending && quickPriceMutation.variables?.id === p.id}
+                            t={t}
+                            onStart={() => setPriceEdit({ id: p.id, value: String(p.price) })}
+                            onChange={(v) => setPriceEdit({ id: p.id, value: v })}
+                            onConfirm={() => confirmQuickPrice(p)}
+                            onCancel={() => setPriceEdit(null)}
+                          />
                         </TableCell>
                         <TableCell className="hidden text-end text-muted-foreground tabular-nums lg:table-cell">
                           {formatCurrency(p.cost)}
@@ -808,8 +938,17 @@ export default function ProductsView() {
                     </div>
                     <ProductTagBadges product={p} t={t} />
                   </div>
-                  <div className="shrink-0 text-end font-medium tabular-nums">
-                    {formatCurrency(p.price)}
+                  <div className="shrink-0 text-end">
+                    <QuickPriceCell
+                      product={p}
+                      editValue={priceEdit?.id === p.id ? priceEdit.value : null}
+                      saving={quickPriceMutation.isPending && quickPriceMutation.variables?.id === p.id}
+                      t={t}
+                      onStart={() => setPriceEdit({ id: p.id, value: String(p.price) })}
+                      onChange={(v) => setPriceEdit({ id: p.id, value: v })}
+                      onConfirm={() => confirmQuickPrice(p)}
+                      onCancel={() => setPriceEdit(null)}
+                    />
                   </div>
                   <ProductRowActions
                     product={p}

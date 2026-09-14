@@ -41,6 +41,12 @@ export const AUDIT_ACTIONS = [
   'vision.configUpdate',
   'vision.ingestKeyRotate',
   'vision.simulate',
+  // R11: reservations — booking board actions
+  'reservation.create',
+  'reservation.update',
+  'reservation.seat',
+  'reservation.cancel',
+  'reservation.noShow',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -48,7 +54,7 @@ export type AuditInput = {
   /** the session user performing the action (name snapshotted) */
   user?: Pick<SessionPayload, 'userId' | 'name'> | null
   action: AuditAction
-  entity: 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory' | 'vision'
+  entity: 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory' | 'vision' | 'reservation'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null

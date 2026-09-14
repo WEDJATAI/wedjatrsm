@@ -23,6 +23,23 @@ function parseDisplayOrder(value: unknown): number {
   return n
 }
 
+/**
+ * R11: station routing — optional prep destination slug (e.g. 'bar',
+ * 'shisha', or a custom station). null/'' = default kitchen screen.
+ * undefined (absent) = don't change. Lowercased, 1-30 chars, slug-ish.
+ */
+function parsePrepDestination(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw new ApiError('prepDestination must be a string', 400)
+  const s = value.trim().toLowerCase().replace(/\s+/g, '-')
+  if (s === '') return null
+  if (s.length > 30 || !/^[a-z0-9-_]+$/.test(s)) {
+    throw new ApiError('prepDestination must be 1-30 chars (letters, numbers, dashes)', 400)
+  }
+  return s
+}
+
 export async function GET(req: NextRequest) {
   try {
     await requireAuth(req)
@@ -40,6 +57,7 @@ export async function GET(req: NextRequest) {
         name: c.name,
         nameAr: c.nameAr,
         displayOrder: c.displayOrder,
+        prepDestination: c.prepDestination,
         active: c.active,
         productCount: c._count.products,
       })),
@@ -67,9 +85,10 @@ export async function POST(req: NextRequest) {
     if (!name) throw new ApiError('Name is required', 400)
     const displayOrder = parseDisplayOrder(body.displayOrder)
     const nameAr = parseNameAr(body.nameAr)
+    const prepDestination = parsePrepDestination(body.prepDestination)
 
     const category = await db.category.create({
-      data: { name, displayOrder, nameAr: nameAr ?? null },
+      data: { name, displayOrder, nameAr: nameAr ?? null, prepDestination: prepDestination ?? null },
     })
     return NextResponse.json({ category: { ...category, productCount: 0 } })
   } catch (err) {

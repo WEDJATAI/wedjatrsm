@@ -29,6 +29,13 @@ export const kitchenDict: DictPair = {
     // R8: modifiers + allergens on KDS cards
     'kds.allergens': 'Allergens',
     'kds.mods': 'options',
+
+    // R11: station routing (kitchen / bar / shisha / custom prep screens)
+    'kds.stationAll': 'All stations',
+    'kds.stationKitchen': 'Kitchen',
+    'kds.stationBar': 'Bar',
+    'kds.stationShisha': 'Shisha Station',
+    'kds.deliveryName': 'Delivery · {phone}',
   },
   ar: {
     'kds.title': 'شاشة المطبخ',
@@ -54,5 +61,12 @@ export const kitchenDict: DictPair = {
     // R8: الخيارات ومسببات الحساسية
     'kds.allergens': 'مسببات الحساسية',
     'kds.mods': 'خيارات',
+
+    // R11: توجيه المحطات (مطبخ / بار / شيشة / مخصص)
+    'kds.stationAll': 'كل المحطات',
+    'kds.stationKitchen': 'المطبخ',
+    'kds.stationBar': 'البار',
+    'kds.stationShisha': 'محطة الشيشة',
+    'kds.deliveryName': 'دليفري · {phone}',
   },
 }

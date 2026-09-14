@@ -21,6 +21,7 @@ import DashboardView from '@/components/admin/dashboard-view'
 import ProductsView from '@/components/admin/products-view'
 import CategoriesView from '@/components/admin/categories-view'
 import FloorPlansView from '@/components/admin/floorplans-view'
+import ReservationsView from '@/components/admin/reservations-view'
 import InventoryView from '@/components/admin/inventory-view'
 import RecipesView from '@/components/admin/recipes-view'
 import ReportsView from '@/components/admin/reports-view'
@@ -41,6 +42,7 @@ type View =
   | 'modifiers'
   | 'categories'
   | 'floorplans'
+  | 'reservations'
   | 'inventory'
   | 'recipes'
   | 'reports'
@@ -61,6 +63,7 @@ const VIEW_PERMISSION: Record<View, string> = {
   modifiers: 'products',
   categories: 'categories',
   floorplans: 'floorplans',
+  reservations: 'reservations',
   inventory: 'inventory',
   recipes: 'recipes',
   reports: 'reports',
@@ -79,6 +82,7 @@ const ADMIN_VIEWS: View[] = [
   'modifiers',
   'categories',
   'floorplans',
+  'reservations',
   'inventory',
   'recipes',
   'reports',
@@ -106,6 +110,7 @@ const VIEW_PRIORITY: View[] = [
   'modifiers',
   'categories',
   'floorplans',
+  'reservations',
   'recipes',
   'users',
   'roles',
@@ -227,6 +232,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <CategoriesView />
       case 'floorplans':
         return <FloorPlansView />
+      case 'reservations':
+        return <ReservationsView />
       case 'inventory':
         return <InventoryView />
       case 'recipes':

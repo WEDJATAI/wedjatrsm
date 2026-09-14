@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -27,11 +28,15 @@ import { modifierDeltaLabel, round2 } from './pos-utils'
 
 const MIN_QTY = 1
 const MAX_QTY = 30
+const MAX_COMMENT = 140
 
 export type ModifierSheetSelection = {
   product: Product
   quantity: number
   modifiers: SelectedModifier[]
+  /** R11: special-request comment ("extra sugar"…) — trimmed; goes into the
+   *  draft line's notes so the kitchen + check see it like any note. */
+  notes: string
 }
 
 type ModifierSheetProps = {
@@ -52,6 +57,8 @@ export default function ModifierSheet({
   // product id (remount = clean reset), so no reset effect is needed here.
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [quantity, setQuantity] = useState(1)
+  // R11: free-text special request for this line (max 140 chars).
+  const [comment, setComment] = useState('')
 
   const groups = useMemo<ModifierGroupDTO[]>(
     () =>
@@ -127,7 +134,7 @@ export default function ModifierSheet({
         if (snap) ordered.push(snap)
       }
     }
-    onConfirm({ product, quantity: round2(quantity), modifiers: ordered })
+    onConfirm({ product, quantity: round2(quantity), modifiers: ordered, notes: comment.trim() })
   }
 
   const label = product ? localizedName(product.name, product.nameAr, lang) : ''
@@ -270,6 +277,23 @@ export default function ModifierSheet({
               )
             })
           )}
+
+          {/* ── R11: special-request comment — one per line, so a commented
+              item never merges into a plain one (notes break the merge rule) ── */}
+          <div className="grid gap-1.5">
+            <label htmlFor="modifier-comment" className="text-sm font-semibold">
+              {t('pos.modCommentLabel')}
+            </label>
+            <Textarea
+              id="modifier-comment"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder={t('pos.modCommentPh')}
+              maxLength={MAX_COMMENT}
+              rows={2}
+              className="min-h-11 resize-none rounded-xl border-[#E2E2E0] bg-white text-base"
+            />
+          </div>
 
           {/* ── Quantity + live line total ── */}
           <div className="flex items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-muted/40 p-3">

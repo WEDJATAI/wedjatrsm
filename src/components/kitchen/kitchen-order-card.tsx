@@ -4,13 +4,61 @@ import { Check, CheckCircle2, Loader2, Play, StickyNote } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { type Course, type ItemStatus } from '@/lib/constants'
+import { type Course, type ItemStatus, prepStationOf } from '@/lib/constants'
 import { elapsedMinutes, elapsedSince, formatCurrency, formatQty, formatTime } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export type CourseFilter = 'all' | Course
+
+/** R11: station routing filter — 'all' or a station slug (kitchen/bar/
+ *  shisha/custom). Mirrors CourseFilter: non-matching items dim in place. */
+export type StationFilter = 'all' | string
+
+/** i18n keys for the preset stations; custom slugs display as-is. */
+export const STATION_LABEL_KEYS: Record<string, string> = {
+  kitchen: 'kds.stationKitchen',
+  bar: 'kds.stationBar',
+  shisha: 'kds.stationShisha',
+}
+
+/** Active pill tint per station (kitchen-view filter row) — amber bar,
+ *  violet shisha, emerald kitchen, sky custom. */
+export const STATION_PILL_ACTIVE_CLASSES: Record<string, string> = {
+  kitchen: 'border-emerald-500 bg-emerald-500 text-zinc-950',
+  bar: 'border-amber-500 bg-amber-500 text-zinc-950',
+  shisha: 'border-violet-400 bg-violet-400 text-zinc-950',
+}
+
+/** Small badge tint per station on the item lines (dark KDS cards). */
+const STATION_BADGE_CLASSES: Record<string, string> = {
+  kitchen: 'border-zinc-700 bg-zinc-800 text-zinc-400',
+  bar: 'border-amber-500/40 bg-amber-500/15 text-amber-300',
+  shisha: 'border-violet-500/40 bg-violet-500/15 text-violet-300',
+}
+
+/** Station display label: preset stations localize, custom slugs stay raw. */
+export function stationLabel(station: string, t: (key: string) => string): string {
+  const key = STATION_LABEL_KEYS[station]
+  return key ? t(key) : station
+}
+
+/** R11: tiny routing badge on each item line (kitchen subtle, bar amber,
+ *  shisha violet, custom sky) so cooks see routing at a glance. */
+function StationBadge({ station, t }: { station: string; t: (key: string) => string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase tracking-wide',
+        STATION_BADGE_CLASSES[station] ?? 'border-sky-500/40 bg-sky-500/15 text-sky-300',
+      )}
+      title={stationLabel(station, t)}
+    >
+      {stationLabel(station, t)}
+    </span>
+  )
+}
 
 const STATUS_CHIP_CLASSES: Record<string, string> = {
   new: 'border-rose-500/30 bg-rose-500/15 text-rose-400',
@@ -50,6 +98,8 @@ type KitchenOrderCardProps = {
   /** Parent counter that increments every 5s so elapsed timers re-render. */
   tick: number
   courseFilter: CourseFilter
+  /** R11: station routing filter — dims non-matching items like courseFilter. */
+  stationFilter: StationFilter
   pendingItemId: number | null
   onUpdateItemStatus: (itemId: number, status: ItemStatus) => void
 }
@@ -58,6 +108,7 @@ export function KitchenOrderCard({
   order,
   tick,
   courseFilter,
+  stationFilter,
   pendingItemId,
   onUpdateItemStatus,
 }: KitchenOrderCardProps) {
@@ -67,7 +118,12 @@ export function KitchenOrderCard({
   const completed = items.length > 0 && items.every((item) => item.status === 'served')
   const readyCount = items.filter((item) => item.status === 'ready' || item.status === 'served').length
   const tableName =
-    order.table?.name ?? (order.tableId ? `${t('common.table')} #${order.tableId}` : t('common.takeaway'))
+    order.table?.name ??
+    (order.tableId
+      ? `${t('common.table')} #${order.tableId}`
+      : order.orderType === 'delivery'
+        ? t('kds.deliveryName', { phone: order.deliveryPhone ?? '' })
+        : t('common.takeaway'))
 
   return (
     <article
@@ -98,6 +154,9 @@ export function KitchenOrderCard({
       <ul className="space-y-1.5">
         {items.map((item) => {
           const dimmed = courseFilter !== 'all' && item.course !== courseFilter
+          // R11: station routing — items outside the active station dim too
+          const station = prepStationOf(item.product?.category?.prepDestination)
+          const stationDimmed = stationFilter !== 'all' && station !== stationFilter
           const next = NEXT_STATUS[item.status]
           const pending = pendingItemId === item.id
           return (
@@ -105,7 +164,7 @@ export function KitchenOrderCard({
               key={item.id}
               className={cn(
                 'flex items-center justify-between gap-2 rounded-lg px-1 py-0.5',
-                dimmed && 'opacity-30',
+                (dimmed || stationDimmed) && 'opacity-30',
                 item.status === 'served' && 'opacity-40',
               )}
             >
@@ -118,6 +177,8 @@ export function KitchenOrderCard({
                 >
                   {t(STATUS_CHIP_LABEL_KEYS[item.status] ?? 'status.item.served')}
                 </span>
+                {/* R11: prep-station routing badge (Kitchen/Bar/Shisha/…) */}
+                <StationBadge station={station} t={t} />
                 <span className="truncate text-sm font-medium text-zinc-100">
                   {formatQty(item.quantity)} ×{' '}
                   {item.product

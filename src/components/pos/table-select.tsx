@@ -6,6 +6,7 @@ import {
   Armchair,
   ArrowLeftRight,
   BadgeCheck,
+  Bike,
   Brush,
   Check,
   ChevronLeft,
@@ -36,6 +37,16 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { apiFetch, fetcher } from '@/lib/api'
 import { MAX_SEATING_TABLES } from '@/lib/constants'
@@ -49,7 +60,10 @@ import MovementQuickDialog from '@/components/vision/movement-quick-dialog'
 type TableSelectProps = {
   onSelectTable: (table: RestaurantTable) => void
   onTakeaway: () => void
-  onOpenTakeawayOrder: (order: Order) => void
+  /** R11: start a table-less DELIVERY draft with the customer contact. */
+  onDelivery: (phone: string, address: string) => void
+  /** Open a table-less open order (takeaway OR delivery chip). */
+  onOpenTablelessOrder: (order: Order) => void
   /** When set, start directly in transfer step 2 (destination selection) for this order. */
   transferOrderId?: number | null
   /** Called after a transfer completes (pos-view resets its order screen state). */
@@ -86,7 +100,8 @@ function shapeClasses(shape: string): string {
 export default function TableSelect({
   onSelectTable,
   onTakeaway,
-  onOpenTakeawayOrder,
+  onDelivery,
+  onOpenTablelessOrder,
   transferOrderId,
   onTransferDone,
   onSeatParty,
@@ -112,6 +127,13 @@ export default function TableSelect({
   const [clearTarget, setClearTarget] = useState<RestaurantTable | null>(null)
   // R9: pending AI guest-move suggestion opened for quick review.
   const [aiMove, setAiMove] = useState<MovementCandidateDTO | null>(null)
+
+  // R11: new-delivery dialog — customer phone (required) + address.
+  const [deliveryOpen, setDeliveryOpen] = useState(false)
+  const [deliveryPhone, setDeliveryPhone] = useState('')
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+
+  const deliveryPhoneOk = deliveryPhone.trim().length >= 5 && deliveryPhone.trim().length <= 20
 
   const { data: floorPlanData, isLoading } = useQuery({
     queryKey: ['floorplans'],
@@ -149,7 +171,12 @@ export default function TableSelect({
   const openOrders = openOrdersData?.orders ?? []
   const deferredOrders = deferredOrdersData?.orders ?? []
   const takeawayOrders = useMemo(
-    () => openOrders.filter((o) => o.tableId === null),
+    () => openOrders.filter((o) => o.tableId === null && o.orderType !== 'delivery'),
+    [openOrders],
+  )
+  // R11: open delivery orders get their own chips (contact + amount).
+  const deliveryOrders = useMemo(
+    () => openOrders.filter((o) => o.tableId === null && o.orderType === 'delivery'),
     [openOrders],
   )
 
@@ -325,7 +352,9 @@ export default function TableSelect({
     onSelectTable(t2)
   }
 
-  const handleTakeawayClick = (o: Order) => {
+  /** Table-less chip click (takeaway OR delivery order) — opens the order,
+   *  or acts as a transfer/merge source while those tools are active. */
+  const handleTablelessClick = (o: Order) => {
     if (busy) return
     if (tool === 'seat') return
     if (tool === 'transfer') {
@@ -339,12 +368,23 @@ export default function TableSelect({
         mergeMutation.mutate({
           sourceId: source.orderId,
           targetId: o.id,
-          targetLabel: t('common.takeaway'),
+          targetLabel: o.orderType === 'delivery' ? t('pos.delivery') : t('common.takeaway'),
         })
       }
       return
     }
-    onOpenTakeawayOrder(o)
+    onOpenTablelessOrder(o)
+  }
+
+  /** R11: delivery dialog confirm — hand the contact to pos-view. */
+  const confirmDelivery = () => {
+    if (!deliveryPhoneOk) return
+    const phone = deliveryPhone.trim()
+    const address = deliveryAddress.trim().slice(0, 200)
+    setDeliveryOpen(false)
+    setDeliveryPhone('')
+    setDeliveryAddress('')
+    onDelivery(phone, address)
   }
 
   // Seat Party: hand the selection (in order) to pos-view, then exit the tool.
@@ -466,6 +506,17 @@ export default function TableSelect({
               onClick={onTakeaway}
             >
               <Plus /> {t('pos.newTakeaway')}
+            </Button>
+            {/* R11: table-less delivery order (phone + address dialog) */}
+            <Button
+              variant="outline"
+              className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+              disabled={!!tool}
+              onClick={() => setDeliveryOpen(true)}
+              title={t('pos.newDeliveryOrder')}
+            >
+              <Bike className="text-[#714B67]" />
+              <span className="hidden sm:inline">{t('pos.delivery')}</span>
             </Button>
           </div>
         </div>
@@ -592,7 +643,7 @@ export default function TableSelect({
               </div>
             )}
 
-            {(takeawayOrders.length > 0 || deferredOrders.length > 0) && (
+            {(takeawayOrders.length > 0 || deferredOrders.length > 0 || deliveryOrders.length > 0) && (
               <div className="mt-6 space-y-6 pb-2">
                 {/* ── Open takeaway orders ── */}
                 {takeawayOrders.length > 0 && (
@@ -608,7 +659,7 @@ export default function TableSelect({
                             key={o.id}
                             type="button"
                             disabled={interaction === 'ineligible'}
-                            onClick={() => handleTakeawayClick(o)}
+                            onClick={() => handleTablelessClick(o)}
                             className={cn(
                               'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#E2E2E0] bg-white px-4 shadow-sm transition active:scale-95',
                               interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
@@ -617,6 +668,44 @@ export default function TableSelect({
                           >
                             <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
                             <span className="text-sm font-semibold">#{o.id}</span>
+                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+                              {formatCurrency(o.remainingAmount)}
+                            </span>
+                            <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                {/* ── R11: open delivery orders (phone chips) ── */}
+                {deliveryOrders.length > 0 && (
+                  <section>
+                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#714B67]">
+                      <Bike className="size-4" aria-hidden /> {t('pos.openDeliveries')}
+                    </h3>
+                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+                      {deliveryOrders.map((o) => {
+                        const interaction = takeawayInteraction(o)
+                        return (
+                          <button
+                            key={o.id}
+                            type="button"
+                            disabled={interaction === 'ineligible'}
+                            onClick={() => handleTablelessClick(o)}
+                            title={o.deliveryAddress || o.deliveryPhone || undefined}
+                            className={cn(
+                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#714B67]/30 bg-[#714B67]/[0.06] px-4 shadow-sm transition active:scale-95',
+                              interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+                            )}
+                          >
+                            <Bike className="size-4 text-[#714B67]" aria-hidden />
+                            <span className="text-sm font-semibold">#{o.id}</span>
+                            <span className="max-w-[130px] truncate text-sm font-semibold text-[#714B67]">
+                              {o.deliveryPhone ?? ''}
+                            </span>
                             <span className="text-sm font-bold tabular-nums text-[#714B67]">
                               {formatCurrency(o.remainingAmount)}
                             </span>
@@ -728,6 +817,69 @@ export default function TableSelect({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── R11: new delivery order dialog — phone required, address optional ── */}
+      <Dialog open={deliveryOpen} onOpenChange={setDeliveryOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bike className="size-5 text-[#714B67]" /> {t('pos.newDeliveryOrder')}
+            </DialogTitle>
+            <DialogDescription>{t('pos.deliveryAddressPh')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="delivery-phone">
+                {t('pos.deliveryPhone')} *
+              </Label>
+              <Input
+                id="delivery-phone"
+                type="tel"
+                inputMode="tel"
+                value={deliveryPhone}
+                onChange={(e) => setDeliveryPhone(e.target.value)}
+                placeholder={t('pos.deliveryPhonePh')}
+                maxLength={20}
+                autoFocus
+                aria-invalid={!deliveryPhoneOk || undefined}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    confirmDelivery()
+                  }
+                }}
+              />
+              {deliveryPhone.length > 0 && !deliveryPhoneOk && (
+                <p className="text-xs font-medium text-destructive" role="alert">
+                  {t('pos.deliveryPhoneInvalid')}
+                </p>
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="delivery-address">{t('pos.deliveryAddress')}</Label>
+              <Input
+                id="delivery-address"
+                value={deliveryAddress}
+                onChange={(e) => setDeliveryAddress(e.target.value)}
+                placeholder={t('pos.deliveryAddressPh')}
+                maxLength={200}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="h-11" onClick={() => setDeliveryOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              className="h-11 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+              disabled={!deliveryPhoneOk}
+              onClick={confirmDelivery}
+            >
+              <Bike className="size-4" /> {t('pos.deliveryStart')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── R9: pending AI guest-move quick review dialog (floor chips) ── */}
       <MovementQuickDialog

@@ -1204,3 +1204,21 @@ Work Log:
 
 Stage Summary:
 - The platform needs exactly ONE database (embedded SQLite at db/custom.db — no external DB server to download or configure). All schema modifications from every build round are verified applied and in sync; physical integrity and referential consistency PASS; the AI-Vision safety invariants (bcrypt hashes, credential-free stream URLs, human-decided movements only) all hold on the live data. The complete database is now packaged as a downloadable deliverable set in download/ (DB file + SHA-256 manifest + documentation). Live operational data (2 open orders) intentionally preserved; cosmetic floor-plan artifacts flagged for the owner. Platform verified healthy end-to-end post-packaging.
+
+---
+Task ID: 11
+Agent: main (Z.ai Code) — COO / CTO / CFO / Project Manager
+Task: Round 11+12 — Foodics-parity feature completion verification, one UX fix, full end-to-end UX audit with score, deliverables refresh
+
+Work Log:
+- Discovery: prior continuation (interrupted) had already implemented the full feature round in the working tree without logging/verification: Category.prepDestination + Reservation + Order.orderType/deliveryPhone/deliveryAddress schema (pushed, live), categories APIs w/ prepDestination CRUD, orders API order-types + delivery validation, quick-price inline editor, modifier-sheet comment, payment-modal payer stepper, KDS station pills + badges + delivery labels, admin reservations-view + categories routing selector, shisha category + 10 products (id 9, EN/AR), seed extensions, i18n keys (admin/pos/kitchen dicts), takeaway/delivery POS floor sections w/ draft persistence. 48 modified/new files, +1,282 lines.
+- Quality gates re-run: ESLint 0 findings; tsc --noEmit 0 errors; dev.log 0 × 500 (p50 14ms / p90 61ms over 380 API calls).
+- API verification: schema in sync ("already in sync"); categories routing live (kitchen/bar/shisha); takeaway order w/ shisha item created + verified (item carries category.prepDestination='shisha') then cancelled; quick price PUT round-trip 105→125→105; leftover R11 test reservation cancelled via status transition; reservations API healthy.
+- Browser E2E (agent-browser, real clicks): quick-price editor 55→60→55 (API-confirmed each step); modifier comment "extra sugar, less chili" → draft row + sent row + KDS card all verified (DOUBLE APPLE 'extra sugar' from earlier test also visible on KDS); KDS station routing verified by dimming (Shisha Station pill → all BAR/KITCHEN items opacity-30, shisha item highlighted); payment Equal Split: "Customer 1 of 3" → Next → "Customer 2 of 3" + per-payer tips; Shisha POS tab w/ products; Reservations board renders w/ stat filters; takeaway/delivery sections on POS floor.
+- FIX (audit finding): cart-panel DraftRow showed modifier comments icon-only — now renders the note text (amber, truncated, tooltip) matching sent-row style.
+- Audit passes: mobile 390×844 → 0 horizontal overflow across POS/KDS/Vision/Dashboard/Products/Reservations + 7 admin views; Arabic RTL → dir=rtl, all views translated incl. new features, 0 overflow; login error handling 401/401 (no enumeration); a11y structure verified via semantic snapshots (aria-labels pervasive); AI Vision healthy (7 tabs, 2/2 cameras, 0 pending).
+- Deliverables refreshed: download/rsm-platform-database.db (434,176 bytes, sha256 482a330f…), rsm-database-manifest.json (ALL PASS invariants), NEW download/r12-ux-audit-report.md (full scorecard + Foodics comparison + prioritized recommendations).
+- Screenshots: r12-audit-pos-desktop.png, r12-audit-kds-rtl-ar.png.
+
+Stage Summary:
+- All 4 requested features + Foodics-parity extras (reservations, takeaway/delivery, station routing, shisha) verified working end-to-end; one real UX defect found and fixed (draft-row comment visibility). Final verified UX score 9.55/10 → honest adjusted FINAL 9.2/10 (Grade A) with documented confidence caveats (no screen-reader/real-hardware/multi-terminal testing possible in sandbox). Platform is production-ready for single-site deployment; P1-P3 roadmap documented (guided tour, sold-out toggle, PWA, loyalty, e-invoicing). Deliverable package refreshed with the audit report.

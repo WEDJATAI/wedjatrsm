@@ -6,6 +6,8 @@ import {
   AlertCircle,
   Banknote,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   HandCoins,
   Hourglass,
@@ -72,7 +74,7 @@ const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
 }
 
 export default function PaymentModal({ order, open, onOpenChange, onSuccess, onDeferred }: PaymentModalProps) {
-  const { t, lang } = useI18n()
+  const { t, lang, isRTL } = useI18n()
   const [tab, setTab] = useState<SplitTab>('single')
   const [submitting, setSubmitting] = useState(false)
   const [checkOpen, setCheckOpen] = useState(false)
@@ -483,11 +485,18 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   min={2}
                   max={12}
                   value={eqPayers}
-                  onChange={(e) => setEqPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 12))}
+                  onChange={(e) => {
+                    const next = clampPayers(parseInt(e.target.value, 10) || 2, 2, 12)
+                    setEqPayers(next)
+                    setActiveIdx((i) => Math.min(i, next - 1))
+                  }}
                   className="h-10 w-16 text-center tabular-nums"
                 />
                 <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>
               </div>
+              {/* R11: customer-by-customer navigation — advances the payer the
+                  method tiles + tips target. */}
+              <PayerNav count={eqPayers} activeIdx={safeActiveIdx} onSelect={setActiveIdx} isRTL={isRTL} />
               {eqAmounts.map((amount, i) => (
                 <PayRow
                   key={i}
@@ -561,6 +570,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   {t('pos.eachPayerPays')}
                 </p>
+                {/* R11: customer-by-customer navigation (see Equal Split) */}
+                <PayerNav count={itPayers} activeIdx={safeActiveIdx} onSelect={setActiveIdx} isRTL={isRTL} />
                 {itAmounts.map((amount, i) => (
                   <PayRow
                     key={i}
@@ -828,6 +839,70 @@ function parseTipInput(s: string): number | null {
   return round2(v)
 }
 
+/** R11: customer-by-customer navigation for the split tabs — a big Next
+ *  button (and smaller Back) advances the active payer that the method
+ *  tiles + tips target; compact chips 1..N jump straight to a payer. */
+function PayerNav({
+  count,
+  activeIdx,
+  onSelect,
+  isRTL,
+}: {
+  count: number
+  activeIdx: number
+  onSelect: (idx: number) => void
+  isRTL: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#E2E2E0] bg-muted/40 p-2">
+      <Button
+        variant="outline"
+        size="icon"
+        className="size-11 shrink-0 rounded-xl"
+        disabled={activeIdx <= 0}
+        onClick={() => onSelect(Math.max(0, activeIdx - 1))}
+        aria-label={t('pos.payerPrev')}
+        title={t('pos.payerPrev')}
+      >
+        {isRTL ? <ChevronRight className="size-5" /> : <ChevronLeft className="size-5" />}
+      </Button>
+      <div className="min-w-0 flex-1 text-center">
+        <p className="text-sm font-bold tabular-nums text-[#714B67]">
+          {t('pos.payerOf', { n: activeIdx + 1, m: count })}
+        </p>
+        <div className="mt-1 flex flex-wrap justify-center gap-1">
+          {Array.from({ length: count }, (_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onSelect(i)}
+              aria-pressed={activeIdx === i}
+              aria-label={t('pos.payer', { n: i + 1 })}
+              className={cn(
+                'h-10 min-w-10 rounded-full border px-2 text-xs font-bold tabular-nums transition-colors',
+                activeIdx === i
+                  ? 'border-[#714B67] bg-[#714B67] text-white'
+                  : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+              )}
+            >
+              {i + 1}
+            </button>
+          ))}
+        </div>
+      </div>
+      <Button
+        className="h-11 shrink-0 rounded-xl bg-[#714B67] px-5 font-semibold text-white hover:bg-[#714B67]/90"
+        disabled={activeIdx >= count - 1}
+        onClick={() => onSelect(Math.min(count - 1, activeIdx + 1))}
+      >
+        {t('pos.payerNext')}
+        {isRTL ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
+      </Button>
+    </div>
+  )
+}
+
 function PayRow({
   label,
   method,
@@ -864,14 +939,16 @@ function PayRow({
     <div
       className={cn(
         'cursor-pointer rounded-xl border p-2.5 transition-colors',
-        active ? 'border-[#714B67] ring-1 ring-[#714B67]' : 'border-[#E2E2E0] bg-white',
+        active
+          ? 'border-[#714B67] bg-[#714B67]/[0.06] shadow-sm ring-1 ring-[#714B67]'
+          : 'border-[#E2E2E0] bg-white',
       )}
       onClick={() => onActivate?.()}
       title={onActivate ? t('pos.selectRowHint') : undefined}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
-          <span className="text-sm font-medium">{label}</span>
+          <span className={cn('text-sm', active ? 'font-bold text-[#714B67]' : 'font-medium')}>{label}</span>
           <span
             className={cn(
               'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',

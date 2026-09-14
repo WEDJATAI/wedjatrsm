@@ -50,6 +50,8 @@ export type Category = {
   /** optional Arabic display name — shown when the UI language is Arabic */
   nameAr?: string | null
   displayOrder: number
+  /** R11: station routing — null/absent = default kitchen screen */
+  prepDestination?: string | null
   active: boolean
   productCount?: number
 }
@@ -60,7 +62,7 @@ export type Product = {
   /** optional Arabic display name — shown when the UI language is Arabic */
   nameAr?: string | null
   categoryId: number | null
-  category?: { id: number; name: string; nameAr?: string | null } | null
+  category?: { id: number; name: string; nameAr?: string | null; prepDestination?: string | null } | null
   price: number
   cost: number
   isStockable: boolean
@@ -114,7 +116,7 @@ export type OrderItem = {
   id: number
   orderId: number
   productId: number | null
-  product?: { id: number; name: string; nameAr?: string | null } | null
+  product?: { id: number; name: string; nameAr?: string | null; category?: { prepDestination?: string | null } | null } | null
   quantity: number
   unitPrice: number
   notes: string | null
@@ -143,6 +145,11 @@ export type Order = {
   userId: number | null
   user?: { id: number; name: string } | null
   status: 'open' | 'paid' | 'cancelled' | 'merged' | 'deferred' | string
+  /** R11: 'dinein' (default) | 'takeaway' | 'delivery' */
+  orderType: 'dinein' | 'takeaway' | 'delivery' | string
+  /** R11: delivery contact — set when orderType = 'delivery' */
+  deliveryPhone?: string | null
+  deliveryAddress?: string | null
   subtotalAmount: number
   totalAmount: number
   discountAmount: number
@@ -623,4 +630,25 @@ export type VisionAnalyticsDTO = {
     turnoverCount: number
   }[]
   cameraUptime: { cameraCode: string; events: number; onlinePct: number; lastSeenAt: string | null }[]
+}
+
+// ─── R11: Reservations (table bookings) ─────────────────────────────
+export type Reservation = {
+  id: number
+  customerName: string
+  customerPhone: string | null
+  partySize: number
+  floorPlanId: number | null
+  floorPlan?: { id: number; name: string } | null
+  tableId: number | null
+  table?: { id: number; name: string } | null
+  reservedAt: string
+  /** stored status; 'completed' is DERIVED when the linked order is closed */
+  status: 'pending' | 'seated' | 'completed' | 'cancelled' | 'no_show' | string
+  notes: string | null
+  orderId: number | null
+  order?: { id: number; status: string; totalAmount: number } | null
+  createdBy: string | null
+  createdAt: string
+  updatedAt: string
 }

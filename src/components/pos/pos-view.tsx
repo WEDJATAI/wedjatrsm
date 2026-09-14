@@ -54,6 +54,40 @@ type GuestsTarget =
 
 const GUEST_QUICK_CHIPS = [1, 2, 3, 4, 5, 6, 7, 8]
 
+/** Table-less order kinds (R11): takeaway + delivery both skip tables. */
+type OrderKind = 'dinein' | 'takeaway' | 'delivery'
+
+const DELIVERY_INFO_KEY = 'rms-delivery-info'
+
+/** Persist the delivery contact for this tab (survives a reload on
+ *  '#/pos/delivery' so the screen can be restored after a refresh). */
+function persistDeliveryInfo(info: { phone: string; address: string } | null): void {
+  try {
+    if (info) window.sessionStorage.setItem(DELIVERY_INFO_KEY, JSON.stringify(info))
+    else window.sessionStorage.removeItem(DELIVERY_INFO_KEY)
+  } catch {
+    // storage unavailable — in-memory state still covers the session
+  }
+}
+
+function readDeliveryInfo(): { phone: string; address: string } | null {
+  try {
+    const raw = window.sessionStorage.getItem(DELIVERY_INFO_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { phone?: unknown }).phone === 'string') {
+      const address = (parsed as { address?: unknown }).address
+      return {
+        phone: (parsed as { phone: string }).phone,
+        address: typeof address === 'string' ? address : '',
+      }
+    }
+  } catch {
+    // corrupt entry — ignore
+  }
+  return null
+}
+
 /** `active` — true while the POS view is the visible top-level view. page.tsx
  *  keeps PosView mounted (hidden) when the user switches views so the order
  *  state survives; defaults to true when the prop is not passed. */
@@ -99,6 +133,23 @@ export default function PosView({ active = true }: { active?: boolean }) {
   // R8: product tapped on the grid that has option groups — the modifier
   // sheet opens instead of an instant add (plain products add directly).
   const [sheetProduct, setSheetProduct] = useState<Product | null>(null)
+
+  // R11: order-type context of this screen — 'dinein' (table-bound),
+  // 'takeaway' or 'delivery' (both table-less). Kept in a ref only: every
+  // read is inside event handlers / entry helpers (header text comes from
+  // selectedTable.name), so no render ever depends on it.
+  const orderKindRef = useRef<OrderKind>('dinein')
+  // R11: delivery contact backing a table-less delivery draft (phone is
+  // required by the API when the order is created).
+  const [deliveryInfo, setDeliveryInfo] = useState<{ phone: string; address: string } | null>(null)
+
+  /** Apply the order-type context (ref + persisted delivery info). */
+  const applyKind = useCallback((kind: OrderKind, info: { phone: string; address: string } | null = null) => {
+    orderKindRef.current = kind
+    const effective = kind === 'delivery' ? info : null
+    setDeliveryInfo(effective)
+    persistDeliveryInfo(effective)
+  }, [])
 
   // ── Round 7: history-aware navigation (browser/OS back button) ────
   // Unsent drafts stashed per context (table:N / takeaway) so going back
@@ -206,9 +257,9 @@ export default function PosView({ active = true }: { active?: boolean }) {
     pushNav(view, sub)
   }
 
-  /** Stash key for a draft context (per-table, or takeaway). */
+  /** Stash key for a draft context (per-table, takeaway or delivery). */
   const draftStashKey = (table: { id: number | null } | null) =>
-    table?.id != null ? `table:${table.id}` : 'takeaway'
+    table?.id != null ? `table:${table.id}` : orderKindRef.current === 'delivery' ? 'delivery' : 'takeaway'
 
   /** Stash the unsent draft of the current context before leaving it. */
   const stashDraft = () => {
@@ -287,6 +338,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
     setTransferOrderId(null)
     setGuestsDraft(clampGuests(guests))
     setSeatingTables([{ id: table.id, name: table.name }])
+    applyKind('dinein')
     readyRef.current = null
     if (table.openOrderId) {
       setActiveOrderId(table.openOrderId)
@@ -323,19 +375,49 @@ export default function PosView({ active = true }: { active?: boolean }) {
     setTransferOrderId(null)
     setGuestsDraft(1) // takeaway orders default to a single guest — no dialog
     setSeatingTables(null) // no tables — tableIds stays unset
+    applyKind('takeaway') // R11: orderType 'takeaway' on creation
     readyRef.current = null
     appliedNavRef.current = 'takeaway'
     navPush('pos', 'takeaway')
     restoreStash('takeaway', t('common.takeaway'))
   }
 
-  const openTakeawayOrder = (o: Order) => {
-    setSelectedTable({ id: null, name: t('common.takeaway') })
+  /** R11: enter order mode for a table-less DELIVERY draft — exactly like
+   *  takeaway, but the header reads 'Delivery · {phone}' and the eventual
+   *  order-creation body carries orderType 'delivery' + the contact. */
+  const startDelivery = (phone: string, address: string) => {
+    setSelectedTable({ id: null, name: `${t('pos.delivery')} · ${phone}` })
+    setMode('order')
+    setDraft([])
+    setActiveOrderId(null)
+    setTransferOrderId(null)
+    setGuestsDraft(1) // one delivery customer — no guests dialog
+    setSeatingTables(null) // no tables — delivery MUST NOT carry a tableId
+    applyKind('delivery', { phone, address })
+    readyRef.current = null
+    appliedNavRef.current = 'delivery'
+    navPush('pos', 'delivery')
+    restoreStash('delivery', t('pos.delivery'))
+  }
+
+  /** Open a table-less order (takeaway OR delivery) from the floor chips. */
+  const openTablelessOrder = (o: Order) => {
+    const isDelivery = o.orderType === 'delivery'
+    setSelectedTable({
+      id: null,
+      name: isDelivery
+        ? `${t('pos.delivery')} · ${o.deliveryPhone ?? ''}`
+        : t('common.takeaway'),
+    })
     setMode('order')
     setDraft([])
     setTransferOrderId(null)
     setGuestsDraft(o.guests ?? 1)
     setSeatingTables(null) // no tables — tableIds stays unset
+    applyKind(
+      isDelivery ? 'delivery' : 'takeaway',
+      isDelivery ? { phone: o.deliveryPhone ?? '', address: o.deliveryAddress ?? '' } : null,
+    )
     readyRef.current = null
     queryClient.setQueryData(['pos-order', o.id], { order: o })
     setActiveOrderId(o.id)
@@ -412,19 +494,29 @@ export default function PosView({ active = true }: { active?: boolean }) {
   /** Append (or merge into) a draft line. Merging happens ONLY when the
    *  product + course match, the line has no notes AND the modifier
    *  signature is identical (same option ids in the same order) — otherwise
-   *  the optioned item becomes its own line. `price` stays the BASE product
-   *  price; `modifiers` carries the deltas (see lineUnitPrice). */
-  const appendDraftLine = (p: Product, quantity: number, modifiers?: SelectedModifier[]) => {
+   *  the optioned/commented item becomes its own line. `price` stays the
+   *  BASE product price; `modifiers` carries the deltas (see lineUnitPrice). */
+  const appendDraftLine = (
+    p: Product,
+    quantity: number,
+    modifiers?: SelectedModifier[],
+    notes?: string,
+  ) => {
     const sig = modifierSignature(modifiers)
+    const trimmedNotes = notes?.trim() ?? ''
     setDraft((prev) => {
       const course = guessCourse(p)
-      const existing = prev.find(
-        (d) =>
-          d.productId === p.id &&
-          !d.notes &&
-          d.course === course &&
-          modifierSignature(d.modifiers) === sig,
-      )
+      // R11: a special-request comment forces its own row (merge rule)
+      const existing =
+        trimmedNotes === ''
+          ? prev.find(
+              (d) =>
+                d.productId === p.id &&
+                !d.notes &&
+                d.course === course &&
+                modifierSignature(d.modifiers) === sig,
+            )
+          : undefined
       if (existing) {
         return prev.map((d) =>
           d.key === existing.key ? { ...d, quantity: round2(d.quantity + quantity) } : d,
@@ -439,7 +531,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           nameAr: p.nameAr ?? null,
           price: p.price,
           quantity,
-          notes: '',
+          notes: trimmedNotes,
           course,
           modifiers,
         },
@@ -457,8 +549,8 @@ export default function PosView({ active = true }: { active?: boolean }) {
     appendDraftLine(p, 1)
   }
 
-  const handleSheetConfirm = ({ product, quantity, modifiers }: ModifierSheetSelection) => {
-    appendDraftLine(product, quantity, modifiers.length > 0 ? modifiers : undefined)
+  const handleSheetConfirm = ({ product, quantity, modifiers, notes }: ModifierSheetSelection) => {
+    appendDraftLine(product, quantity, modifiers.length > 0 ? modifiers : undefined, notes)
     setSheetProduct(null)
   }
 
@@ -477,10 +569,13 @@ export default function PosView({ active = true }: { active?: boolean }) {
     try {
       let result: { order: Order }
       // Multi-table seating (Seat Party): create the order spanning ALL the
-      // selected tables (tableIds — primary first). Single-table and takeaway
-      // paths keep the classic tableId payload byte-identical.
+      // selected tables (tableIds — primary first). Single-table, takeaway
+      // and delivery paths keep the classic tableId payload (null = absent).
       const seatingList = seatingTables ?? null
       const multiSeating = (seatingList?.length ?? 0) > 1
+      // R11: explicit order type — dinein (table paths), takeaway or delivery
+      // (table-less). Delivery additionally carries the customer contact.
+      const kind = orderKindRef.current
       if (!order && multiSeating && seatingList) {
         result = await apiFetch<{ order: Order }>('/api/orders', {
           method: 'POST',
@@ -488,15 +583,25 @@ export default function PosView({ active = true }: { active?: boolean }) {
             tableIds: seatingList.map((tb) => tb.id),
             items: draftToPayload(draft),
             guests: clampGuests(guestsDraft),
+            orderType: 'dinein',
           },
         })
       } else if (!order) {
+        const tableless = selectedTable?.id == null
+        const delivery = tableless && kind === 'delivery' && deliveryInfo
         result = await apiFetch<{ order: Order }>('/api/orders', {
           method: 'POST',
           body: {
             tableId: selectedTable?.id ?? null,
             items: draftToPayload(draft),
             guests: clampGuests(guestsDraft),
+            orderType: tableless ? (delivery ? 'delivery' : 'takeaway') : 'dinein',
+            ...(delivery
+              ? {
+                  deliveryPhone: deliveryInfo.phone,
+                  ...(deliveryInfo.address.trim() ? { deliveryAddress: deliveryInfo.address.trim() } : {}),
+                }
+              : {}),
           },
         })
       } else {
@@ -639,19 +744,26 @@ export default function PosView({ active = true }: { active?: boolean }) {
 
   // ── Round 7: popstate-driven restores (browser/OS back & forward) ──
 
-  /** Enter order mode for a live order — mirrors openTakeawayOrder /
+  /** Enter order mode for a live order — mirrors openTablelessOrder /
    *  applySelectTable semantics. Hash-driven, so it never pushes history. */
   const restoreLiveOrder = (restored: Order) => {
+    const isDelivery = !restored.table && restored.orderType === 'delivery'
     setSelectedTable(
       restored.table
         ? { id: restored.table.id, name: restored.table.name }
-        : { id: null, name: t('common.takeaway') },
+        : isDelivery
+          ? { id: null, name: `${t('pos.delivery')} · ${restored.deliveryPhone ?? ''}` }
+          : { id: null, name: t('common.takeaway') },
     )
     setMode('order')
     setDraft([])
     setTransferOrderId(null)
     setGuestsDraft(clampGuests(restored.guests ?? 1))
     setSeatingTables(restored.table ? [{ id: restored.table.id, name: restored.table.name }] : null)
+    applyKind(
+      restored.table ? 'dinein' : isDelivery ? 'delivery' : 'takeaway',
+      isDelivery ? { phone: restored.deliveryPhone ?? '', address: restored.deliveryAddress ?? '' } : null,
+    )
     readyRef.current = null
     appliedNavRef.current = `order/${restored.id}`
     queryClient.setQueryData(['pos-order', restored.id], { order: restored })
@@ -786,7 +898,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
     }
     if (sub === 'takeaway') {
       if (appliedNavRef.current === sub) return
-      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null) return
+      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null && orderKindRef.current !== 'delivery') return
       const epoch = claimNavRestore(sub)
       if (epoch == null) return
       try {
@@ -794,6 +906,26 @@ export default function PosView({ active = true }: { active?: boolean }) {
         // startTakeaway semantics with pushes suppressed; pops the
         // 'takeaway' stash (toast when items come back).
         withNavSuppression(() => startTakeaway())
+      } finally {
+        releaseNavRestore(epoch)
+      }
+    }
+    if (sub === 'delivery') {
+      if (appliedNavRef.current === sub) return
+      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null && orderKindRef.current === 'delivery') return
+      const epoch = claimNavRestore(sub)
+      if (epoch == null) return
+      try {
+        stashDraft()
+        // The delivery contact lives in state (view switches) or in
+        // sessionStorage (full reload) — without it the screen cannot be
+        // rebuilt, so fall back to the floor with the standard toast.
+        const info = deliveryInfo ?? readDeliveryInfo()
+        if (!info) {
+          cannotReopen()
+          return
+        }
+        withNavSuppression(() => startDelivery(info.phone, info.address))
       } finally {
         releaseNavRestore(epoch)
       }
@@ -833,7 +965,9 @@ export default function PosView({ active = true }: { active?: boolean }) {
       ? `order/${activeOrderId}`
       : selectedTable?.id != null
         ? `table/${selectedTable.id}`
-        : 'takeaway'
+        : orderKindRef.current === 'delivery'
+          ? 'delivery'
+          : 'takeaway'
     replaceNav('pos', sub)
   }, [active, mode, activeOrderId, selectedTable?.id])
 
@@ -844,7 +978,8 @@ export default function PosView({ active = true }: { active?: boolean }) {
         <TableSelect
           onSelectTable={selectTable}
           onTakeaway={startTakeaway}
-          onOpenTakeawayOrder={openTakeawayOrder}
+          onDelivery={startDelivery}
+          onOpenTablelessOrder={openTablelessOrder}
           transferOrderId={transferOrderId}
           onTransferDone={handleTransferDone}
           onSeatParty={handleSeatParty}
