@@ -418,6 +418,8 @@ export default function ReservationsView() {
             <div>
               <p className="font-medium">{t('reservations.noBookings')}</p>
               <p className="text-muted-foreground text-sm">{t('reservations.noBookingsHint')}</p>
+              {/* R13: empty-state coaching (learnability) */}
+              <p className="mt-1 text-sm text-muted-foreground/80">{t('reservations.emptyHint')}</p>
             </div>
             <Button className="h-11" onClick={openCreate}>
               <Plus /> {t('reservations.newBooking')}

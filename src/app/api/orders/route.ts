@@ -136,6 +136,27 @@ export async function POST(req: NextRequest) {
     // Items: products must exist / be active / sellable, qty > 0, course valid
     const items = await validateOrderItems(body?.items)
 
+    // R13: loyalty — attach a customer profile. Explicit customerId wins;
+    // otherwise a delivery order auto-matches the phone to a known customer
+    // (walk-up regulars get their visits/points without extra taps).
+    let customerId: number | null = null
+    if (body?.customerId != null) {
+      const n = Number(body.customerId)
+      if (!Number.isInteger(n)) throw new ApiError('customerId must be a valid id', 400)
+      const customer = await db.customer.findUnique({
+        where: { id: n },
+        select: { id: true, active: true },
+      })
+      if (!customer || !customer.active) throw new ApiError('Customer not found', 400)
+      customerId = customer.id
+    } else if (deliveryPhone) {
+      const byPhone = await db.customer.findUnique({
+        where: { phone: deliveryPhone },
+        select: { id: true },
+      })
+      customerId = byPhone?.id ?? null
+    }
+
     // Stock check for the whole new order
     await checkStockAvailability(items)
 
@@ -148,6 +169,7 @@ export async function POST(req: NextRequest) {
           orderType,
           deliveryPhone,
           deliveryAddress,
+          customerId,
           extraTableIds:
             extraTables.length > 0 ? JSON.stringify(extraTables.map((t) => t.id)) : null,
           guests,
@@ -204,7 +226,9 @@ export async function POST(req: NextRequest) {
               : orderType === 'delivery'
                 ? `delivery (phone ${deliveryPhone})`
                 : 'takeaway'
-        }, ${order.items.length} item(s), ${guests} guest(s)`,
+        }, ${order.items.length} item(s), ${guests} guest(s)${
+          customerId != null ? `, customer #${customerId}` : ''
+        }`,
     })
 
     return NextResponse.json({ order })

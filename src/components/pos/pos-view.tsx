@@ -29,9 +29,10 @@ import { MAX_GUESTS, MIN_GUESTS } from '@/lib/constants'
 import { elapsedSince, formatCurrency } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
+import { enqueueOfflineAction } from '@/lib/offline-queue'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import type { FloorPlan, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
+import type { Customer, FloorPlan, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
 import CartPanel from './cart-panel'
 import CheckModal from './check-modal'
 import ModifierSheet, { type ModifierSheetSelection } from './modifier-sheet'
@@ -91,6 +92,22 @@ function readDeliveryInfo(): { phone: string; address: string } | null {
 /** `active` — true while the POS view is the visible top-level view. page.tsx
  *  keeps PosView mounted (hidden) when the user switches views so the order
  *  state survives; defaults to true when the prop is not passed. */
+/** R13 PWA: read the mirrored product catalog (undefined when never cached). */
+function readProductsCache(): { products: Product[] } | undefined {
+  if (typeof window === 'undefined') return undefined
+  try {
+    const raw = window.localStorage.getItem('rms-pos-products-cache')
+    if (!raw) return undefined
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { products?: unknown }).products)) {
+      return parsed as { products: Product[] }
+    }
+  } catch {
+    // corrupt cache — treat as absent
+  }
+  return undefined
+}
+
 export default function PosView({ active = true }: { active?: boolean }) {
   const queryClient = useQueryClient()
   const { t } = useI18n()
@@ -101,6 +118,9 @@ export default function PosView({ active = true }: { active?: boolean }) {
   const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
   const [draft, setDraft] = useState<DraftItem[]>([])
   const [sending, setSending] = useState(false)
+  // R13: loyalty — customer attached to the DRAFT (sent with the create
+  // payload; existing orders attach via PUT /api/orders/[id]).
+  const [draftCustomer, setDraftCustomer] = useState<Customer | null>(null)
 
   // Guest count for the order that will be created from this screen
   // (takeaway defaults to 1, table drafts to the dialog value).
@@ -203,12 +223,26 @@ export default function PosView({ active = true }: { active?: boolean }) {
     mode === 'order' && activeOrderId != null ? (orderData?.order ?? null) : null
 
   // ── Products ─────────────────────────────────────────────────────
-  const { data: productsData } = useQuery({
+  // R13 PWA: the sellable catalog is mirrored to localStorage so an offline
+  // terminal (or a reload while offline) still shows the menu — the query
+  // refetches normally whenever the network is back. Slightly-stale menu
+  // offline is the honest trade-off vs. a blank grid.
+  const productsQuery = useQuery({
     queryKey: ['pos-products'],
-    queryFn: () => fetcher<{ products: Product[] }>('/api/products?sellable=1'),
+    queryFn: async () => {
+      const fetched = await fetcher<{ products: Product[] }>('/api/products?sellable=1')
+      try {
+        window.localStorage.setItem('rms-pos-products-cache', JSON.stringify(fetched))
+      } catch {
+        // storage unavailable — cache skip is non-fatal
+      }
+      return fetched
+    },
     enabled: mode === 'order',
     staleTime: 15000,
+    placeholderData: readProductsCache(),
   })
+  const productsData = productsQuery.data
   const products = productsData?.products ?? []
 
   // ── Newly-ready items → toast (once) ─────────────────────────────
@@ -568,6 +602,36 @@ export default function PosView({ active = true }: { active?: boolean }) {
     setSending(true)
     try {
       let result: { order: Order }
+      // R13 PWA: offline path — queue the creation and finish locally.
+      // The draft is cleared (same as online) so a replay cannot duplicate
+      // an order the waiter still sees; the banner shows the queued count.
+      const payloadBase = {
+        items: draftToPayload(draft),
+        guests: clampGuests(guestsDraft),
+        ...(draftCustomer != null ? { customerId: draftCustomer.id } : {}),
+      }
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const tableless = selectedTable?.id == null
+        const kind = orderKindRef.current
+        enqueueOfflineAction({
+          url: '/api/orders',
+          method: 'POST',
+          body:
+            tableless && kind === 'delivery' && deliveryInfo
+              ? { ...payloadBase, orderType: 'delivery', deliveryPhone: deliveryInfo.phone }
+              : selectedTable?.id != null
+                ? { ...payloadBase, tableId: selectedTable.id, orderType: 'dinein' }
+                : { ...payloadBase, orderType: 'takeaway' },
+          label: selectedTable?.name ?? 'order',
+        })
+        setDraft([])
+        setDraftCustomer(null)
+        toast.info(t('offline.bannerSingle'))
+        // leave order mode — the floor view shows the queued state via banner
+        setMode('tables')
+        setSelectedTable(null)
+        return null
+      }
       // Multi-table seating (Seat Party): create the order spanning ALL the
       // selected tables (tableIds — primary first). Single-table, takeaway
       // and delivery paths keep the classic tableId payload (null = absent).
@@ -581,8 +645,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           method: 'POST',
           body: {
             tableIds: seatingList.map((tb) => tb.id),
-            items: draftToPayload(draft),
-            guests: clampGuests(guestsDraft),
+            ...payloadBase,
             orderType: 'dinein',
           },
         })
@@ -593,8 +656,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           method: 'POST',
           body: {
             tableId: selectedTable?.id ?? null,
-            items: draftToPayload(draft),
-            guests: clampGuests(guestsDraft),
+            ...payloadBase,
             orderType: tableless ? (delivery ? 'delivery' : 'takeaway') : 'dinein',
             ...(delivery
               ? {
@@ -611,6 +673,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
         })
       }
       setDraft([])
+      setDraftCustomer(null)
       queryClient.setQueryData(['pos-order', result.order.id], { order: result.order })
       setActiveOrderId(result.order.id)
       await invalidateShared()
@@ -672,6 +735,10 @@ export default function PosView({ active = true }: { active?: boolean }) {
       await invalidateShared()
     } else {
       queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+      // R13: keep the OPEN payment modal in sync — loyalty redemptions stay
+      // in-modal (partial tender), so the order prop must refresh with the
+      // new paid/remaining/points values.
+      setPayOrder(updated)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['orders'] }),
         queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
@@ -1122,6 +1189,8 @@ export default function PosView({ active = true }: { active?: boolean }) {
             canCancel={canCancel}
             sending={sending}
             userRole={user?.role ?? ''}
+            draftCustomer={draftCustomer}
+            onDraftCustomerChange={setDraftCustomer}
           />
         </div>
       </div>

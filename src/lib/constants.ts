@@ -34,6 +34,7 @@ export const PERMISSIONS = [
   'cashdrawer',
   'vision',
   'reservations',
+  'customers',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -56,6 +57,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   cashdrawer: 'Cash Drawer',
   vision: 'AI Vision — CCTV Occupancy',
   reservations: 'Reservations — Table Bookings',
+  customers: 'Customers & Loyalty',
 }
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
@@ -204,6 +206,34 @@ export type DietaryTag = (typeof DIETARY_TAGS)[number]
 // ─── R8: tips on payments ──────────────────────────────────────
 /** quick-tip percentage presets shown in the payment modal (0 = no tip) */
 export const TIP_PRESETS = [0, 10, 12.5, 15] as const
+
+// ─── R13: loyalty program (Customers) ───────────────────────
+/** payment method recorded server-side when points are redeemed as tender */
+export const LOYALTY_METHOD = 'loyalty'
+/** AppSetting keys (loyalty is configured in the Integrations view) */
+export const LOYALTY_ENABLED_KEY = 'loyaltyEnabled'
+export const LOYALTY_POINTS_PER_EGP_KEY = 'loyaltyPointsPerEgp'
+export const LOYALTY_EGP_PER_POINT_KEY = 'loyaltyEgpPerPoint'
+/** defaults: earn 1 point per EGP 10 spent · each point redeems EGP 1 */
+export const LOYALTY_DEFAULTS = {
+  enabled: true,
+  pointsPerEgp: 0.1,
+  egpPerPoint: 1,
+} as const
+export const LOYALTY_BOUNDS = {
+  pointsPerEgp: { min: 0, max: 1 },
+  egpPerPoint: { min: 0.05, max: 50 },
+} as const
+
+// ─── R13: delivery-aggregator webhook ───────────────────────
+/** AppSetting holding the shared secret aggregators send in x-rsm-key */
+export const DELIVERY_WEBHOOK_KEY_SETTING = 'deliveryWebhookKey'
+/** providers accepted by the webhook adapter (labels shown in admin) */
+export const DELIVERY_PROVIDERS = ['talabat', 'elmenus', 'carryfast', 'generic'] as const
+
+// ─── R13: ETA (Egyptian Tax Authority) e-invoicing ──────────
+export const ETA_REG_NUMBER_KEY = 'etaRegistrationNumber'
+export const ETA_ADDRESS_KEY = 'etaAddress'
 
 // ─── R8: cash drawer ───────────────────────────────────────────
 export const DRAWER_TYPES = ['paid_in', 'paid_out'] as const

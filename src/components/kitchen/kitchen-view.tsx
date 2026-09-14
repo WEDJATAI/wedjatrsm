@@ -141,77 +141,83 @@ export default function KitchenView() {
 
   return (
     <section className="min-h-[calc(100vh-4rem)] bg-zinc-950 p-4 text-zinc-100 sm:p-6">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 sm:mb-6">
-        <div className="flex min-w-0 flex-wrap items-center gap-3">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/20">
-            <ChefHat className="size-6" />
-          </div>
-          <h1 className="text-xl font-bold">{t('kds.title')}</h1>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400">
-            <span className="relative flex size-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+      {/* R13 (P3): sticky header + station pills — stays visible while
+          scrolling long boards. Solid-enough backdrop so cards NEVER show
+          through, z-40 above the grid, border separates it visually. */}
+      <div className="sticky top-16 z-40 -mx-4 mb-4 border-b border-zinc-800/70 bg-zinc-950/95 px-4 pb-4 pt-1 backdrop-blur supports-[backdrop-filter]:bg-zinc-950/85 sm:-mx-6 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/20">
+              <ChefHat className="size-6" />
+            </div>
+            <h1 className="text-xl font-bold">{t('kds.title')}</h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400">
+              <span className="relative flex size-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+              </span>
+              {t('kds.live3s')}
             </span>
-            {t('kds.live3s')}
-          </span>
-          <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-zinc-400">
-            {t('kds.stats', { n: orders.length, m: pendingItemCount })}
-          </Badge>
-        </div>
+            <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-zinc-400">
+              {t('kds.stats', { n: orders.length, m: pendingItemCount })}
+            </Badge>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="text-2xl font-mono font-bold tabular-nums text-zinc-100">{clockText}</div>
-          <div className="flex flex-wrap items-center gap-2">
-            {COURSE_FILTERS.map((filter) => {
-              const active = courseFilter === filter
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-2xl font-mono font-bold tabular-nums text-zinc-100">{clockText}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {COURSE_FILTERS.map((filter) => {
+                const active = courseFilter === filter
+                return (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => setCourseFilter(filter)}
+                    className={cn(
+                      'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
+                      active
+                        ? 'border-amber-500 bg-amber-500 text-zinc-950'
+                        : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200',
+                    )}
+                  >
+                    {t(FILTER_LABEL_KEYS[filter])}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </header>
+
+        {/* ── R11: station routing pills (kitchen / bar / shisha / custom) —
+            a second filter row; filters items inside the cards like courses.
+            Sticky-safe with the header (R13). ── */}
+        {stations.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {(['all', ...stations] as StationFilter[]).map((station) => {
+              const active = stationFilter === station
+              const label = station === 'all' ? t('kds.stationAll') : stationLabel(station, t)
               return (
                 <button
-                  key={filter}
+                  key={station}
                   type="button"
-                  onClick={() => setCourseFilter(filter)}
+                  onClick={() => setStationFilter(station)}
+                  aria-pressed={active}
                   className={cn(
                     'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
                     active
-                      ? 'border-amber-500 bg-amber-500 text-zinc-950'
+                      ? station === 'all'
+                        ? 'border-emerald-500 bg-emerald-500 text-zinc-950'
+                        : STATION_PILL_ACTIVE_CLASSES[station] ?? 'border-sky-400 bg-sky-400 text-zinc-950'
                       : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200',
                   )}
                 >
-                  {t(FILTER_LABEL_KEYS[filter])}
+                  {label}
                 </button>
               )
             })}
           </div>
-        </div>
-      </header>
-
-      {/* ── R11: station routing pills (kitchen / bar / shisha / custom) —
-          a second filter row; filters items inside the cards like courses ── */}
-      {stations.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {(['all', ...stations] as StationFilter[]).map((station) => {
-            const active = stationFilter === station
-            const label = station === 'all' ? t('kds.stationAll') : stationLabel(station, t)
-            return (
-              <button
-                key={station}
-                type="button"
-                onClick={() => setStationFilter(station)}
-                aria-pressed={active}
-                className={cn(
-                  'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
-                  active
-                    ? station === 'all'
-                      ? 'border-emerald-500 bg-emerald-500 text-zinc-950'
-                      : STATION_PILL_ACTIVE_CLASSES[station] ?? 'border-sky-400 bg-sky-400 text-zinc-950'
-                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200',
-                )}
-              >
-                {label}
-              </button>
-            )
-          })}
-        </div>
-      )}
+        )}
+      </div>
 
       {isError && (
         <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
@@ -232,6 +238,8 @@ export default function KitchenView() {
         <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
           <ChefHat className="size-24 text-zinc-800" strokeWidth={1} />
           <p className="text-lg text-zinc-500">{t('kds.empty')}</p>
+          {/* R13: empty-state coaching (learnability) */}
+          <p className="max-w-sm text-sm text-zinc-600">{t('kds.emptyHint')}</p>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">

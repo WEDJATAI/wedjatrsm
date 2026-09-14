@@ -8,6 +8,8 @@ export const RESERVATION_INCLUDE = {
   floorPlan: { select: { id: true, name: true } },
   table: { select: { id: true, name: true } },
   order: { select: { id: true, status: true, totalAmount: true } },
+  // R13: loyalty link (customer profile matched by phone at booking)
+  customer: { select: { id: true, name: true, phone: true, points: true } },
 } satisfies Prisma.ReservationInclude
 
 export type ReservationWithRelations = Prisma.ReservationGetPayload<{
@@ -33,6 +35,9 @@ export function serializeReservation(reservation: ReservationWithRelations): Res
     id: reservation.id,
     customerName: reservation.customerName,
     customerPhone: reservation.customerPhone,
+    // R13: loyalty link
+    customerId: reservation.customerId,
+    customer: reservation.customer,
     partySize: reservation.partySize,
     floorPlanId: reservation.floorPlanId,
     floorPlan: reservation.floorPlan,

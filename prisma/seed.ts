@@ -8,16 +8,29 @@ async function main() {
   console.log('Seeding RMS database...')
 
   // Clear existing data (order matters due to FKs)
+  await db.auditLog.deleteMany()
+  await db.attendance.deleteMany()
+  await db.cashDrawerEntry.deleteMany()
+  await db.cashDrawerSession.deleteMany()
   await db.reservation.deleteMany()
   await db.inventoryTransaction.deleteMany()
   await db.payment.deleteMany()
   await db.orderItem.deleteMany()
   await db.order.deleteMany()
   await db.recipeComponent.deleteMany()
+  await db.visionTableState.deleteMany()
+  await db.visionZone.deleteMany()
+  await db.visionEvent.deleteMany()
+  await db.movementCandidate.deleteMany()
+  await db.visionCamera.deleteMany()
+  await db.customer.deleteMany()
   await db.restaurantTable.deleteMany()
   await db.floorPlan.deleteMany()
+  await db.modifier.deleteMany()
+  await db.modifierGroup.deleteMany()
   await db.product.deleteMany()
   await db.category.deleteMany()
+  await db.appSetting.deleteMany()
   await db.user.deleteMany()
 
   // ── Users ─────────────────────────────────────────────────────────
@@ -305,6 +318,80 @@ async function main() {
     }
   }
   console.log('✓ historical paid orders seeded (7 days)')
+
+  // ── R13: loyalty program settings + demo customers ────────────────
+  await db.appSetting.createMany({
+    data: [
+      { key: 'loyaltyEnabled', value: 'true' },
+      { key: 'loyaltyPointsPerEgp', value: '0.1' }, // 1 pt per EGP 10 spent
+      { key: 'loyaltyEgpPerPoint', value: '1' }, // 1 pt redeems EGP 1
+    ],
+  })
+  await db.customer.createMany({
+    data: [
+      { name: 'Mona Test Customer', phone: '0100 555 0199', points: 20, visits: 1, totalSpent: 226.8, lastVisitAt: new Date() },
+      { name: 'Karim Regular', phone: '0122 333 4455', points: 5, visits: 2, totalSpent: 480.5, lastVisitAt: new Date(Date.now() - 3 * 86400000) },
+    ],
+  })
+  console.log('✓ loyalty: enabled (0.1 pts/EGP · EGP 1/pt) + 2 demo customers')
+
+  // ── R9 parity: vision subsystem (cameras + zones + table states) ──
+  const cam1 = await db.visionCamera.create({
+    data: { code: 'CAM-001', name: 'Main Hall Cam', floorPlanId: hall.id, status: 'online' },
+  })
+  const cam2 = await db.visionCamera.create({
+    data: { code: 'CAM-002', name: 'Terrace Cam', floorPlanId: terrace.id, status: 'online' },
+  })
+  // zone polygons mirror the live demo (normalized 0..1 camera coords)
+  const zone = (cameraId: number, name: string, tableId: number, x: number, y: number, seats: number) => ({
+    cameraId, name, kind: 'table', tableId, seats,
+    polygon: JSON.stringify([
+      { x: round3(x), y: round3(y) },
+      { x: round3(x + 0.12), y: round3(y) },
+      { x: round3(x + 0.12), y: round3(y + 0.12) },
+      { x: round3(x), y: round3(y + 0.12) },
+    ]),
+  })
+  const round3 = (n: number) => Math.round(n * 1000) / 1000
+  const hallTables = await db.restaurantTable.findMany({ where: { floorPlanId: hall.id }, orderBy: { id: 'asc' } })
+  const terraceTables = await db.restaurantTable.findMany({ where: { floorPlanId: terrace.id }, orderBy: { id: 'asc' } })
+  await db.visionZone.createMany({
+    data: [
+      zone(cam1.id, 'Z-T1', hallTables[0].id, 0.095, 0.087, 2),
+      zone(cam1.id, 'Z-T2', hallTables[1].id, 0.464, 0.094, 4),
+      zone(cam1.id, 'Z-T3', hallTables[2].id, 0.141, 0.753, 4),
+      zone(cam2.id, 'Z-P1', terraceTables[0].id, 0.19, 0.29, 2),
+      zone(cam2.id, 'Z-P2', terraceTables[1].id, 0.59, 0.29, 4),
+      zone(cam2.id, 'Z-P3', terraceTables[2].id, 0.39, 0.69, 6),
+    ],
+  })
+  // observational state rows for the mapped tables (empty · full confidence)
+  await db.visionTableState.createMany({
+    data: [...hallTables.slice(0, 3), ...terraceTables].map((t) => ({
+      tableId: t.id, state: 'empty', peopleCount: 0, confidence: 1,
+    })),
+  })
+  // edge ingest key + default detection config
+  const { randomBytes } = await import('node:crypto')
+  await db.appSetting.createMany({
+    data: [
+      { key: 'visionIngestKey', value: randomBytes(16).toString('hex') },
+      {
+        key: 'visionConfig',
+        value: JSON.stringify({
+          highConfidence: 0.85,
+          mediumConfidence: 0.5,
+          vacancyDelaySeconds: 45,
+          movementDedupeMinutes: 10,
+          movementCooldownMinutes: 15,
+          serviceDelayMinutes: 10,
+          maxEventAgeSeconds: 600,
+          manualHoldMinutes: 10,
+        }),
+      },
+    ],
+  })
+  console.log('✓ vision: 2 cameras, 6 zones, table states + ingest key seeded')
 
   console.log('Seed complete!')
   console.log('Logins: admin@rms.com/admin123 (PIN 1234) · waiter@rms.com/waiter123 (PIN 1111) · kitchen@rms.com/kitchen123 (PIN 2222)')

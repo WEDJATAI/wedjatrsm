@@ -226,6 +226,32 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       await db.order.update({ where: { id: orderId }, data: { guests: parsedGuests } })
     }
 
+    // R13: loyalty — attach / detach the customer profile on an open order
+    // (null detaches). Waiters may attach; the audit row records who.
+    if (body?.customerId !== undefined) {
+      let customerId: number | null = null
+      if (body.customerId != null) {
+        const n = Number(body.customerId)
+        if (!Number.isInteger(n)) throw new ApiError('customerId must be a valid id', 400)
+        const customer = await db.customer.findUnique({
+          where: { id: n },
+          select: { id: true, active: true, name: true },
+        })
+        if (!customer || !customer.active) throw new ApiError('Customer not found', 400)
+        customerId = customer.id
+      }
+      await db.order.update({ where: { id: orderId }, data: { customerId } })
+      await logAudit({
+        user,
+        action: 'order.update',
+        entity: 'order',
+        entityId: orderId,
+        details: customerId
+          ? `Customer attached to order #${orderId} (#${customerId})`
+          : `Customer detached from order #${orderId}`,
+      })
+    }
+
     const order = await recomputeTotals(orderId)
     return NextResponse.json({ order })
   } catch (err) {

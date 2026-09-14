@@ -69,6 +69,8 @@ export const ORDER_INCLUDE = {
   payments: true,
   table: { select: { id: true, name: true } },
   user: { select: { id: true, name: true } },
+  // R13: loyalty — attached customer (name/phone/points for POS + payment)
+  customer: { select: { id: true, name: true, phone: true, points: true } },
 } satisfies Prisma.OrderInclude
 
 export type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>
@@ -156,6 +158,12 @@ export function serializeOrder(order: OrderWithRelations): Order {
     orderType: order.orderType,
     deliveryPhone: order.deliveryPhone,
     deliveryAddress: order.deliveryAddress,
+    // R13: loyalty — attached customer + points earned/redeemed
+    customerId: order.customerId,
+    customer: order.customer,
+    pointsEarned: round2(order.pointsEarned),
+    pointsRedeemed: round2(order.pointsRedeemed),
+    externalRef: order.externalRef,
     subtotalAmount: round2(order.subtotalAmount),
     totalAmount: total,
     discountAmount: round2(order.discountAmount),
@@ -666,6 +674,19 @@ export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: 
   await deductInventoryForOrder(orderId)
 
   await setTablesStatusForOrder(order, 'paid')
+
+  // R13: loyalty — award points/visit for orders with an attached customer.
+  // Fire-and-forget pattern (same as inventory) is NOT used here: awarding
+  // failing must surface in dev logs, but must never block the close —
+  // awardLoyaltyOnClose swallows nothing, so guard the call instead.
+  if (order.customerId != null) {
+    try {
+      const { awardLoyaltyOnClose } = await import('@/lib/loyalty')
+      await awardLoyaltyOnClose(orderId)
+    } catch (loyaltyErr) {
+      console.error('[loyalty] award on close failed for order', orderId, loyaltyErr)
+    }
+  }
   return { closed: true }
 }
 

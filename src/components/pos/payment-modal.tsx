@@ -34,6 +34,7 @@ import { apiFetch } from '@/lib/api'
 import { PAYMENT_METHODS, TIP_PRESETS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
+import { normalizePersonName } from '@/lib/names'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import CheckModal, { type CheckSplitRow } from './check-modal'
@@ -66,6 +67,43 @@ type EditableRow = {
 type SubmitRow = { method: string; amount: number; reference?: string }
 
 type SplitTab = 'single' | 'equal' | 'items' | 'custom'
+
+// ── R13: terminal-local split preferences ──────────────────────────
+// Remembers the last-used split mode + payer counts so the next check on
+// this terminal starts where the last one left off (shared-table venues
+// usually split the same way all night). localStorage, per terminal.
+const PAYMENT_PREFS_KEY = 'rms-payment-prefs'
+type PaymentPrefs = { tab: SplitTab; eqPayers: number; itPayers: number }
+
+function readPaymentPrefs(): PaymentPrefs | null {
+  try {
+    const raw = window.localStorage.getItem(PAYMENT_PREFS_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    const p = parsed as Record<string, unknown>
+    const tab = ['single', 'equal', 'items', 'custom'].includes(String(p.tab))
+      ? (p.tab as SplitTab)
+      : 'single'
+    const eqPayers = Number(p.eqPayers)
+    const itPayers = Number(p.itPayers)
+    return {
+      tab,
+      eqPayers: Number.isInteger(eqPayers) && eqPayers >= 2 && eqPayers <= 12 ? eqPayers : 2,
+      itPayers: Number.isInteger(itPayers) && itPayers >= 2 && itPayers <= 6 ? itPayers : 2,
+    }
+  } catch {
+    return null
+  }
+}
+
+function writePaymentPrefs(prefs: PaymentPrefs): void {
+  try {
+    window.localStorage.setItem(PAYMENT_PREFS_KEY, JSON.stringify(prefs))
+  } catch {
+    // storage unavailable — preference lasts for the session only
+  }
+}
 
 const METHOD_META: Record<string, { labelKey: string; icon: LucideIcon }> = {
   cash: { labelKey: 'status.payment.cash', icon: Banknote },
@@ -104,18 +142,27 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const [itMethods, setItMethods] = useState<Record<number, string>>({})
   const [assignments, setAssignments] = useState<Record<number, number>>({})
 
+  // ── R13: loyalty redemption state ──
+  const [redeemInput, setRedeemInput] = useState('')
+  const [redeeming, setRedeeming] = useState(false)
+
   const remaining = round2(Math.max(0, order.remainingAmount))
 
   // Reset state whenever the modal opens for (a new) order.
+  // R13: keyed to [open, order.id] only — the previous remainingAmount dep
+  // wiped the split config mid-dialog whenever a loyalty redemption or a
+  // co-worker's partial payment refreshed the order prop.
   useEffect(() => {
     if (!open) return
     const rem = round2(Math.max(0, order.remainingAmount))
-    setTab('single')
+    // R13: restore the terminal's last-used split configuration
+    const prefs = readPaymentPrefs()
+    setTab(prefs?.tab ?? 'single')
     setSingleRow({ id: 'single', method: 'cash', amount: String(rem), reference: '' })
     setCustomRows([{ id: newDraftKey(), method: 'cash', amount: String(rem), reference: '' }])
-    setEqPayers(2)
+    setEqPayers(prefs?.eqPayers ?? 2)
     setEqMethods({})
-    setItPayers(2)
+    setItPayers(prefs?.itPayers ?? 2)
     setItMethods({})
     setAssignments({})
     setSubmitting(false)
@@ -126,7 +173,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     setDeferOpen(false)
     setDeferName('')
     setDeferSubmitting(false)
-  }, [open, order.id, order.remainingAmount])
+    setRedeemInput('')
+    setRedeeming(false)
+     
+  }, [open, order.id])
 
   // ── Derived payment rows per tab ──────────────────────────────────
   const eqAmounts = useMemo(() => {
@@ -267,6 +317,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const handleTabChange = (v: string) => {
     setTab(v as SplitTab)
     setActiveIdx(0)
+    // R13: persist the split-mode choice for this terminal
+    writePaymentPrefs({ tab: v as SplitTab, eqPayers, itPayers })
   }
 
   // ── Guest check rows mirroring the current split configuration ────
@@ -326,6 +378,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     if (payments.length === 0) return
     setSubmitting(true)
     try {
+      // R13: remember this terminal's split configuration on success
+      writePaymentPrefs({ tab, eqPayers, itPayers })
       const result = await apiFetch<PaymentResult>(`/api/orders/${order.id}/payments`, {
         method: 'POST',
         body: { payments },
@@ -346,11 +400,44 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     }
   }
 
+  // ── R13: loyalty redemption (points → tender, capped at remaining) ──
+  const customerPoints = order.customer?.points ?? 0
+  const loyaltyAvailable =
+    order.customer != null && customerPoints > 0 && remaining > 0 && order.status !== 'paid'
+
+  const handleRedeem = async (points: number) => {
+    if (redeeming || !Number.isFinite(points) || points <= 0) return
+    setRedeeming(true)
+    try {
+      const result = await apiFetch<PaymentResult>(`/api/orders/${order.id}/payments`, {
+        method: 'POST',
+        body: { payments: [], redeemPoints: points },
+      })
+      toast.success(
+        t('pos.pointsRedeemedToast', { n: points, egp: formatCurrency(result.paidAmount ?? 0) }),
+      )
+      setRedeemInput('')
+      // refresh amounts to the new remaining (config stays as chosen)
+      const newRemaining = round2(Math.max(0, result.remaining))
+      setSingleRow((r) => ({ ...r, amount: String(newRemaining) }))
+      setCustomRows((rows) =>
+        rows.map((r, i) => (i === 0 ? { ...r, amount: String(newRemaining) } : r)),
+      )
+      onSuccess(result.order, result.closed)
+      if (result.closed) onOpenChange(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('pos.paymentFailedToast'))
+    } finally {
+      setRedeeming(false)
+    }
+  }
+
   // ── Defer payment (client pays later, check tracked by name) ──────
   const canDefer = order.status === 'open' && remaining > 0
 
   const handleDefer = async () => {
-    const clientName = deferName.trim()
+    // R13: normalized client-side AND server-side (trim/collapse/Title Case)
+    const clientName = normalizePersonName(deferName)
     if (!clientName) {
       toast.error(t('pos.deferredNameRequired'))
       return
@@ -406,6 +493,69 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
               </p>
             </div>
           </div>
+
+          {/* R13: loyalty — customer chip + points redemption. Points become
+              tender immediately (a payment row appears in the summary); the
+              modal stays open for the remainder. */}
+          {order.customer != null && (
+            <div className="flex items-center gap-2 rounded-xl border border-[#714B67]/25 bg-[#714B67]/[0.05] px-3 py-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#714B67]/15 text-base" aria-hidden>
+                ⭐
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-[#714B67]">
+                  {order.customer.name}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {customerPoints > 0
+                    ? t('pos.pointsBalance', { n: round2(customerPoints) })
+                    : t('pos.noPoints')}
+                  {order.customer.phone ? ` · ${order.customer.phone}` : ''}
+                </p>
+              </div>
+              {loyaltyAvailable && (
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={Math.floor(customerPoints)}
+                    inputMode="numeric"
+                    value={redeemInput}
+                    onChange={(e) => setRedeemInput(e.target.value)}
+                    placeholder={t('pos.redeemPointsPh')}
+                    aria-label={t('pos.redeemPoints')}
+                    className="h-10 w-24 rounded-lg text-center text-sm tabular-nums"
+                    disabled={redeeming}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={
+                      redeeming ||
+                      !redeemInput.trim() ||
+                      Number(redeemInput) <= 0 ||
+                      Number(redeemInput) > Math.floor(customerPoints)
+                    }
+                    onClick={() => void handleRedeem(Number(redeemInput))}
+                    className="h-10 rounded-lg bg-[#714B67] px-3 text-xs font-semibold text-white hover:bg-[#714B67]/90"
+                  >
+                    {redeeming ? <Loader2 className="size-4 animate-spin" /> : t('pos.redeemPoints')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={redeeming}
+                    title={t('pos.redeemAll')}
+                    onClick={() => void handleRedeem(Math.floor(customerPoints))}
+                    className="h-10 rounded-lg border-[#714B67]/40 px-3 text-xs font-semibold text-[#714B67] hover:bg-[#714B67]/10"
+                  >
+                    {t('pos.redeemAll')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Method tiles — apply to the active row below */}
           <div className="space-y-1.5">
@@ -489,6 +639,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                     const next = clampPayers(parseInt(e.target.value, 10) || 2, 2, 12)
                     setEqPayers(next)
                     setActiveIdx((i) => Math.min(i, next - 1))
+                    writePaymentPrefs({ tab, eqPayers: next, itPayers })
                   }}
                   className="h-10 w-16 text-center tabular-nums"
                 />
@@ -523,7 +674,11 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   min={2}
                   max={6}
                   value={itPayers}
-                  onChange={(e) => setItPayers(clampPayers(parseInt(e.target.value, 10) || 2, 2, 6))}
+                  onChange={(e) => {
+                    const next = clampPayers(parseInt(e.target.value, 10) || 2, 2, 6)
+                    setItPayers(next)
+                    writePaymentPrefs({ tab, eqPayers, itPayers: next })
+                  }}
                   className="h-10 w-16 text-center tabular-nums"
                 />
                 <span className="text-sm text-muted-foreground">{t('pos.payers')}</span>

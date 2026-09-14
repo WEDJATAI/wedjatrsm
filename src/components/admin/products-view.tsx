@@ -651,6 +651,21 @@ export default function ProductsView() {
     onError: (err: Error) => toast.error(err.message),
   })
 
+  // R13: "86" sold-out quick toggle from the admin list (mirrors the POS tile).
+  const soldOutMutation = useMutation({
+    mutationFn: (vars: { id: number; soldOut: boolean }) =>
+      apiFetch<{ product: { id: number; soldOut: boolean } }>(
+        `/api/products/${vars.id}/sold-out`,
+        { method: 'PATCH', body: { soldOut: vars.soldOut } },
+      ),
+    onSuccess: (_data, vars) => {
+      toast.success(vars.soldOut ? t('pos.soldOutToast', { name: '' }) : t('pos.availableToast', { name: '' }))
+      void queryClient.invalidateQueries({ queryKey: ['products'] })
+      void queryClient.invalidateQueries({ queryKey: ['pos-products'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
   const confirmQuickPrice = (product: Product) => {
     if (priceEdit == null || priceEdit.id !== product.id) return
     const parsed = Number(priceEdit.value)
@@ -801,6 +816,10 @@ export default function ProductsView() {
               <p className="text-muted-foreground text-sm">
                 {hasActiveFilters ? t('admin.noProductsFilters') : t('admin.noProductsCreate')}
               </p>
+              {/* R13: empty-state coaching (learnability) */}
+              {!hasActiveFilters && (
+                <p className="mt-1 text-sm text-muted-foreground/80">{t('products.emptyHint')}</p>
+              )}
             </div>
             {!hasActiveFilters && (
               <Button className="h-11" onClick={openCreate}>
@@ -823,6 +842,8 @@ export default function ProductsView() {
                       <TableHead className="hidden lg:table-cell">{t('admin.margin')}</TableHead>
                       <TableHead className="hidden text-end md:table-cell">{t('admin.colStock')}</TableHead>
                       <TableHead className="hidden lg:table-cell">{t('admin.colFlags')}</TableHead>
+                      {/* R13: 86 sold-out quick toggle column */}
+                      <TableHead className="hidden md:table-cell">{t('pos.86')}</TableHead>
                       <TableHead className="hidden md:table-cell">{t('common.active')}</TableHead>
                       <TableHead className="w-12 text-end">
                         <span className="sr-only">{t('common.actions')}</span>
@@ -875,6 +896,25 @@ export default function ProductsView() {
                             <FlagIcon active={p.isSellable} icon={Store} label={t('admin.sellableFlag')} />
                             <FlagIcon active={p.isStockable} icon={Package} label={t('admin.stockFlag')} />
                           </div>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          {/* R13: 86 sold-out quick toggle */}
+                          <button
+                            type="button"
+                            aria-pressed={p.soldOut === true}
+                            aria-label={p.soldOut === true ? t('pos.markAvailable') : t('pos.markSoldOut')}
+                            title={p.soldOut === true ? t('pos.markAvailable') : t('pos.markSoldOut')}
+                            disabled={soldOutMutation.isPending}
+                            onClick={() => soldOutMutation.mutate({ id: p.id, soldOut: !(p.soldOut === true) })}
+                            className={cn(
+                              'inline-flex h-9 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors',
+                              p.soldOut === true
+                                ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                : 'border-[#E2E2E0] bg-white text-stone-500 hover:border-rose-300 hover:text-rose-600',
+                            )}
+                          >
+                            {p.soldOut === true ? t('pos.86') : t('pos.markSoldOut')}
+                          </button>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           <ActiveBadge
@@ -933,6 +973,11 @@ export default function ProductsView() {
                         <span className={cn('tabular-nums', stockColorClass(p))}>
                           {t('admin.stockLabel', { qty: formatQty(p.stock) })}
                         </span>
+                      )}
+                      {p.soldOut === true && (
+                        <Badge variant="outline" className="border-rose-300 bg-rose-50 px-1.5 text-rose-700">
+                          {t('pos.86')}
+                        </Badge>
                       )}
                       {p.sku ? <span className="font-mono">{p.sku}</span> : null}
                     </div>

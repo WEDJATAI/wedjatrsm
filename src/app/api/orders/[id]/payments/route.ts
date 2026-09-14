@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { MONEY_EPSILON, PAYMENT_METHODS } from '@/lib/constants'
+import { redeemLoyaltyPoints } from '@/lib/loyalty'
 import {
   closeOrderIfFullyPaid,
   getOrderOr404,
@@ -34,7 +35,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError('Invalid JSON body', 400)
     })
     const payments = body?.payments
-    if (!Array.isArray(payments) || payments.length === 0) {
+    // R13: a loyalty-only POST (redeemPoints with an empty payments array)
+    // is allowed — the POS redeem chip sends exactly that.
+    const loyaltyOnly = body?.redeemPoints != null && Array.isArray(payments) && payments.length === 0
+    if ((!Array.isArray(payments) || payments.length === 0) && !loyaltyOnly) {
       throw new ApiError('payments must be a non-empty array', 400)
     }
 
@@ -71,6 +75,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         `Payment exceeds the remaining balance (EGP ${remaining.toFixed(2)})`,
         400,
       )
+    }
+
+    // R13: loyalty redemption — points converted to tender BEFORE the
+    // regular rows are recorded. The redemption caps itself at the remaining
+    // balance NET of the regular rows in this same request, so a combined
+    // call splits the bill and can never overshoot it.
+    if (body?.redeemPoints != null) {
+      const points = Number(body.redeemPoints)
+      if (!Number.isFinite(points) || points <= 0) {
+        throw new ApiError('redeemPoints must be greater than zero', 400)
+      }
+      const reserve = round2(rows.reduce((sum, p) => sum + p.amount, 0))
+      const redemption = await redeemLoyaltyPoints(orderId, points, reserve)
+      await logAudit({
+        user,
+        action: 'loyalty.redeem',
+        entity: 'payment',
+        entityId: orderId,
+        details: `Order #${orderId}: ${redemption.customerName} redeemed points worth EGP ${redemption.egpValue.toFixed(2)}`,
+      })
     }
 
     // Snapshot: was this check deferred BEFORE these payments? (a deferred

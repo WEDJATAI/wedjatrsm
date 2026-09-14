@@ -15,6 +15,9 @@ import { useAppSettings } from '@/lib/use-settings'
 import LoginView from '@/components/auth/login-view'
 import AppNavbar from '@/components/app-navbar'
 import { IdleLogoutWatcher } from '@/components/idle-logout-watcher'
+import GuidedTour from '@/components/tour/guided-tour'
+import OfflineBanner from '@/components/offline-banner'
+import PwaRegister from '@/components/pwa-register'
 import PosView from '@/components/pos/pos-view'
 import KitchenView from '@/components/kitchen/kitchen-view'
 import DashboardView from '@/components/admin/dashboard-view'
@@ -22,6 +25,7 @@ import ProductsView from '@/components/admin/products-view'
 import CategoriesView from '@/components/admin/categories-view'
 import FloorPlansView from '@/components/admin/floorplans-view'
 import ReservationsView from '@/components/admin/reservations-view'
+import CustomersView from '@/components/admin/customers-view'
 import InventoryView from '@/components/admin/inventory-view'
 import RecipesView from '@/components/admin/recipes-view'
 import ReportsView from '@/components/admin/reports-view'
@@ -32,6 +36,7 @@ import UsersView from '@/components/admin/users-view'
 import RolesView from '@/components/admin/roles-view'
 import AttendanceView from '@/components/admin/attendance-view'
 import ActivityView from '@/components/admin/activity-view'
+import IntegrationsView from '@/components/admin/integrations-view'
 import SettingsView from '@/components/admin/settings-view'
 
 type View =
@@ -43,6 +48,7 @@ type View =
   | 'categories'
   | 'floorplans'
   | 'reservations'
+  | 'customers'
   | 'inventory'
   | 'recipes'
   | 'reports'
@@ -52,6 +58,7 @@ type View =
   | 'roles'
   | 'attendance'
   | 'activity'
+  | 'integrations'
   | 'settings'
 
 /** which module permission each view requires */
@@ -64,6 +71,7 @@ const VIEW_PERMISSION: Record<View, string> = {
   categories: 'categories',
   floorplans: 'floorplans',
   reservations: 'reservations',
+  customers: 'customers',
   inventory: 'inventory',
   recipes: 'recipes',
   reports: 'reports',
@@ -73,6 +81,7 @@ const VIEW_PERMISSION: Record<View, string> = {
   roles: 'roles',
   attendance: 'attendance',
   activity: 'audit',
+  integrations: 'settings',
   settings: 'settings',
 }
 
@@ -83,6 +92,7 @@ const ADMIN_VIEWS: View[] = [
   'categories',
   'floorplans',
   'reservations',
+  'customers',
   'inventory',
   'recipes',
   'reports',
@@ -92,6 +102,7 @@ const ADMIN_VIEWS: View[] = [
   'roles',
   'attendance',
   'activity',
+  'integrations',
   'settings',
 ]
 
@@ -111,6 +122,7 @@ const VIEW_PRIORITY: View[] = [
   'categories',
   'floorplans',
   'reservations',
+  'customers',
   'recipes',
   'users',
   'roles',
@@ -171,6 +183,7 @@ function AdminFooter() {
 }
 
 function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
+  const { t } = useI18n()
   // Round 7: the top-level view lives in the location hash (#/pos, #/kitchen,
   // #/reports… — the POS appends sub-hashes like #/pos/order/12, owned by
   // PosView). A deep-linked/refreshed hash is honored when the user is
@@ -234,6 +247,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <FloorPlansView />
       case 'reservations':
         return <ReservationsView />
+      case 'customers':
+        return <CustomersView />
       case 'inventory':
         return <InventoryView />
       case 'recipes':
@@ -252,6 +267,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <AttendanceView />
       case 'activity':
         return <ActivityView />
+      case 'integrations':
+        return <IntegrationsView />
       case 'settings':
         return <SettingsView />
       default:
@@ -261,8 +278,15 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
+      {/* R13 a11y: keyboard users can jump past the navbar to the content */}
+      <a
+        href="#rms-main"
+        className="sr-only z-[100] rounded-lg bg-[#714B67] px-4 py-2.5 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        {t('a11y.skipToContent')}
+      </a>
       <AppNavbar user={user} view={allowed} onNavigate={setView} onLogout={onLogout} />
-      <main className="flex-1 flex flex-col">
+      <main id="rms-main" tabIndex={-1} className="flex-1 flex flex-col outline-none">
         {/* Round 7: the POS stays mounted (hidden) while other views are
             open, so an in-progress order screen and unsent draft survive view
             switches — and the browser Back button can return to them. */}
@@ -276,6 +300,12 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
       </main>
       {/* Idle session timeout (shared terminals) — 15 min warn + 60s countdown */}
       <IdleLogoutWatcher onLogout={onLogout} />
+      {/* R13: first-run guided tour (replayable from the navbar ? button) */}
+      <GuidedTour user={user} />
+      {/* R13 PWA: offline queue banner (order sends queued while offline) */}
+      <OfflineBanner />
+      {/* R13 PWA: service worker registration (installable app shell) */}
+      <PwaRegister />
     </div>
   )
 }

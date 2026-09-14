@@ -100,3 +100,28 @@ Verified score covers everything testable in this environment. NOT verifiable he
 - Audit trail: 256 audit rows (122 vision, incl. reservation.*, order.* actions)
 
 *This report is the auditor's honest, neutral assessment. Every claim above was verified live or via API in this session; no scores are inferred from marketing materials.*
+
+---
+
+## 6. Round 13 — Recommendations Implementation Record (2026-09-14)
+
+All ten prioritized recommendations from §4 were implemented and verified live (browser E2E with real clicks + API assertions):
+
+| # | Recommendation | Status | Verification evidence |
+|---|---|---|---|
+| P1-1 | Guided first-run tour + empty-state coaching | ✅ DONE | 8-step tour auto-opens on first login per user (localStorage `rms-tour-done-<id>`), replayable from the navbar **?** button, Esc/arrow-key navigable; coaching hints added to KDS / Reservations / Products / Customers empty states; bilingual EN/AR |
+| P1-2 | Sold-out / "86" quick toggle from the POS tile | ✅ DONE | One tap on the tile's ban chip → optimistic update + Undo toast; **API round-trip verified** (Caesar Salad soldOut true → false); audit-logged (`product.soldOut`); mirrors in the Admin products table; stock-exhausted tiles keep the chip disabled |
+| P1-3 | Remember last-used split mode + payer count | ✅ DONE | `rms-payment-prefs` (localStorage per terminal): paid an order with Equal Split ×3 → reopened payment modal on the next check → **"Equal Split" + 3 payers restored** |
+| P2-4 | PWA + offline draft queue | ✅ DONE | manifest + theme + generated icons (192/512/maskable); dev-safe service worker (network-first assets — a cache-first draft served stale chunks and was replaced in testing); **offline E2E**: banner "Offline — 1 order(s) queued" → send while offline → localStorage queue → reconnect → auto-flush → order #139 created (EGP 56.70) + toast; offline catalog mirror (`rms-pos-products-cache`) |
+| P2-5 | Loyalty program + customer profiles | ✅ DONE | Customer model + POS attach popover (search by name/phone, quick-create, auto-capitalized names); **full-loop verified**: grant 50 pts → redeem-all in payment modal (loyalty tender EGP 50) → pay remainder → close → **auto-award 17.68 pts, visits 1, totalSpent 226.80** — arithmetic exact (earn base excludes loyalty tender); redemption capped at remaining (overshoot-proof with combined rows); admin Customers view with stats + detail dialog + audited manual adjustments |
+| P2-6 | Delivery-aggregator webhook adapters | ✅ DONE | `POST /api/integrations/delivery/webhook` keyed by `x-rsm-key`; **E2E**: test-order button → order created (fuzzy name match "Koshari" → "Koshari (Classic)", OUR pricing, unitPrice fix found in testing); idempotent (replay returned 200 duplicate); admin card with key generation + docs + recent webhook orders |
+| P2-7 | ETA e-invoicing | ✅ DONE | Export adapter `GET /api/invoices` — **verified: 31 invoices** for the past week with per-invoice UUID, line-level net/VAT reconciling with order totals, issuer/receiver identity; JSON download from the Integrations view; honest scope note (portal submission needs certified integrator) |
+| P3-8 | KDS station pills sticky-safe | ✅ DONE | Header + station pills wrapped sticky `top-16 z-40` with opaque backdrop — **verified pinned at exactly 64px after scrolling** |
+| P3-9 | Capitalized deferred-check names | ✅ DONE | Shared `normalizePersonName` (trim/collapse/Title-Case, acronym-safe) applied server-side on defer + reservations + customers and client-side in the defer dialog; **verified**: `"  ahmed    mohamed test "` → `"Ahmed Mohamed Test"` |
+| P3-10 | Keyboard/screen-reader pass | ✅ PARTIAL (as scoped) | Skip-to-content link (first tab stop, **verified** focus lands on `#rms-main`), keyboard-only walkthrough of login→nav→POS (Tab order sane, focus-visible rings), aria-live offline banner, aria-pressed on toggles. **Honest caveat: real NVDA/VoiceOver user testing remains outstanding — it cannot be simulated in this sandbox** |
+
+**Fixes found & applied during verification (honest log):** payment-modal order prop went stale after in-modal loyalty redemptions (now refreshed via `setPayOrder`); webhook items initially missed `unitPrice` (0-total orders — fixed + re-verified); cache-first SW served stale dev chunks (replaced with network-first, v2 purge); offline product grid needed a localStorage mirror; deferred-check name link now auto-matches a customer profile by normalized name.
+
+**Deliverables refreshed:** `download/rsm-platform-database.db` (462,848 bytes · sha256 9e1ec4b0…) + manifest — integrity/foreign-key/invariant checks **ALL PASS**; `prisma/seed.ts` extended for fresh-install parity (vision cameras/zones/states/ingest-key from R9 + loyalty settings & demo customers from R13) and dry-run verified on a DB copy.
+
+**Updated residual roadmap (honest):** native mobile waiter apps with true background sync; multi-branch consolidation; ETA certified submission; delivery-aggregator official partnerships; real screen-reader user testing; load testing with concurrent terminals.

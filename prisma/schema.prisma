@@ -89,6 +89,29 @@ model Category {
   @@map("categories")
 }
 
+// ─── R13: Customers & loyalty ────────────────────────────────────
+// Lightweight CRM: identified at the POS (phone/name search), attached to
+// orders; visits/points/totalSpent accrue automatically when an order with
+// a customer closes. Points are redeemed as tender in the payment flow
+// (method 'loyalty') — never cash-out.
+model Customer {
+  id          Int       @id @default(autoincrement())
+  name        String
+  phone       String?   @unique
+  visits      Int       @default(0)
+  points      Float     @default(0) // loyalty balance (1 point ≈ LOYALTY egpPerPoint)
+  totalSpent  Float     @default(0) @map("total_spent")
+  lastVisitAt DateTime? @map("last_visit_at")
+  notes       String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  orders      Order[]
+  reservations Reservation[]
+
+  @@index([name])
+  @@map("customers")
+}
+
 // ─── Products (dishes + ingredients) ────────────────────────────────
 model Product {
   id                Int      @id @default(autoincrement())
@@ -105,6 +128,10 @@ model Product {
   active            Boolean  @default(true)
   lowStockThreshold Float    @default(0) @map("low_stock_threshold")
   stock             Float    @default(0) // materialized current stock for stockable products
+  // R13: manual "86 / sold out" flag — one-tap toggle from the POS product
+  // tile. Independent of stock counting: a dish can be 86'd even when not
+  // stock-tracked (ran out of a side, equipment down…).
+  soldOut           Boolean  @default(false) @map("sold_out")
   // R8: JSON string arrays of tags (see ALLERGENS / DIETARY_TAGS in constants)
   allergens         String? // e.g. '["gluten","dairy"]' — red warning badges (POS + KDS)
   dietary           String? // e.g. '["vegetarian","spicy"]' — green badges
@@ -172,6 +199,13 @@ model Order {
   orderType      String             @default("dinein") @map("order_type")
   deliveryPhone  String?            @map("delivery_phone") // required when orderType = 'delivery'
   deliveryAddress String?           @map("delivery_address")
+  // R13: loyalty — attached customer + points earned/redeemed on this order
+  customerId     Int?               @map("customer_id")
+  customer       Customer?          @relation(fields: [customerId], references: [id])
+  pointsEarned   Float              @default(0) @map("points_earned")
+  pointsRedeemed Float              @default(0) @map("points_redeemed")
+  // R13: delivery-aggregator idempotency key ('<provider>:<externalId>')
+  externalRef    String?            @unique @map("external_ref")
   guests         Int                @default(1) // number of people seated on this order
   subtotalAmount Float              @default(0) @map("subtotal_amount")
   totalAmount    Float              @default(0) @map("total_amount")
@@ -193,6 +227,7 @@ model Order {
   @@index([tableId])
   @@index([createdAt])
   @@index([orderType])
+  @@index([customerId])
   @@map("orders")
 }
 
@@ -509,6 +544,9 @@ model Reservation {
   reservedAt    DateTime  @map("reserved_at")
   status        String    @default("pending") // 'pending'|'seated'|'completed'|'cancelled'|'no_show'
   notes         String?
+  // R13: optional loyalty link (auto-matched by phone when booking)
+  customerId    Int?      @map("customer_id")
+  customer      Customer? @relation(fields: [customerId], references: [id])
   orderId       Int?      @unique @map("order_id")
   order         Order?    @relation(fields: [orderId], references: [id])
   createdBy     String?   @map("created_by")

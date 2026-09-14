@@ -76,6 +76,8 @@ export type Product = {
   allergens?: string[] | null
   /** R8: parsed dietary tag keys (['vegetarian']…) — null when unset */
   dietary?: string[] | null
+  /** R13: manual 86/sold-out flag (POS one-tap toggle) */
+  soldOut?: boolean
   /** R8: option groups offered with this product (POS list endpoints) */
   modifierGroups?: ModifierGroupDTO[]
 }
@@ -130,12 +132,29 @@ export type OrderItem = {
 export type Payment = {
   id: number
   orderId: number
-  method: 'cash' | 'card' | 'other' | string
+  method: 'cash' | 'card' | 'other' | 'loyalty' | string
   amount: number
   /** R8: gratuity on top of the billed amount (not counted in paidAmount) */
   tip?: number
   reference: string | null
   createdAt: string
+}
+
+// ─── R13: customers & loyalty ─────────────────────────────────
+export type Customer = {
+  id: number
+  name: string
+  phone: string | null
+  visits: number
+  points: number
+  totalSpent: number
+  lastVisitAt: string | null
+  notes: string | null
+  active: boolean
+  createdAt: string
+  /** detail payload only — recent orders + upcoming reservations */
+  orders?: Order[]
+  reservations?: Reservation[]
 }
 
 export type Order = {
@@ -150,6 +169,13 @@ export type Order = {
   /** R11: delivery contact — set when orderType = 'delivery' */
   deliveryPhone?: string | null
   deliveryAddress?: string | null
+  /** R13: loyalty — attached customer + points earned/redeemed */
+  customerId?: number | null
+  customer?: { id: number; name: string; phone?: string | null; points?: number } | null
+  pointsEarned?: number
+  pointsRedeemed?: number
+  /** R13: delivery-aggregator idempotency ref (provider:externalId) */
+  externalRef?: string | null
   subtotalAmount: number
   totalAmount: number
   discountAmount: number
@@ -637,6 +663,9 @@ export type Reservation = {
   id: number
   customerName: string
   customerPhone: string | null
+  /** R13: loyalty link (auto-matched by phone at booking) */
+  customerId?: number | null
+  customer?: { id: number; name: string; phone?: string | null; points?: number } | null
   partySize: number
   floorPlanId: number | null
   floorPlan?: { id: number; name: string } | null

@@ -12,6 +12,7 @@ import {
   serializeReservation,
   type ReservationWithRelations,
 } from '@/lib/reservations'
+import { normalizePersonName } from '@/lib/names'
 
 export async function GET(req: NextRequest) {
   try {
@@ -62,8 +63,9 @@ export async function POST(req: NextRequest) {
       throw new ApiError('Invalid JSON body', 400)
     })
 
-    const customerName =
-      typeof body?.customerName === 'string' ? body.customerName.trim() : ''
+    const customerName = normalizePersonName(
+      typeof body?.customerName === 'string' ? body.customerName : '',
+    )
     if (!customerName || customerName.length > 60) {
       throw new ApiError('Customer name is required (1-60 characters)', 400)
     }
@@ -121,10 +123,22 @@ export async function POST(req: NextRequest) {
       if (!plan) throw new ApiError('Floor plan not found', 404)
     }
 
+    // R13: loyalty link — an exact phone match attaches the customer
+    // profile (bookings by regulars show their visits/points on the board).
+    let customerId: number | null = null
+    if (customerPhone) {
+      const byPhone = await db.customer.findUnique({
+        where: { phone: customerPhone },
+        select: { id: true },
+      })
+      customerId = byPhone?.id ?? null
+    }
+
     const reservation = await db.reservation.create({
       data: {
         customerName,
         customerPhone,
+        customerId,
         partySize,
         reservedAt,
         notes,

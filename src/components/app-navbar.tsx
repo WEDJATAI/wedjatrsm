@@ -9,12 +9,14 @@ import {
   Cctv,
   ChefHat,
   ChevronDown,
+  CircleHelp,
   CircleDollarSign,
   Languages,
   LayoutDashboard,
   LogOut,
   Map,
   Package,
+  Plug,
   ScrollText,
   Settings,
   Settings2,
@@ -22,6 +24,7 @@ import {
   SlidersHorizontal,
   Tags,
   Users,
+  UserRound,
   Utensils,
   UtensilsCrossed,
   type LucideIcon,
@@ -39,6 +42,7 @@ import {
 import { useI18n } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import type { SessionUser } from '@/lib/types'
+import { startTour } from '@/components/tour/tour-bus'
 import { cn } from '@/lib/utils'
 
 type NavItem = { view: string; permission: string; icon: LucideIcon }
@@ -59,6 +63,7 @@ const ADMIN_MENU: NavItem[] = [
   { view: 'categories', permission: 'categories', icon: Tags },
   { view: 'floorplans', permission: 'floorplans', icon: Map },
   { view: 'reservations', permission: 'reservations', icon: CalendarCheck },
+  { view: 'customers', permission: 'customers', icon: UserRound },
   { view: 'inventory', permission: 'inventory', icon: Boxes },
   { view: 'recipes', permission: 'recipes', icon: BookOpen },
   { view: 'reports', permission: 'reports', icon: BarChart3 },
@@ -68,6 +73,7 @@ const ADMIN_MENU: NavItem[] = [
   { view: 'roles', permission: 'roles', icon: ShieldCheck },
   { view: 'attendance', permission: 'attendance', icon: CalendarDays },
   { view: 'activity', permission: 'audit', icon: ScrollText },
+  { view: 'integrations', permission: 'settings', icon: Plug },
   { view: 'settings', permission: 'settings', icon: Settings },
 ]
 
@@ -163,8 +169,18 @@ export default function AppNavbar({
           )}
         </nav>
 
-        {/* Right: language toggle + user chip + logout */}
+        {/* Right: guided tour (R13) + language toggle + user chip + logout */}
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:ml-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={startTour}
+            aria-label={t('tour.helpAria')}
+            title={t('tour.helpAria')}
+            className="size-11 shrink-0 text-white/70 hover:bg-white/10 hover:text-white focus-visible:ring-white/60"
+          >
+            <CircleHelp className="h-5 w-5" aria-hidden />
+          </Button>
           <Button
             variant="ghost"
             size="icon"

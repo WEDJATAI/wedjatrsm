@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Cairo } from "next/font/google";
 import "./globals.css";
 
@@ -23,6 +23,21 @@ export const metadata: Metadata = {
   description:
     "Complete restaurant management: POS with split payments, kitchen display system, inventory with recipe-based stock control, and sales analytics.",
   keywords: ["restaurant", "POS", "KDS", "inventory", "RMS", "Next.js"],
+  // R13: PWA — installable on tablets/phones (service worker in /sw.js)
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#714B67",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

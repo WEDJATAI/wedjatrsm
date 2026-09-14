@@ -17,6 +17,7 @@ import {
   ShoppingBag,
   StickyNote,
   Trash2,
+  UserPlus2,
   Users,
   X,
 } from 'lucide-react'
@@ -32,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -42,7 +44,7 @@ import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/co
 import { formatCurrency, formatQty } from '@/lib/format'
 import { useI18n, localizedName } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import type { Order, OrderItem } from '@/lib/types'
+import type { Customer, Order, OrderItem } from '@/lib/types'
 import { computeCartTotals, lineUnitPrice, modifierDeltaLabel, round2, type DraftItem } from './pos-utils'
 
 type CartPanelProps = {
@@ -59,6 +61,9 @@ type CartPanelProps = {
   canCancel?: boolean
   sending?: boolean
   userRole?: string
+  /** R13: loyalty — draft-scoped customer (pos-view owns the state). */
+  draftCustomer?: Customer | null
+  onDraftCustomerChange?: (customer: Customer | null) => void
 }
 
 const STATUS_CHIP: Record<string, string> = {
@@ -81,6 +86,8 @@ export default function CartPanel({
   canCancel = false,
   sending = false,
   userRole,
+  draftCustomer = null,
+  onDraftCustomerChange,
 }: CartPanelProps) {
   const queryClient = useQueryClient()
   const { t, lang } = useI18n()
@@ -115,6 +122,84 @@ export default function CartPanel({
   const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
   const [moveQty, setMoveQty] = useState<Record<number, number>>({})
   const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+
+  // ── R13: customer attach popover state ──────────────────────
+  const [customerOpen, setCustomerOpen] = useState(false)
+  const [customerQuery, setCustomerQuery] = useState('')
+  const [newCustomerMode, setNewCustomerMode] = useState(false)
+  const [newCustomerName, setNewCustomerName] = useState('')
+  const [newCustomerPhone, setNewCustomerPhone] = useState('')
+
+  const activeCustomer: Customer | null = order?.customer != null
+    ? {
+        id: order.customer.id,
+        name: order.customer.name,
+        phone: order.customer.phone ?? null,
+        visits: 0,
+        points: order.customer.points ?? 0,
+        totalSpent: 0,
+        lastVisitAt: null,
+        notes: null,
+        active: true,
+        createdAt: '',
+      }
+    : draftCustomer
+
+  const customerSearch = useQuery({
+    queryKey: ['customers', 'pos-search', customerQuery],
+    queryFn: () =>
+      fetcher<{ customers: Customer[] }>(
+        `/api/customers?q=${encodeURIComponent(customerQuery)}&limit=8`,
+      ),
+    enabled: customerOpen,
+    staleTime: 10_000,
+  })
+
+  // attach / detach on an EXISTING order (draft customers are held by
+  // pos-view and sent with the create payload)
+  const attachCustomer = useMutation({
+    mutationFn: (customerId: number | null) => {
+      if (orderId == null) throw new Error(t('pos.notSent'))
+      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        body: { customerId },
+      })
+    },
+    onSuccess: async ({ order: updated }) => {
+      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+      toast.success(
+        updated.customerId != null ? t('pos.customerAttached') : t('pos.customerDetached'),
+      )
+      setCustomerOpen(false)
+      setNewCustomerMode(false)
+      setNewCustomerName('')
+      setNewCustomerPhone('')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // quick-create from the POS (name + optional phone)
+  const createCustomer = useMutation({
+    mutationFn: () =>
+      apiFetch<{ customer: Customer }>('/api/customers', {
+        method: 'POST',
+        body: { name: newCustomerName, phone: newCustomerPhone || undefined },
+      }),
+    onSuccess: async ({ customer }) => {
+      toast.success(t('pos.customerSaved'))
+      if (orderId != null) {
+        attachCustomer.mutate(customer.id)
+      } else {
+        onDraftCustomerChange?.(customer)
+        setCustomerOpen(false)
+      }
+      setNewCustomerMode(false)
+      setNewCustomerName('')
+      setNewCustomerPhone('')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
 
   const totals = computeCartTotals(order, draft)
   const noItems = (order?.items.length ?? 0) + draft.length === 0
@@ -408,15 +493,184 @@ export default function CartPanel({
             </p>
           )}
         </div>
-        {order ? (
-          <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
-            {t('common.order')} #{order.id}
-          </Badge>
-        ) : (
-          <Badge variant="secondary" className="shrink-0">
-            {t('pos.notSent')}
-          </Badge>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {/* R13: loyalty — attached customer chip + attach/detach popover */}
+          <Popover open={customerOpen} onOpenChange={(open) => {
+            setCustomerOpen(open)
+            if (open) {
+              setCustomerQuery('')
+              setNewCustomerMode(false)
+            }
+          }}>
+            <PopoverTrigger asChild>
+              {activeCustomer != null ? (
+                <button
+                  type="button"
+                  title={t('pos.attachCustomer')}
+                  className="inline-flex h-9 max-w-[160px] items-center gap-1.5 rounded-full border border-[#714B67]/40 bg-[#714B67]/[0.07] px-2.5 text-xs font-semibold text-[#714B67] transition-colors hover:bg-[#714B67]/15"
+                >
+                  <span aria-hidden>⭐</span>
+                  <span className="truncate">
+                    {t('pos.loyaltyCustomerChip', {
+                      name: activeCustomer.name,
+                      n: round2(activeCustomer.points ?? 0),
+                    })}
+                  </span>
+                </button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  title={t('pos.attachCustomer')}
+                  aria-label={t('pos.attachCustomer')}
+                  className="h-9 gap-1 rounded-full border-[#714B67]/40 px-2.5 text-xs text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                >
+                  <UserPlus2 className="size-3.5" aria-hidden />
+                  <span className="hidden lg:inline">{t('pos.attachCustomer')}</span>
+                </Button>
+              )}
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-3">
+              {activeCustomer != null && (
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#714B67]/25 bg-[#714B67]/[0.05] p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[#714B67]">
+                      {activeCustomer.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {t('pos.pointsBalance', { n: round2(activeCustomer.points ?? 0) })}
+                      {activeCustomer.phone ? ` · ${activeCustomer.phone}` : ''}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10"
+                    disabled={attachCustomer.isPending}
+                    onClick={() => {
+                      if (orderId != null) attachCustomer.mutate(null)
+                      else onDraftCustomerChange?.(null)
+                    }}
+                  >
+                    <X className="size-3.5" aria-hidden />
+                  </Button>
+                </div>
+              )}
+
+              {newCustomerMode ? (
+                <div className="space-y-2">
+                  <Input
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder={t('pos.customerNamePh')}
+                    maxLength={60}
+                    autoFocus
+                    className="h-10"
+                  />
+                  <Input
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder={t('pos.customerPhonePh')}
+                    maxLength={20}
+                    inputMode="tel"
+                    className="h-10"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-10 flex-1"
+                      onClick={() => setNewCustomerMode(false)}
+                    >
+                      {t('common.cancel')}
+                    </Button>
+                    <Button
+                      type="button"
+                      className="h-10 flex-1 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+                      disabled={createCustomer.isPending || newCustomerName.trim().length < 2}
+                      onClick={() => createCustomer.mutate()}
+                    >
+                      {createCustomer.isPending ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        t('pos.saveCustomer')
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Input
+                    value={customerQuery}
+                    onChange={(e) => setCustomerQuery(e.target.value)}
+                    placeholder={t('pos.customerSearchPh')}
+                    className="h-10"
+                    autoFocus
+                  />
+                  <div className="max-h-56 space-y-1 overflow-y-auto rms-scroll">
+                    {customerSearch.isLoading ? (
+                      <div className="flex justify-center py-4">
+                        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : (customerSearch.data?.customers ?? []).length === 0 ? (
+                      <p className="py-3 text-center text-sm text-muted-foreground">
+                        {t('pos.noCustomers')}
+                      </p>
+                    ) : (
+                      (customerSearch.data?.customers ?? []).map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (orderId != null) attachCustomer.mutate(c.id)
+                            else {
+                              onDraftCustomerChange?.(c)
+                              setCustomerOpen(false)
+                            }
+                          }}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-[#714B67]/[0.07]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium">{c.name}</span>
+                            {c.phone && (
+                              <span className="block text-xs text-muted-foreground">{c.phone}</span>
+                            )}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-[#714B67]/40 text-[#714B67]"
+                          >
+                            {t('pos.pointsBalance', { n: c.points })}
+                          </Badge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full border-dashed"
+                    onClick={() => setNewCustomerMode(true)}
+                  >
+                    <Plus className="size-4" aria-hidden /> {t('pos.newCustomer')}
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+
+          {order ? (
+            <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
+              {t('common.order')} #{order.id}
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="shrink-0">
+              {t('pos.notSent')}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Body */}

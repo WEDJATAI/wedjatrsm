@@ -1,13 +1,15 @@
 'use client'
 
 import { useMemo, useState, useSyncExternalStore, type ComponentProps } from 'react'
-import { type LucideIcon, Coffee, IceCreamCone, Salad, Search, SlidersHorizontal, Star, UtensilsCrossed } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { type LucideIcon, CircleCheck, CircleSlash, Coffee, IceCreamCone, Salad, Search, SlidersHorizontal, Star, UtensilsCrossed } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { apiFetch } from '@/lib/api'
 import { formatCurrency } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -99,6 +101,7 @@ type ProductGridProps = {
 
 export default function ProductGrid({ products, onAdd, className }: ProductGridProps) {
   const { t, lang } = useI18n()
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState<string>('all')
   // R8: favorites filter (own pill row before the category pills).
@@ -114,6 +117,54 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
   const toggleFavorite = (id: number) => {
     const added = toggleFavoriteId(favorites, id)
     toast.success(added ? t('pos.addedToFavorites') : t('pos.removedFromFavorites'))
+  }
+
+  // ── R13: "86" quick availability toggle ──────────────────────
+  // One tap on the tile's ban chip flips the product's sold-out flag.
+  // Optimistic update on both POS + admin product caches, undo toast
+  // on success, rollback + error toast on failure.
+  const soldOutMutation = useMutation({
+    mutationFn: ({ id, soldOut }: { id: number; soldOut: boolean }) =>
+      apiFetch<{ product: { id: number; soldOut: boolean } }>(`/api/products/${id}/sold-out`, {
+        method: 'PATCH',
+        body: { soldOut },
+      }),
+    onMutate: async ({ id, soldOut }) => {
+      await queryClient.cancelQueries({ queryKey: ['pos-products'] })
+      const prevPos = queryClient.getQueryData<{ products: Product[] }>(['pos-products'])
+      if (prevPos) {
+        queryClient.setQueryData(['pos-products'], {
+          ...prevPos,
+          products: prevPos.products.map((p) => (p.id === id ? { ...p, soldOut } : p)),
+        })
+      }
+      // admin cache is keyed ['products', {...filters}] — patch every entry
+      queryClient.setQueriesData<{ products: Product[] }>({ queryKey: ['products'] }, (old) =>
+        old ? { products: old.products.map((p) => (p.id === id ? { ...p, soldOut } : p)) } : old,
+      )
+      return { prevPos }
+    },
+    onError: (err, _vars, ctx) => {
+      toast.error(err instanceof Error ? err.message : t('common.error'))
+      if (ctx?.prevPos) queryClient.setQueryData(['pos-products'], ctx.prevPos)
+      // filtered admin caches: safest rollback is a refetch
+      void queryClient.invalidateQueries({ queryKey: ['products'] })
+    },
+    onSuccess: (_data, { id, soldOut }) => {
+      const product = products.find((p) => p.id === id)
+      const name = product ? localizedName(product.name, product.nameAr, lang) : ''
+      toast.success(soldOut ? t('pos.soldOutToast', { name }) : t('pos.availableToast', { name }), {
+        action: {
+          label: t('pos.undo'),
+          onClick: () => soldOutMutation.mutate({ id, soldOut: !soldOut }),
+        },
+      })
+    },
+  })
+
+  const toggleSoldOut = (product: Product) => {
+    if (soldOutMutation.isPending) return
+    soldOutMutation.mutate({ id: product.id, soldOut: !product.soldOut })
   }
 
   // Unique categories in first-seen order (API sorts by category displayOrder).
@@ -233,6 +284,8 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
                 favorite={favorites.has(p.id)}
                 onToggleFavorite={() => toggleFavorite(p.id)}
                 onAdd={onAdd}
+                onToggleSoldOut={() => toggleSoldOut(p)}
+                soldOutPending={soldOutMutation.isPending && soldOutMutation.variables?.id === p.id}
               />
             ))}
           </div>
@@ -247,17 +300,23 @@ function ProductTile({
   favorite,
   onToggleFavorite,
   onAdd,
+  onToggleSoldOut,
+  soldOutPending = false,
   ...rest
 }: {
   product: Product
   favorite: boolean
   onToggleFavorite: () => void
   onAdd: (p: Product) => void
+  onToggleSoldOut: () => void
+  soldOutPending?: boolean
 } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
   const { t, lang } = useI18n()
   const course = guessCourse(product)
   const Icon = COURSE_ICONS[course]
-  const soldOut = product.isStockable && product.stock <= 0
+  // R13: manual 86 flag OR stock-tracked exhaustion both disable the tile
+  const manualSoldOut = product.soldOut === true
+  const soldOut = manualSoldOut || (product.isStockable && product.stock <= 0)
   const lowStock = product.isStockable && product.stock > 0 && product.stock <= product.lowStockThreshold
   const label = localizedName(product.name, product.nameAr, lang)
   // Arabic mode cross-reference: keep the English name visible as a tiny
@@ -344,6 +403,11 @@ function ProductTile({
             {formatCurrency(product.price)}
           </span>
           <span className="flex min-w-0 items-center gap-1">
+            {manualSoldOut && (
+              <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
+                {t('pos.86')}
+              </Badge>
+            )}
             {hasOptions && (
               <Badge
                 variant="outline"
@@ -393,6 +457,37 @@ function ProductTile({
         )}
       >
         <Star className={cn('size-5', favorite && 'fill-amber-400 text-amber-500')} aria-hidden />
+      </button>
+
+      {/* R13: "86" availability toggle — top-START corner (star owns the
+          end). One tap flips sold-out; the toast carries an Undo. Stock-
+          exhausted (non-manual) tiles keep the chip disabled so waiters
+          don't fight the inventory system. */}
+      <button
+        type="button"
+        aria-pressed={manualSoldOut}
+        aria-label={manualSoldOut ? t('pos.markAvailable') : t('pos.markSoldOut')}
+        title={manualSoldOut ? t('pos.markAvailable') : t('pos.markSoldOut')}
+        disabled={soldOutPending || (soldOut && !manualSoldOut)}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleSoldOut()
+        }}
+        className={cn(
+          'absolute start-0.5 top-0.5 z-10 grid size-11 place-items-center rounded-full transition-colors',
+          soldOutPending
+            ? 'text-stone-400 opacity-60'
+            : manualSoldOut
+              ? 'text-rose-600 hover:bg-rose-100'
+              : 'text-stone-300 hover:bg-rose-100 hover:text-rose-500',
+          soldOut && !manualSoldOut && 'opacity-30 cursor-not-allowed',
+        )}
+      >
+        {manualSoldOut ? (
+          <CircleCheck className="size-5" aria-hidden />
+        ) : (
+          <CircleSlash className="size-5" aria-hidden />
+        )}
       </button>
     </div>
   )

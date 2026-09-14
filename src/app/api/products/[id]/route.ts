@@ -235,6 +235,10 @@ export async function PUT(
     const isStockable = parseBoolField(body, 'isStockable', 'Is stockable')
     if (isStockable !== undefined) data.isStockable = isStockable
 
+    // R13: manual 86/sold-out flag (also one-tap toggleable from the POS)
+    const soldOut = parseBoolField(body, 'soldOut', 'Sold out')
+    if (soldOut !== undefined) data.soldOut = soldOut
+
     const isSellable = parseBoolField(body, 'isSellable', 'Is sellable')
     if (isSellable !== undefined) data.isSellable = isSellable
 

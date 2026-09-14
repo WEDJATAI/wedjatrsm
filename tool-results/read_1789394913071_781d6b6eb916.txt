@@ -1,0 +1,898 @@
+     1→// ─── Shared business logic for orders, payments & tables ────────────
+     2→// Used by the /api/orders, /api/order-items, /api/tables and
+     3→// /api/floorplans route handlers. Keep this module reusable: all
+     4→// money math, stock validation and close/cancel side effects live here.
+     5→
+     6→import { Prisma } from '@prisma/client'
+     7→import { db } from '@/lib/db'
+     8→import { ApiError, type SessionPayload } from '@/lib/auth'
+     9→import { COURSES, MONEY_EPSILON, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+    10→import type {
+    11→  FloorPlan,
+    12→  Order,
+    13→  OrderItem,
+    14→  Payment,
+    15→  RestaurantTable,
+    16→  SelectedModifier,
+    17→} from '@/lib/types'
+    18→
+    19→/** Round a number to 2 decimal places (money persistence boundary). */
+    20→export function round2(value: number): number {
+    21→  return Math.round(value * 100) / 100
+    22→}
+    23→
+    24→/** Parse a numeric route param, throwing a 400 ApiError when invalid. */
+    25→export function parseId(value: string, label = 'id'): number {
+    26→  const id = Number(value)
+    27→  if (!Number.isInteger(id) || id <= 0) {
+    28→    throw new ApiError(`Invalid ${label}`, 400)
+    29→  }
+    30→  return id
+    31→}
+    32→
+    33→/**
+    34→ * Resolve the numeric user id from a session payload. NOTE: auth.getSessionUser
+    35→ * currently returns the DB user row ({ id, ... }) while the declared
+    36→ * SessionPayload shape uses `userId` — support both spellings so orders are
+    37→ * always attributed to the logged-in user.
+    38→ */
+    39→export function sessionUserId(session: SessionPayload): number {
+    40→  const alt = session as unknown as { userId?: number; id?: number }
+    41→  const id = alt.userId ?? alt.id
+    42→  if (id == null || !Number.isFinite(id)) {
+    43→    throw new ApiError('Unauthorized', 401)
+    44→  }
+    45→  return id
+    46→}
+    47→
+    48→// ─── Orders ─────────────────────────────────────────────────────────
+    49→
+    50→export const ORDER_INCLUDE = {
+    51→  // R8-b documented exception (approved in the task brief): `allergens` is
+    52→  // added to the product sub-select so KDS/cart allergen badges can read it
+    53→  // via a local cast — the ONLY change to this constant.
+    54→  // R11: `category.prepDestination` added so KDS station routing can read it
+    55→  // (second documented exception, same pattern).
+    56→  items: {
+    57→    include: {
+    58→      product: {
+    59→        select: {
+    60→          id: true,
+    61→          name: true,
+    62→          nameAr: true,
+    63→          allergens: true,
+    64→          category: { select: { prepDestination: true } },
+    65→        },
+    66→      },
+    67→    },
+    68→  },
+    69→  payments: true,
+    70→  table: { select: { id: true, name: true } },
+    71→  user: { select: { id: true, name: true } },
+    72→} satisfies Prisma.OrderInclude
+    73→
+    74→export type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>
+    75→
+    76→/** A plain `payment` row (no relations) as loaded from Prisma. */
+    77→export type PaymentRow = {
+    78→  id: number
+    79→  orderId: number
+    80→  method: string
+    81→  amount: number
+    82→  tip?: number | null
+    83→  reference: string | null
+    84→  createdAt: Date
+    85→}
+    86→
+    87→export function serializePayment(payment: PaymentRow): Payment {
+    88→  return {
+    89→    id: payment.id,
+    90→    orderId: payment.orderId,
+    91→    method: payment.method,
+    92→    amount: round2(payment.amount),
+    93→    tip: round2(payment.tip ?? 0),
+    94→    reference: payment.reference,
+    95→    createdAt: payment.createdAt.toISOString(),
+    96→  }
+    97→}
+    98→
+    99→export type OrderItemRow = Prisma.OrderItemGetPayload<{
+   100→  include: { product: { select: { id: true; name: true; nameAr: true } } }
+   101→}>
+   102→
+   103→/** Parse the selected_modifiers JSON column into a clean list (R8). */
+   104→export function parseSelectedModifiers(raw: string | null | undefined): SelectedModifier[] | null {
+   105→  if (!raw) return null
+   106→  try {
+   107→    const parsed: unknown = JSON.parse(raw)
+   108→    if (!Array.isArray(parsed) || parsed.length === 0) return null
+   109→    const list: SelectedModifier[] = []
+   110→    for (const entry of parsed) {
+   111→      const m = entry as { id?: unknown; name?: unknown; nameAr?: unknown; priceDelta?: unknown }
+   112→      const id = Number(m.id)
+   113→      const priceDelta = Number(m.priceDelta)
+   114→      if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(priceDelta)) continue
+   115→      list.push({
+   116→        id,
+   117→        name: String(m.name ?? ''),
+   118→        nameAr: m.nameAr == null ? null : String(m.nameAr),
+   119→        priceDelta: round2(priceDelta),
+   120→      })
+   121→    }
+   122→    return list.length > 0 ? list : null
+   123→  } catch {
+   124→    return null
+   125→  }
+   126→}
+   127→
+   128→export function serializeOrderItem(item: OrderItemRow): OrderItem {
+   129→  return {
+   130→    id: item.id,
+   131→    orderId: item.orderId,
+   132→    productId: item.productId,
+   133→    product: item.product,
+   134→    quantity: item.quantity,
+   135→    unitPrice: round2(item.unitPrice),
+   136→    notes: item.notes,
+   137→    course: item.course,
+   138→    status: item.status,
+   139→    selectedModifiers: parseSelectedModifiers(item.selectedModifiers),
+   140→    createdAt: item.createdAt.toISOString(),
+   141→  }
+   142→}
+   143→
+   144→/** Map a loaded order (with ORDER_INCLUDE relations) to the API `Order` payload. */
+   145→export function serializeOrder(order: OrderWithRelations): Order {
+   146→  const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
+   147→  const total = round2(order.totalAmount)
+   148→  return {
+   149→    id: order.id,
+   150→    tableId: order.tableId,
+   151→    table: order.table,
+   152→    userId: order.userId,
+   153→    user: order.user,
+   154→    status: order.status,
+   155→    // R11: order type + delivery contact
+   156→    orderType: order.orderType,
+   157→    deliveryPhone: order.deliveryPhone,
+   158→    deliveryAddress: order.deliveryAddress,
+   159→    subtotalAmount: round2(order.subtotalAmount),
+   160→    totalAmount: total,
+   161→    discountAmount: round2(order.discountAmount),
+   162→    taxAmount: round2(order.taxAmount),
+   163→    serviceTaxAmount: round2(order.serviceTaxAmount),
+   164→    discountReason: order.discountReason,
+   165→    clientName: order.clientName,
+   166→    extraTableIds: parseExtraTableIds(order.extraTableIds),
+   167→    paidAmount: round2(paidAmount),
+   168→    remainingAmount: round2(total - paidAmount),
+   169→    guests: order.guests,
+   170→    createdAt: order.createdAt.toISOString(),
+   171→    closedAt: order.closedAt ? order.closedAt.toISOString() : null,
+   172→    items: order.items.map(serializeOrderItem),
+   173→    payments: order.payments.map(serializePayment),
+   174→  }
+   175→}
+   176→
+   177→/** Load an order with all relations or throw 404. */
+   178→export async function getOrderOr404(orderId: number): Promise<OrderWithRelations> {
+   179→  const order = await db.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE })
+   180→  if (!order) throw new ApiError('Order not found', 404)
+   181→  return order
+   182→}
+   183→
+   184→// ─── Merged seating (multi-table orders) ───────────────────────────
+   185→
+   186→/** Parse the JSON extraTableIds column into a clean id list. */
+   187→export function parseExtraTableIds(raw: string | null | undefined): number[] {
+   188→  if (!raw) return []
+   189→  try {
+   190→    const parsed: unknown = JSON.parse(raw)
+   191→    if (!Array.isArray(parsed)) return []
+   192→    return parsed
+   193→      .map(Number)
+   194→      .filter((id) => Number.isInteger(id) && id > 0)
+   195→  } catch {
+   196→    return []
+   197→  }
+   198→}
+   199→
+   200→/** All table ids bound to an order: primary tableId + extraTableIds. */
+   201→export function orderTableIds(order: { tableId: number | null; extraTableIds: string | null }): number[] {
+   202→  const ids: number[] = []
+   203→  if (order.tableId != null) ids.push(order.tableId)
+   204→  for (const id of parseExtraTableIds(order.extraTableIds)) {
+   205→    if (!ids.includes(id)) ids.push(id)
+   206→  }
+   207→  return ids
+   208→}
+   209→
+   210→/**
+   211→ * Find an OPEN order that references the table — either as its primary
+   212→ * table OR as one of its merged-seating extra tables. Used to guard
+   213→ * transfer/destination tables and table release logic.
+   214→ */
+   215→export async function findOpenOrderOnTable(
+   216→  tableId: number,
+   217→  excludeOrderId?: number,
+   218→): Promise<{ id: number } | null> {
+   219→  const candidates = await db.order.findMany({
+   220→    where: {
+   221→      status: 'open',
+   222→      OR: [{ tableId }, { extraTableIds: { not: null } }],
+   223→    },
+   224→    select: { id: true, tableId: true, extraTableIds: true },
+   225→  })
+   226→  for (const order of candidates) {
+   227→    if (excludeOrderId != null && order.id === excludeOrderId) continue
+   228→    if (orderTableIds(order).includes(tableId)) return { id: order.id }
+   229→  }
+   230→  return null
+   231→}
+   232→
+   233→/**
+   234→ * Set every table of an order to a target status — each table only when
+   235→ * no OTHER open order still references it (as primary or extra table).
+   236→ * Tables that are already 'free' (cleaned) or 'dirty' (amber, bussed and
+   237→ * awaiting the cleaning click) are never re-marked by a later settlement —
+   238→ * the manual cleaning flow always moves forward.
+   239→ */
+   240→export async function setTablesStatusForOrder(
+   241→  order: { id: number; tableId: number | null; extraTableIds: string | null },
+   242→  target: 'free' | 'paid' | 'deferred' | 'occupied',
+   243→): Promise<void> {
+   244→  const tableIds = orderTableIds(order)
+   245→  for (const tableId of tableIds) {
+   246→    const otherOpen = await findOpenOrderOnTable(tableId, order.id)
+   247→    if (otherOpen) continue
+   248→    const table = await db.restaurantTable.findUnique({
+   249→      where: { id: tableId },
+   250→      select: { status: true },
+   251→    })
+   252→    if (!table) continue
+   253→    // never re-dirty a table that has already been bussed ('dirty') or
+   254→    // cleaned ('free') — later settlements keep the manual cleaning state
+   255→    if (
+   256→      (target === 'paid' || target === 'deferred') &&
+   257→      (table.status === 'free' || table.status === 'dirty')
+   258→    ) {
+   259→      continue
+   260→    }
+   261→    if (table.status === target) continue
+   262→    await db.restaurantTable.update({ where: { id: tableId }, data: { status: target } })
+   263→  }
+   264→}
+   265→
+   266→/**
+   267→ * Recompute an order's money fields from its current items:
+   268→ * subtotal = Σ qty × unitPrice, discount clamped to [0, subtotal],
+   269→ * VAT = (subtotal − discount) × TAX_RATE (14%),
+   270→ * service tax = (subtotal − discount) × SERVICE_TAX_RATE (12%),
+   271→ * total = subtotal − discount + VAT + service tax.
+   272→ * Persists the result and returns the serialized order.
+   273→ */
+   274→export async function recomputeTotals(orderId: number): Promise<Order> {
+   275→  const order = await db.order.findUnique({ where: { id: orderId }, include: { items: true } })
+   276→  if (!order) throw new ApiError('Order not found', 404)
+   277→  const subtotal = round2(
+   278→    order.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
+   279→  )
+   280→  const discount = Math.min(Math.max(order.discountAmount, 0), subtotal)
+   281→  const base = round2(subtotal - discount)
+   282→  const tax = round2(base * TAX_RATE)
+   283→  const serviceTax = round2(base * SERVICE_TAX_RATE)
+   284→  const total = round2(base + tax + serviceTax)
+   285→  const updated = await db.order.update({
+   286→    where: { id: orderId },
+   287→    data: {
+   288→      subtotalAmount: subtotal,
+   289→      discountAmount: round2(discount),
+   290→      taxAmount: tax,
+   291→      serviceTaxAmount: serviceTax,
+   292→      totalAmount: total,
+   293→    },
+   294→    include: ORDER_INCLUDE,
+   295→  })
+   296→  return serializeOrder(updated)
+   297→}
+   298→
+   299→// ─── Item payload validation (POST /api/orders + PUT addItems) ──────
+   300→
+   301→export type ValidatedOrderItem = {
+   302→  productId: number
+   303→  quantity: number
+   304→  unitPrice: number
+   305→  notes: string | null
+   306→  course: string
+   307→  /** R8: option snapshots rebuilt from the DB (never trusting client data);
+   308→   *  null when the item carries no options (today's behavior). */
+   309→  selectedModifiers: SelectedModifier[] | null
+   310→  /** R8: Σ snapshot priceDelta (0 when none) — unitPrice already includes it */
+   311→  modifiersPriceDelta: number
+   312→}
+   313→
+   314→/**
+   315→ * Validate an `items` array from a request body: non-empty, each product
+   316→ * must exist / be active / be sellable, quantity > 0 and course ∈ COURSES
+   317→ * (default 'main'). unitPrice = product.price.
+   318→ *
+   319→ * R8: each item may carry `selectedModifiers` [{ id }] — every id must be an
+   320→ * ACTIVE Modifier of an ACTIVE group ATTACHED to the item's product; group
+   321→ * minSelect/maxSelect are enforced per item; duplicates are rejected. The
+   322→ * snapshot (name/nameAr/priceDelta) is always rebuilt from DB rows, and
+   323→ * unitPrice = round2(product.price + Σ deltas).
+   324→ */
+   325→export async function validateOrderItems(items: unknown): Promise<ValidatedOrderItem[]> {
+   326→  if (!Array.isArray(items) || items.length === 0) {
+   327→    throw new ApiError('Order must contain at least one item', 400)
+   328→  }
+   329→  const raw = items as {
+   330→    productId?: unknown
+   331→    quantity?: unknown
+   332→    notes?: unknown
+   333→    course?: unknown
+   334→    selectedModifiers?: unknown
+   335→  }[]
+   336→
+   337→  const productIds = new Set<number>()
+   338→  for (const item of raw) {
+   339→    const productId = Number(item?.productId)
+   340→    const quantity = Number(item?.quantity)
+   341→    if (!Number.isInteger(productId) || productId <= 0) {
+   342→      throw new ApiError('Invalid productId in order items', 400)
+   343→    }
+   344→    if (!Number.isFinite(quantity) || quantity <= 0) {
+   345→      throw new ApiError(`Invalid quantity for product ${productId}`, 400)
+   346→    }
+   347→    if (item?.selectedModifiers != null && !Array.isArray(item.selectedModifiers)) {
+   348→      throw new ApiError('selectedModifiers must be an array', 400)
+   349→    }
+   350→    productIds.add(productId)
+   351→  }
+   352→
+   353→  const products = await db.product.findMany({
+   354→    where: { id: { in: Array.from(productIds) } },
+   355→    select: { id: true, name: true, price: true, active: true, isSellable: true },
+   356→  })
+   357→  const productById = new Map(products.map((p) => [p.id, p]))
+   358→
+   359→  // ── R8 phase A: parse the requested option ids per item ────────────
+   360→  // (integer ids > 0, no duplicates within one item — snapshots come later)
+   361→  const requestedIdsPerItem: (number[] | null)[] = raw.map((item) => {
+   362→    const list = item?.selectedModifiers
+   363→    if (!Array.isArray(list) || list.length === 0) return null
+   364→    const productId = Number(item.productId)
+   365→    const productLabel = productById.get(productId)?.name ?? String(productId)
+   366→    const ids: number[] = []
+   367→    const seen = new Set<number>()
+   368→    for (const entry of list) {
+   369→      const id = Number((entry as { id?: unknown })?.id)
+   370→      if (!Number.isInteger(id) || id <= 0) {
+   371→        throw new ApiError(`Invalid option for product "${productLabel}"`, 400)
+   372→      }
+   373→      if (seen.has(id)) {
+   374→        throw new ApiError(
+   375→          `Duplicate option id ${id} for product "${productLabel}"`,
+   376→          400,
+   377→        )
+   378→      }
+   379→      seen.add(id)
+   380→      ids.push(id)
+   381→    }
+   382→    return ids
+   383→  })
+   384→
+   385→  // ── R8 phase B: load every referenced modifier (with its group) and the
+   386→  // group attachments of every product — two queries for the whole payload.
+   387→  const allModifierIds = new Set<number>()
+   388→  for (const ids of requestedIdsPerItem) {
+   389→    if (ids) for (const id of ids) allModifierIds.add(id)
+   390→  }
+   391→  type ModifierRow = {
+   392→    id: number
+   393→    name: string
+   394→    nameAr: string | null
+   395→    priceDelta: number
+   396→    active: boolean
+   397→    groupId: number
+   398→    group: { id: number; name: string; active: boolean }
+   399→  }
+   400→  const [modifierRows, linkRows] = await Promise.all([
+   401→    allModifierIds.size === 0
+   402→      ? Promise.resolve<ModifierRow[]>([])
+   403→      : db.modifier.findMany({
+   404→          where: { id: { in: Array.from(allModifierIds) } },
+   405→          select: {
+   406→            id: true,
+   407→            name: true,
+   408→            nameAr: true,
+   409→            priceDelta: true,
+   410→            active: true,
+   411→            groupId: true,
+   412→            group: { select: { id: true, name: true, active: true } },
+   413→          },
+   414→        }),
+   415→    db.productModifierGroup.findMany({
+   416→      where: { productId: { in: Array.from(productIds) } },
+   417→      include: { modifierGroup: true },
+   418→    }),
+   419→  ])
+   420→  const modifierById = new Map(modifierRows.map((m) => [m.id, m]))
+   421→  // ACTIVE groups attached per product (constraints apply to these only)
+   422→  const attachedGroupsByProduct = new Map<number, typeof linkRows[number]['modifierGroup'][]>()
+   423→  for (const link of linkRows) {
+   424→    if (!link.modifierGroup.active) continue
+   425→    const list = attachedGroupsByProduct.get(link.productId) ?? []
+   426→    list.push(link.modifierGroup)
+   427→    attachedGroupsByProduct.set(link.productId, list)
+   428→  }
+   429→
+   430→  return raw.map((item, index) => {
+   431→    const productId = Number(item.productId)
+   432→    const product = productById.get(productId)
+   433→    if (!product) throw new ApiError(`Product ${productId} not found`, 400)
+   434→    if (!product.active || !product.isSellable) {
+   435→      throw new ApiError(`Product "${product.name}" is not available`, 400)
+   436→    }
+   437→    const course = item.course == null ? 'main' : String(item.course)
+   438→    if (!(COURSES as readonly string[]).includes(course)) {
+   439→      throw new ApiError(`Invalid course "${course}"`, 400)
+   440→    }
+   441→
+   442→    // ── R8 phase C: snapshot from DB rows + group constraint checks ──
+   443→    const requestedIds = requestedIdsPerItem[index]
+   444→    const attached = attachedGroupsByProduct.get(productId) ?? []
+   445→    const attachedGroupIds = new Set(attached.map((g) => g.id))
+   446→    const selected: SelectedModifier[] = []
+   447→    const countByGroup = new Map<number, number>()
+   448→    if (requestedIds) {
+   449→      for (const id of requestedIds) {
+   450→        const mod = modifierById.get(id)
+   451→        if (
+   452→          !mod ||
+   453→          !mod.active ||
+   454→          !mod.group.active ||
+   455→          !attachedGroupIds.has(mod.groupId)
+   456→        ) {
+   457→          throw new ApiError(`Invalid option for product "${product.name}"`, 400)
+   458→        }
+   459→        countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) ?? 0) + 1)
+   460→        selected.push({
+   461→          id: mod.id,
+   462→          name: mod.name,
+   463→          nameAr: mod.nameAr,
+   464→          priceDelta: round2(mod.priceDelta),
+   465→        })
+   466→      }
+   467→    }
+   468→    for (const group of attached) {
+   469→      const count = countByGroup.get(group.id) ?? 0
+   470→      if (count < group.minSelect) {
+   471→        throw new ApiError(
+   472→          `Option group "${group.name}" for product "${product.name}" requires at least ${group.minSelect} option(s)`,
+   473→          400,
+   474→        )
+   475→      }
+   476→      if (count > group.maxSelect) {
+   477→        throw new ApiError(
+   478→          `Option group "${group.name}" for product "${product.name}" allows at most ${group.maxSelect} option(s)`,
+   479→          400,
+   480→        )
+   481→      }
+   482→    }
+   483→
+   484→    const modifiersPriceDelta = round2(
+   485→      selected.reduce((sum, m) => sum + m.priceDelta, 0),
+   486→    )
+   487→    return {
+   488→      productId,
+   489→      quantity: Number(item.quantity),
+   490→      unitPrice: round2(product.price + modifiersPriceDelta),
+   491→      notes: item.notes == null ? null : String(item.notes),
+   492→      course,
+   493→      selectedModifiers: selected.length > 0 ? selected : null,
+   494→      modifiersPriceDelta,
+   495→    }
+   496→  })
+   497→}
+   498→
+   499→// ─── Stock availability ─────────────────────────────────────────────
+   500→
+   501→/**
+   502→ * Verify that adding `newItems` to an order keeps enough stock.
+   503→ * Quantities of the SAME products already on the existing open order are
+   504→ * subtracted (they were validated when added and are deducted only once).
+   505→ * Checks both direct stockable product stock and, via the recipe (BOM),
+   506→ * each ingredient's aggregated requirement.
+   507→ */
+   508→export async function checkStockAvailability(
+   509→  newItems: { productId: number; quantity: number }[],
+   510→  existingOrderId?: number,
+   511→): Promise<void> {
+   512→  // Net additional quantity per product
+   513→  const needs = new Map<number, number>()
+   514→  for (const item of newItems) {
+   515→    const quantity = Number(item.quantity)
+   516→    if (!Number.isFinite(quantity) || quantity <= 0) continue
+   517→    needs.set(item.productId, (needs.get(item.productId) ?? 0) + quantity)
+   518→  }
+   519→  if (needs.size === 0) return
+   520→
+   521→  if (existingOrderId != null) {
+   522→    const existing = await db.orderItem.findMany({
+   523→      where: { orderId: existingOrderId, productId: { in: Array.from(needs.keys()) } },
+   524→      select: { productId: true, quantity: true },
+   525→    })
+   526→    for (const row of existing) {
+   527→      if (row.productId == null) continue
+   528→      needs.set(row.productId, (needs.get(row.productId) ?? 0) - row.quantity)
+   529→    }
+   530→  }
+   531→
+   532→  const requiredProductIds = Array.from(needs.entries())
+   533→    .filter(([, need]) => need > 0)
+   534→    .map(([id]) => id)
+   535→  if (requiredProductIds.length === 0) return
+   536→
+   537→  const products = await db.product.findMany({
+   538→    where: { id: { in: requiredProductIds } },
+   539→    include: { recipeFor: { include: { ingredient: true } } },
+   540→  })
+   541→
+   542→  // Aggregated ingredient requirements across all dishes
+   543→  const ingredientNeeds = new Map<number, { name: string; stock: number; need: number }>()
+   544→
+   545→  for (const product of products) {
+   546→    const need = needs.get(product.id) ?? 0
+   547→    if (product.isStockable) {
+   548→      if (product.stock + MONEY_EPSILON < need) {
+   549→        throw new ApiError(
+   550→          `Insufficient stock for "${product.name}" (available ${round2(product.stock)}, needed ${round2(need)})`,
+   551→          400,
+   552→        )
+   553→      }
+   554→    }
+   555→    for (const component of product.recipeFor) {
+   556→      const ingredientNeed = component.quantity * need
+   557→      const previous = ingredientNeeds.get(component.ingredientId)
+   558→      ingredientNeeds.set(component.ingredientId, {
+   559→        name: component.ingredient.name,
+   560→        stock: component.ingredient.stock,
+   561→        need: (previous?.need ?? 0) + ingredientNeed,
+   562→      })
+   563→    }
+   564→  }
+   565→
+   566→  for (const info of ingredientNeeds.values()) {
+   567→    if (info.stock + MONEY_EPSILON < info.need) {
+   568→      throw new ApiError(
+   569→        `Insufficient stock for "${info.name}" (available ${round2(info.stock)}, needed ${round2(info.need)})`,
+   570→        400,
+   571→      )
+   572→    }
+   573→  }
+   574→}
+   575→
+   576→// ─── Inventory deduction on close ───────────────────────────────────
+   577→
+   578→/**
+   579→ * Deduct inventory for a paid order — IDEMPOTENT: skipped when any
+   580→ * InventoryTransaction with reason 'sale' already exists for the order.
+   581→ * Deducts stockable product stock directly and each recipe ingredient
+   582→ * (component.quantity × item.quantity), writing 'sale' transactions.
+   583→ */
+   584→export async function deductInventoryForOrder(orderId: number): Promise<void> {
+   585→  const existing = await db.inventoryTransaction.findFirst({
+   586→    where: { orderId, reason: 'sale' },
+   587→    select: { id: true },
+   588→  })
+   589→  if (existing) return
+   590→
+   591→  const order = await db.order.findUnique({
+   592→    where: { id: orderId },
+   593→    include: {
+   594→      items: {
+   595→        include: { product: { include: { recipeFor: { include: { ingredient: true } } } } },
+   596→      },
+   597→    },
+   598→  })
+   599→  if (!order) return
+   600→
+   601→  await db.$transaction(async (tx) => {
+   602→    for (const item of order.items) {
+   603→      const product = item.product
+   604→      if (!product) continue
+   605→
+   606→      if (product.isStockable) {
+   607→        await tx.product.update({
+   608→          where: { id: product.id },
+   609→          data: { stock: { decrement: item.quantity } },
+   610→        })
+   611→        await tx.inventoryTransaction.create({
+   612→          data: {
+   613→            productId: product.id,
+   614→            quantityChange: -item.quantity,
+   615→            reason: 'sale',
+   616→            orderId,
+   617→          },
+   618→        })
+   619→      }
+   620→
+   621→      for (const component of product.recipeFor) {
+   622→        const quantity = component.quantity * item.quantity
+   623→        if (quantity === 0) continue
+   624→        await tx.product.update({
+   625→          where: { id: component.ingredientId },
+   626→          data: { stock: { decrement: quantity } },
+   627→        })
+   628→        await tx.inventoryTransaction.create({
+   629→          data: {
+   630→            productId: component.ingredientId,
+   631→            quantityChange: -quantity,
+   632→            reason: 'sale',
+   633→            orderId,
+   634→          },
+   635→        })
+   636→      }
+   637→    }
+   638→  })
+   639→}
+   640→
+   641→// ─── Close / table release ──────────────────────────────────────────
+   642→
+   643→/**
+   644→ * Auto-close an order when fully paid: status 'paid' + closedAt, deduct
+   645→ * inventory (idempotent). Works for OPEN and DEFERRED orders — a deferred
+   646→ * check is settled by recording the remaining payments. After closing,
+   647→ * the order's tables become 'paid' (bill settled, awaiting the bussing
+   648→ * click) unless they were already bussed to 'dirty' or cleaned to 'free'.
+   649→ * Returns whether this call closed the order.
+   650→ */
+   651→export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: boolean }> {
+   652→  const order = await db.order.findUnique({
+   653→    where: { id: orderId },
+   654→    include: { payments: true },
+   655→  })
+   656→  if (!order) throw new ApiError('Order not found', 404)
+   657→  if (order.status !== 'open' && order.status !== 'deferred') return { closed: false }
+   658→
+   659→  const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
+   660→  if (paidAmount < order.totalAmount - MONEY_EPSILON) return { closed: false }
+   661→
+   662→  await db.order.update({
+   663→    where: { id: orderId },
+   664→    data: { status: 'paid', closedAt: new Date() },
+   665→  })
+   666→  await deductInventoryForOrder(orderId)
+   667→
+   668→  await setTablesStatusForOrder(order, 'paid')
+   669→  return { closed: true }
+   670→}
+   671→
+   672→/**
+   673→ * Defer a check: order → status 'deferred' with the client's name. The
+   674→ * client leaves; the order's tables switch to 'deferred' (tap to bus →
+   675→ * amber 'dirty' → tap to clean → free) so the check stays outstanding
+   676→ * but the seating is vacated.
+   677→ */
+   678→export async function deferOrder(
+   679→  orderId: number,
+   680→  clientName: string,
+   681→): Promise<OrderWithRelations> {
+   682→  const order = await db.order.findUnique({
+   683→    where: { id: orderId },
+   684→    include: { items: { select: { id: true } } },
+   685→  })
+   686→  if (!order) throw new ApiError('Order not found', 404)
+   687→  if (order.status !== 'open') {
+   688→    throw new ApiError('Only open orders can be deferred', 400)
+   689→  }
+   690→  if (order.items.length === 0) {
+   691→    throw new ApiError('Cannot defer an empty order', 400)
+   692→  }
+   693→  const updated = await db.order.update({
+   694→    where: { id: orderId },
+   695→    data: { status: 'deferred', clientName },
+   696→  })
+   697→  await setTablesStatusForOrder(updated, 'deferred')
+   698→  return db.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE })
+   699→}
+   700→
+   701→/** Free a table if no other open order references it (primary or extra). */
+   702→export async function freeTableIfUnused(tableId: number, excludeOrderId?: number): Promise<void> {
+   703→  const otherOpenOrder = await findOpenOrderOnTable(tableId, excludeOrderId)
+   704→  if (!otherOpenOrder) {
+   705→    await db.restaurantTable.update({ where: { id: tableId }, data: { status: 'free' } })
+   706→  }
+   707→}
+   708→
+   709→/**
+   710→ * R9 vision: re-house an open order (primary + merged extras) at a single
+   711→ * destination table — the exact semantics of POST /api/orders/[id]/transfer,
+   712→ * extracted so the human-confirmed AI movement flow reuses them.
+   713→ *
+   714→ * Runs inside the caller's transaction: primary table moves, extras are
+   715→ * released, previous tables are freed when no OTHER open order still
+   716→ * references them, and the destination table is marked occupied.
+   717→ */
+   718→export async function rehouseOpenOrder(
+   719→  tx: Prisma.TransactionClient,
+   720→  order: { id: number; tableId: number | null; extraTableIds: string | null },
+   721→  targetTableId: number,
+   722→): Promise<void> {
+   723→  const previousTableIds = orderTableIds(order)
+   724→  await tx.order.update({
+   725→    where: { id: order.id },
+   726→    data: { tableId: targetTableId, extraTableIds: null },
+   727→  })
+   728→  for (const previousTableId of previousTableIds) {
+   729→    if (previousTableId === targetTableId) continue
+   730→    const stillOpen = await findOpenOrderOnTable(previousTableId, order.id)
+   731→    if (!stillOpen) {
+   732→      await tx.restaurantTable.update({
+   733→        where: { id: previousTableId },
+   734→        data: { status: 'free' },
+   735→      })
+   736→    }
+   737→  }
+   738→  await tx.restaurantTable.update({
+   739→    where: { id: targetTableId },
+   740→    data: { status: 'occupied' },
+   741→  })
+   742→}
+   743→
+   744→// ─── Tables & floor plans (polling extras) ──────────────────────────
+   745→
+   746→export type TableRow = {
+   747→  id: number
+   748→  floorPlanId: number | null
+   749→  name: string
+   750→  capacity: number
+   751→  shape: string
+   752→  positionX: number
+   753→  positionY: number
+   754→  status: string
+   755→  active: boolean
+   756→}
+   757→
+   758→export function serializeTable(table: TableRow): RestaurantTable {
+   759→  return {
+   760→    id: table.id,
+   761→    floorPlanId: table.floorPlanId,
+   762→    name: table.name,
+   763→    capacity: table.capacity,
+   764→    shape: table.shape,
+   765→    positionX: table.positionX,
+   766→    positionY: table.positionY,
+   767→    status: table.status,
+   768→    active: table.active,
+   769→  }
+   770→}
+   771→
+   772→/**
+   773→ * Serialize tables with POS polling extras. For every table bound to an
+   774→ * OPEN order (primary OR merged-seating extra table) attach openOrderId,
+   775→ * openOrderTotal, openOrderItemCount, openOrderSince, openOrderGuests and
+   776→ * openOrderMerged, and force live status 'occupied'. Tables holding a
+   777→ * DEFERRED check (status 'deferred') additionally get deferredClientName
+   778→ * + deferredOrderId so the floor can show who owes the deferred bill.
+   779→ * Open + deferred orders are fetched in TWO queries (tables referenced
+   780→ * directly or via extraTableIds, parsed in memory).
+   781→ */
+   782→export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise<RestaurantTable[]> {
+   783→  if (tables.length === 0) return []
+   784→  const tableIds = tables.map((t) => t.id)
+   785→  const [openOrders, deferredOrders] = await Promise.all([
+   786→    db.order.findMany({
+   787→      where: {
+   788→        status: 'open',
+   789→        OR: [{ tableId: { in: tableIds } }, { extraTableIds: { not: null } }],
+   790→      },
+   791→      orderBy: { createdAt: 'asc' },
+   792→      select: {
+   793→        id: true,
+   794→        tableId: true,
+   795→        totalAmount: true,
+   796→        guests: true,
+   797→        createdAt: true,
+   798→        extraTableIds: true,
+   799→        items: { select: { id: true, quantity: true, unitPrice: true } },
+   800→      },
+   801→    }),
+   802→    db.order.findMany({
+   803→      where: {
+   804→        status: 'deferred',
+   805→        OR: [{ tableId: { in: tableIds } }, { extraTableIds: { not: null } }],
+   806→      },
+   807→      orderBy: { createdAt: 'desc' },
+   808→      select: {
+   809→        id: true,
+   810→        tableId: true,
+   811→        clientName: true,
+   812→        extraTableIds: true,
+   813→        totalAmount: true,
+   814→        payments: { select: { amount: true } },
+   815→      },
+   816→    }),
+   817→  ])
+   818→
+   819→  // table id → first open order bound to it (primary or extra table)
+   820→  const openOrderByTable = new Map<
+   821→    number,
+   822→    (typeof openOrders)[number] & { merged: boolean }
+   823→  >()
+   824→  for (const order of openOrders) {
+   825→    const ids = orderTableIds(order)
+   826→    const merged = ids.length > 1
+   827→    for (const id of ids) {
+   828→      if (!openOrderByTable.has(id)) openOrderByTable.set(id, { ...order, merged })
+   829→    }
+   830→  }
+   831→
+   832→  // table id → newest deferred order bound to it (for 'deferred' tables)
+   833→  const deferredOrderByTable = new Map<
+   834→    number,
+   835→    { id: number; clientName: string | null; remaining: number }
+   836→  >()
+   837→  for (const order of deferredOrders) {
+   838→    const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
+   839→    const info = {
+   840→      id: order.id,
+   841→      clientName: order.clientName,
+   842→      remaining: round2(order.totalAmount - paidAmount),
+   843→    }
+   844→    for (const id of orderTableIds(order)) {
+   845→      if (!deferredOrderByTable.has(id)) deferredOrderByTable.set(id, info)
+   846→    }
+   847→  }
+   848→
+   849→  return tables.map((table) => {
+   850→    const base = serializeTable(table)
+   851→    if (base.status === 'deferred') {
+   852→      const deferred = deferredOrderByTable.get(table.id)
+   853→      if (deferred) {
+   854→        return {
+   855→          ...base,
+   856→          deferredClientName: deferred.clientName,
+   857→          deferredOrderId: deferred.id,
+   858→        }
+   859→      }
+   860→      return base
+   861→    }
+   862→    const open = openOrderByTable.get(table.id)
+   863→    if (!open) return base
+   864→    const itemCount = open.items.reduce((sum, item) => sum + item.quantity, 0)
+   865→    return {
+   866→      ...base,
+   867→      status: 'occupied',
+   868→      openOrderId: open.id,
+   869→      openOrderTotal: round2(open.totalAmount),
+   870→      openOrderItemCount: round2(itemCount),
+   871→      openOrderSince: open.createdAt.toISOString(),
+   872→      openOrderGuests: open.guests,
+   873→      openOrderMerged: open.merged,
+   874→    }
+   875→  })
+   876→}
+   877→
+   878→export type FloorPlanRow = Prisma.FloorPlanGetPayload<{ include: { tables: true } }>
+   879→
+   880→/**
+   881→ * Serialize floor plans (with already-filtered table rows) attaching the
+   882→ * same open-order polling extras as /api/tables/status.
+   883→ */
+   884→export async function serializeFloorPlans(plans: FloorPlanRow[]): Promise<FloorPlan[]> {
+   885→  if (plans.length === 0) return []
+   886→  const tablesWithExtras = await serializeTablesWithOpenOrders(plans.flatMap((p) => p.tables))
+   887→  const extrasById = new Map(tablesWithExtras.map((t) => [t.id, t]))
+   888→  return plans.map((plan) => ({
+   889→    id: plan.id,
+   890→    name: plan.name,
+   891→    backgroundImage: plan.backgroundImage,
+   892→    active: plan.active,
+   893→    tables: plan.tables
+   894→      .map((table) => extrasById.get(table.id))
+   895→      .filter((table): table is RestaurantTable => table != null),
+   896→  }))
+   897→}
+   898→

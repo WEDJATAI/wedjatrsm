@@ -9,6 +9,7 @@ import type { SessionPayload } from '@/lib/auth'
 export const AUDIT_ACTIONS = [
   'order.create',
   'order.payment',
+  'order.update',
   'order.defer',
   'order.deferSettle',
   'order.cancel',
@@ -47,6 +48,17 @@ export const AUDIT_ACTIONS = [
   'reservation.seat',
   'reservation.cancel',
   'reservation.noShow',
+  // R13: menu availability, customers & loyalty, integrations, invoices
+  'product.soldOut',
+  'customer.create',
+  'customer.update',
+  'customer.pointsAdjust',
+  'loyalty.redeem',
+  'loyalty.earn',
+  'integration.update',
+  'integration.webhook',
+  'order.externalCreate',
+  'invoice.export',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -54,7 +66,20 @@ export type AuditInput = {
   /** the session user performing the action (name snapshotted) */
   user?: Pick<SessionPayload, 'userId' | 'name'> | null
   action: AuditAction
-  entity: 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory' | 'vision' | 'reservation'
+  entity:
+    | 'order'
+    | 'table'
+    | 'payment'
+    | 'settings'
+    | 'user'
+    | 'role'
+    | 'inventory'
+    | 'vision'
+    | 'reservation'
+    | 'product'
+    | 'customer'
+    | 'integration'
+    | 'invoice'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null
