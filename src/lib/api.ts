@@ -53,6 +53,20 @@ export async function fetcher<T>(url: string): Promise<T> {
 
 export class ApiRequestError extends Error {}
 
+/** R14: authenticated binary download (backups, exports) → Blob. */
+export async function apiFetchBlob(url: string): Promise<Blob> {
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new ApiRequestError(data.error ?? `Request failed (${res.status})`)
+  }
+  return res.blob()
+}
+
 /** POST/PUT/DELETE helper that throws readable errors and returns parsed JSON. */
 export async function apiFetch<T>(
   url: string,

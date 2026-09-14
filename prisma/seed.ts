@@ -393,6 +393,14 @@ async function main() {
   })
   console.log('✓ vision: 2 cameras, 6 zones, table states + ingest key seeded')
 
+  // R14: WAL journal mode for the freshly seeded database — production
+  // default for this platform (readers never block the writer; external
+  // backup/analytics readers work alongside the live server). The mode is
+  // persistent in the DB file, so every future connection picks it up.
+  // (queryRaw, not executeRaw: the PRAGMA returns its resulting mode row.)
+  const wal = await db.$queryRawUnsafe<{ journal_mode: string }[]>('PRAGMA journal_mode=WAL')
+  console.log(`✓ journal_mode=${wal[0]?.journal_mode} enabled`)
+
   console.log('Seed complete!')
   console.log('Logins: admin@rms.com/admin123 (PIN 1234) · waiter@rms.com/waiter123 (PIN 1111) · kitchen@rms.com/kitchen123 (PIN 2222)')
 }

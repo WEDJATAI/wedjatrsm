@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Clock,
   DatabaseBackup,
+  Download,
   Info,
   Loader2,
   MoonStar,
@@ -17,9 +18,9 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 
-import { apiFetch, fetcher } from '@/lib/api'
+import { apiFetch, apiFetchBlob, fetcher } from '@/lib/api'
 import { formatTime } from '@/lib/format'
-import type { AppSettings, BackupInfo, Shift } from '@/lib/types'
+import type { AppSettings, AutoBackupStatus, BackupInfo, Shift } from '@/lib/types'
 import { useAppSettings, updateAppSettings } from '@/lib/use-settings'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -280,10 +281,12 @@ function BackupCard() {
   const queryClient = useQueryClient()
   // Shown when the API answers 501 (remote database — no local file to copy).
   const [unavailable, setUnavailable] = useState(false)
+  const [downloading, setDownloading] = useState<string | null>(null)
 
   const backupsQuery = useQuery({
     queryKey: ['backups'],
-    queryFn: () => fetcher<{ backups: BackupInfo[] }>('/api/admin/backup'),
+    queryFn: () =>
+      fetcher<{ backups: BackupInfo[]; auto: AutoBackupStatus }>('/api/admin/backup'),
     refetchInterval: 15000,
   })
 
@@ -307,6 +310,29 @@ function BackupCard() {
   })
 
   const backups = backupsQuery.data?.backups ?? []
+  const auto = backupsQuery.data?.auto
+
+  /** Authenticated download: fetch bytes with the session header, then hand
+   *  the blob to the browser as a file save (same pattern as the ETA export). */
+  const downloadBackup = async (name: string) => {
+    setDownloading(name)
+    try {
+      const blob = await apiFetchBlob(`/api/admin/backup/download?name=${encodeURIComponent(name)}`)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      toast.success(t('admin.backupDownloaded', { name }))
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setDownloading(null)
+    }
+  }
 
   return (
     <Card>
@@ -318,6 +344,23 @@ function BackupCard() {
         <CardDescription>{t('admin.backupSubtitle')}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {/* R14: auto-backup schedule status */}
+        {auto ? (
+          <p
+            className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground"
+            role="status"
+          >
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>
+              {auto.lastAt
+                ? t('admin.backupAutoStatus', { last: formatTime(auto.lastAt) })
+                : t('admin.backupAutoPending')}
+              {' '}
+              {t('admin.backupAutoRetention', { count: auto.retention })}
+            </span>
+          </p>
+        ) : null}
+
         <div className="flex items-center justify-end gap-2">
           <Button
             className="h-11"
@@ -396,6 +439,12 @@ function BackupCard() {
                     >
                       {t('admin.backupCreated')}
                     </th>
+                    <th
+                      scope="col"
+                      className="w-20 p-2.5 text-end text-xs font-medium text-muted-foreground"
+                    >
+                      <span className="sr-only">{t('admin.backupDownload')}</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -404,14 +453,40 @@ function BackupCard() {
                       key={backup.name}
                       className={cn(i === 0 && 'bg-amber-50/50 dark:bg-amber-500/5')}
                     >
-                      <td className="max-w-0 truncate p-2.5 font-mono text-xs">
-                        {backup.name}
+                      <td className="max-w-0 p-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate font-mono text-xs">{backup.name}</span>
+                          <Badge
+                            variant="outline"
+                            className="h-5 shrink-0 px-1.5 text-[10px] font-medium"
+                          >
+                            {backup.kind === 'auto'
+                              ? t('admin.backupKindAuto')
+                              : t('admin.backupKindManual')}
+                          </Badge>
+                        </div>
                       </td>
                       <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
                         {formatBackupSize(backup.sizeBytes)}
                       </td>
                       <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
                         {formatTime(backup.createdAt)}
+                      </td>
+                      <td className="p-2.5 text-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1 px-2 text-xs"
+                          disabled={downloading === backup.name}
+                          onClick={() => void downloadBackup(backup.name)}
+                        >
+                          {downloading === backup.name ? (
+                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                          ) : (
+                            <Download className="size-3.5" aria-hidden />
+                          )}
+                          {t('admin.backupDownload')}
+                        </Button>
                       </td>
                     </tr>
                   ))}

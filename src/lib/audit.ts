@@ -59,6 +59,10 @@ export const AUDIT_ACTIONS = [
   'integration.webhook',
   'order.externalCreate',
   'invoice.export',
+  // R14: data safety — consistent snapshots (auto/manual/download)
+  'backup.auto',
+  'backup.manual',
+  'backup.download',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -80,6 +84,7 @@ export type AuditInput = {
     | 'customer'
     | 'integration'
     | 'invoice'
+    | 'system'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null

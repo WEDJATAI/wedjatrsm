@@ -432,6 +432,16 @@ export type BackupInfo = {
   name: string
   sizeBytes: number
   createdAt: string
+  /** R14: how the snapshot was created (filename prefix `custom-auto|manual-`). */
+  kind?: 'auto' | 'manual'
+}
+
+/** R14: auto-backup schedule status returned by GET /api/admin/backup. */
+export type AutoBackupStatus = {
+  lastAt: string | null
+  nextAt: string | null
+  intervalHours: number
+  retention: number
 }
 
 // ─── R9: AI vision / CCTV seating intelligence ──────────────────────

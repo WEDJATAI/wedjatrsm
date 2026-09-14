@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { maybeAutoBackup } from '@/lib/backup'
 import {
   createSessionToken,
   derivePermissions,
@@ -112,6 +113,9 @@ export async function POST(req: NextRequest) {
       token,
     })
     setSessionCookie(res, token, req)
+    // R14: daily automatic backup — fire-and-forget after successful login
+    // (a POS always has at least one login per day). Never blocks the login.
+    void maybeAutoBackup()
     return res
   } catch (err) {
     return errorResponse(err)

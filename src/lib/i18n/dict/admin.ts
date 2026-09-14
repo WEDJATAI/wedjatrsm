@@ -445,7 +445,8 @@ export const adminDict: DictPair = {
 
     // ── backups ──
     'admin.backupTitle': 'Data & backups',
-    'admin.backupSubtitle': 'One-click snapshot of the database stored in /backups',
+    'admin.backupSubtitle':
+      'Consistent database snapshots (SQLite VACUUM INTO) stored in /backups — automatic daily, manual anytime',
     'admin.backupNow': 'Backup now',
     'admin.backupBackingUp': 'Backing up…',
     'admin.backupDone': 'Backup created: {name}',
@@ -458,6 +459,14 @@ export const adminDict: DictPair = {
     'admin.backupLoadFailed': 'Failed to load backups',
     'admin.backupUnavailable':
       'File backups are unavailable in this deployment (remote database)',
+    'admin.backupDownload': 'Download',
+    'admin.backupDownloaded': 'Downloaded {name}',
+    'admin.backupKindAuto': 'auto',
+    'admin.backupKindManual': 'manual',
+    'admin.backupAutoStatus': 'Automatic daily backup — last snapshot: {last}',
+    'admin.backupAutoPending':
+      'Automatic backup runs after the first login of each day',
+    'admin.backupAutoRetention': '(keeps the {count} most recent automatic snapshots)',
     'admin.hallEntrance': 'Entrance',
     'reports.deferredOutstanding': 'Deferred checks outstanding',
     'reports.deferredCount': '{n} deferred check(s)',
@@ -1066,7 +1075,8 @@ export const adminDict: DictPair = {
 
     // ── النسخ الاحتياطي ──
     'admin.backupTitle': 'البيانات والنسخ الاحتياطي',
-    'admin.backupSubtitle': 'لقطة فورية من قاعدة البيانات بنقرة واحدة تُحفظ في /backups',
+    'admin.backupSubtitle':
+      'لقطات متسقة من قاعدة البيانات (VACUUM INTO) تُحفظ في /backups — تلقائية يومياً ويدوية في أي وقت',
     'admin.backupNow': 'نسخ احتياطي الآن',
     'admin.backupBackingUp': 'جارٍ النسخ الاحتياطي…',
     'admin.backupDone': 'تم إنشاء النسخة: {name}',
@@ -1078,6 +1088,13 @@ export const adminDict: DictPair = {
     'admin.backupEmpty': 'لا توجد نسخ احتياطية بعد',
     'admin.backupLoadFailed': 'فشل تحميل النسخ الاحتياطية',
     'admin.backupUnavailable': 'النسخ الملفي غير متاح في هذا النشر (قاعدة بيانات عن بعد)',
+    'admin.backupDownload': 'تنزيل',
+    'admin.backupDownloaded': 'تم تنزيل {name}',
+    'admin.backupKindAuto': 'تلقائي',
+    'admin.backupKindManual': 'يدوي',
+    'admin.backupAutoStatus': 'نسخة احتياطية تلقائية يومية — آخر لقطة: {last}',
+    'admin.backupAutoPending': 'يعمل النسخ التلقائي بعد أول تسجيل دخول كل يوم',
+    'admin.backupAutoRetention': '(يحتفظ بأحدث {count} نسخة تلقائية)',
     'admin.hallEntrance': 'المدخل',
     'reports.deferredOutstanding': 'الحسابات المؤجلة المستحقة',
     'reports.deferredCount': '{n} حساب مؤجل',
