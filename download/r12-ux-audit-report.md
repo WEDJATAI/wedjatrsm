@@ -248,3 +248,68 @@ The existing one-click backup used a raw file copy with the documented assumptio
   documented since R9): all flows were additionally verified via DOM state + API results + audit
   trail. Dev server restarted 4× during verification (sandbox memory pressure under two concurrent
   browser sessions — environmental, not app failures; single healthy instance at close, 0 × 500).
+
+## §9 — Round 16: Integrity Verification, Git Rollback Protection, Security Hardening (2026-09-15)
+
+### 1. Nothing-deleted verification (77/77 PASS)
+`scripts/round16-verify.ts` compares the live DB against the R15 manifest:
+integrity ok · 0 FK violations · WAL · 27/27 tables · every table ≥ manifest count ·
+users/floors/cameras/zones/shisha intact · live checks #126–#133 intact · safety
+invariants hold · all 27 R11–R15 feature files present at git HEAD. One documented
+delta: R15 E2E test-residue order #312 removed with audit trail (rows 672/674).
+
+### 2. Git rollback protection (12/12 live + 8/8 manual tests)
+- `reference-transaction` guard v2: blocks non-fast-forward branch updates (incl.
+  `update-ref` without expected-old — the guard resolves the on-disk value itself),
+  checkpoint-tag deletion/rewrite (`*-stable`, `v*`, `rsm*`), main deletion, and
+  checkouts of old commits (HEAD moves to ancestors of main are refused; the
+  supported rescue is `git switch -c rescue-<date> <sha>`).
+- pack-refs/gc compatibility proven (loose→packed moves exempted by disk-state check).
+- Live DB + `backups/` untracked — no git operation can ever overwrite them.
+- Belt & suspenders: `receive.denyNonFastForwards` + `receive.denyDeletes`,
+  `post-checkout` warning net, annotated tag `round16-stable`, offline bundle
+  (`rsm-git-repository-backup.bundle`), `RECOVERY-GIT.md`.
+- Honest residuals: a *blocked* checkout may still mutate the working tree before
+  aborting (git's internal order) — repair is `git checkout main -- .`;
+  `git checkout <old> -- <path>` bypasses ref hooks (code recoverable, DB safe);
+  hooks don't travel with clones (bundle + tags are the portable protection).
+
+### 3. Security hardening (external audit: 6/10 → re-audited fixes)
+Fixed: hardcoded JWT-signing fallback replaced by per-installation crypto-random
+secrets (live .env + every Windows package) · login PIN-spray hole closed with a
+per-IP failure budget (proven live: 30 failures → 429 on #31) · manager-PIN
+enumeration throttled (5 failures/user/5min) · webhook key now admin-only cleartext
+(masked for semi-privileged roles) · user quick-login PINs admin-only (set-echo
+preserved) · 500s no longer leak internals · vision ingest key constant-time
+compare · roles enumeration gated · security headers · scaffold route removed.
+Documented tradeoffs: frame/CSP headers omitted deliberately (preview iframe),
+query-param webhook key kept (aggregator compatibility), in-memory rate limiting
+single-node.
+
+### 4. UI fixes (architecture audit 7/10)
+- Hidden-poll fix: desktop floor polls now pause while the POS is mounted-hidden
+  (was ~2 req/s per terminal forever).
+- Real error states with Retry on the money path: POS floor + mobile waiter floor
+  + My Orders (previously rendered the misleading "no tables yet" empty state on
+  API failure). Live-verified by aborting the API in-browser: error card → Retry →
+  full recovery on both surfaces.
+- 317 brand/border color literals tokenized (`bg-[#714B67]`→`bg-primary` etc.),
+  recharts switched to CSS vars, stale Tailwind-3 config deleted.
+- 24 dead scaffold files + 6 unused dependencies removed; 3 hardcoded strings
+  moved into the EN/AR dictionaries.
+
+### 5. E2E verification (this round, browser-verified)
+Desktop: login (new secret) → dashboard (8 KPI cards, tokenized classes live) →
+POS floor (live data) → error→retry→recovery → users PIN (admin) → integrations
+key (admin) → footer sticky (gap=0) + natural push. Mobile 390px: waiter portal →
+floor → error→retry→recovery → Arabic RTL (dir=rtl, zero overflow). Zero console
+errors, 0 × 500 in dev.log. Rate limiter proven live (429 toast surfaces in UI).
+
+### Honest limitations
+- Deferred by design (documented in worklog): desktop/mobile POS shared-domain
+  extraction, single NAV_REGISTRY, tablist arrow-key APG pattern, GuidedTour
+  focus trap, pre-hydration mobile detection. All are improvements, not defects.
+- The blocked-checkout tree-mutation residual (above) is inherent to git's
+  checkout ordering; the recovery path is one command.
+- agent-browser click dispatch degraded mid-session (recurring quirk): final
+  RTL toggle verified via the store's own event mechanism + DOM assertions.

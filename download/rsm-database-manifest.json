@@ -1,48 +1,54 @@
 {
-  "generatedAt": "2026-09-15T01:47:50.976Z",
-  "round": "R15 — offline-first Windows deployment + mobile role portals",
+  "generatedAt": "2026-09-15T23:52:56.263Z",
+  "round": "R16 — integrity verification, git rollback protection, security hardening (JWT secret, rate limiting, key masking), UI fixes",
   "database": {
     "file": "rsm-platform-database.db",
     "bytes": 524288,
-    "sha256": "aa6891d6b33f310e5ab3f173e195d6bd4074ee4592513cfe228db051224a4ea0",
+    "sha256": "d368a8c2ba161f554814dbcac8e2bddfd4cb827d5785f46a68ed76ce829622f0",
     "engine": "SQLite (WAL) — single embedded file",
     "integrityCheck": "ok",
     "foreignKeyViolations": 0,
     "tables": 27,
     "rowCount": {
-      "users": 3,
+      "categories": 6,
+      "floor_plans": 2,
+      "order_items": 293,
+      "recipe_components": 38,
+      "inventory_transactions": 154,
       "roles": 1,
       "attendance": 0,
       "shifts": 2,
       "app_settings": 12,
-      "categories": 6,
-      "products": 49,
-      "floor_plans": 2,
       "tables": 16,
-      "orders": 130,
-      "order_items": 294,
-      "payments": 77,
+      "users": 3,
+      "audit_logs": 674,
       "modifier_groups": 7,
       "modifiers": 24,
       "product_modifier_groups": 14,
       "cash_drawer_sessions": 2,
       "cash_drawer_entries": 2,
-      "recipe_components": 38,
-      "audit_logs": 670,
+      "payments": 77,
       "vision_cameras": 2,
       "vision_zones": 6,
       "vision_events": 86,
       "vision_table_states": 6,
       "movement_candidates": 20,
-      "inventory_transactions": 154,
-      "reservations": 2,
-      "customers": 1
+      "customers": 1,
+      "orders": 129,
+      "products": 49,
+      "reservations": 2
     }
   },
   "windowsPackage": {
     "file": "rsm-windows-x64.zip",
-    "note": "Generated on demand by an admin from Settings → Download for Windows (live or demo data). A reference copy is placed here.",
+    "note": "Generated on demand by an admin from Settings → Download for Windows (live or demo data). R16: every package now embeds its own crypto-random JWT_SECRET.",
     "launcher": "windows/install.bat → windows/start.bat → http://localhost:3000"
+  },
+  "gitProtection": {
+    "tag": "round16-stable",
+    "rollbackGuard": "reference-transaction hook: non-FF branch updates, checkpoint-tag delete/rewrite, main deletion, and old-commit checkouts are all blocked (12/12 live tests)",
+    "offlineBundle": "rsm-git-repository-backup.bundle",
+    "recoveryDoc": "RECOVERY-GIT.md"
   },
   "demoLogins": [
     {
@@ -65,6 +71,7 @@
     "passwordsBcryptOnly": true,
     "cameraStreamUrlsCredentialFree": true,
     "everyAppliedMovementHasHumanDecider": true,
-    "aiNeverMutatesPosTableStateDirectly": true
+    "aiNeverMutatesPosTableStateDirectly": true,
+    "jwtSecretPerInstallation": true
   }
 }

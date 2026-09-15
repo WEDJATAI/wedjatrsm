@@ -2,31 +2,48 @@
 
 Complete, verified database deliverable for **Lilo Cafe and Restaurant** (RSM —
 Restaurant System Management, Next.js 16 + Prisma + SQLite). Refreshed through
-Round 15 (offline-first Windows deployment, sync-when-online, mobile role portals).
+Round 16 (integrity verification, git rollback protection, security hardening,
+UI error states + color tokenization).
 
 ## Files
 
 | File | Description |
 | --- | --- |
-| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R15) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. |
-| `rsm-windows-x64.zip` | **NEW (R15)** — ready-to-run Windows package reference copy: the full platform + `windows\install.bat` + `start.bat` + bilingual README + portable `.env` + a live-data `db\custom.db`. Generated fresh from Settings → *Download for Windows* (live or demo data). |
+| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R16) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. |
+| `rsm-windows-x64.zip` | Ready-to-run Windows package reference copy: the full platform + `windows\install.bat` + `start.bat` + bilingual README + portable `.env` (R16: with its own crypto-random `JWT_SECRET`) + a live-data `db\custom.db`. Generated fresh from Settings → *Download for Windows* (live or demo data). |
 | `rsm-database-manifest.json` | Machine-readable audit manifest: SHA-256 checksum, integrity/foreign-key checks, row counts for all 27 tables, safety-invariant checks. |
+| `rsm-git-repository-backup.bundle` | **NEW (R16)** — offline git bundle: ALL branches, tags (incl. `round16-stable`) and complete history. Clone from it with `git clone rsm-git-repository-backup.bundle rsm-restored`. |
+| `RECOVERY-GIT.md` | **NEW (R16)** — git protection map + recovery procedures (what is blocked, what is allowed, how to restore). |
 | `r12-ux-audit-report.md` | Full UX audit scorecard (R11-R12), Foodics comparison, recommendations implementation record (R13), load-test & data-safety record (R14), Windows + mobile portals record (§8, R15). |
 
-## Verification (all PASS — Round 15 refresh)
+## Verification (all PASS — Round 16 refresh)
 
 - `PRAGMA integrity_check` → **ok**
 - `PRAGMA foreign_key_check` → **0 violations**
 - Table inventory → **27/27** tables present (matches `prisma/schema.prisma`)
+- **Nothing-deleted audit (R16)**: `scripts/round16-verify.ts` — 77/77 checks
+  against the R15 manifest (all counts ≥ manifest, live checks #126–#133
+  intact, one documented test-residue removal with audit trail)
 - Safety invariants: AI never writes table state (0 auto-applied movements) ·
-  bcrypt-only password hashes · no credentials embedded in camera URLs
+  bcrypt-only password hashes · no credentials embedded in camera URLs ·
+  per-installation JWT secret (R16)
 - Concurrency: 0 errors under load (see §7 of the audit report)
+
+## Git rollback protection (R16)
+
+The repository can no longer be rolled back to an older state — see
+`RECOVERY-GIT.md` for the full map. In short: a `reference-transaction` guard
+blocks `git reset --hard`, branch/tag rewrites, checkpoint-tag deletion and
+checkouts of old commits (12/12 live tests + 8/8 manual transaction tests);
+the live database and `backups/` are untracked so no git operation can ever
+overwrite them; an offline bundle + the `round16-stable` tag provide recovery
+even if the hooks are lost.
 
 ## What's inside
 
 - **Operations**: 3 users (admin / waiter / kitchen), 2 active floor plans
-  (Main Hall + Terrace), 15 tables, 49 products (6 categories incl. Shisha with
-  10 flavors + station routing), 7 modifier groups, 128 orders, payments,
+  (Main Hall + Terrace), 16 tables, 49 products (6 categories incl. Shisha with
+  10 flavors + station routing), 7 modifier groups, 129 orders, payments,
   inventory ledger, reservations, customers & loyalty, delivery webhook orders.
 - **AI Vision / CCTV (R9)**: 2 online cameras (CAM-001 Main Hall, CAM-002
   Terrace), 6 polygon zones mapped to dining tables, processed edge events
