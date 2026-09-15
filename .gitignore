@@ -52,3 +52,5 @@ prompt
 server.log
 # Skills directory
 /skills/
+# R16: tool artifact directory (session scratch)
+/tool-results/
