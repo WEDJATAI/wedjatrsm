@@ -54,3 +54,9 @@ server.log
 /skills/
 # R16: tool artifact directory (session scratch)
 /tool-results/
+
+# R16 hardening: live DB + snapshots are NEVER tracked — a git checkout
+# of an old commit can no longer clobber live data. Snapshots live on disk
+# (backups/, VACUUM INTO engine) and in git history pre-R16.
+/db/*.db*
+/backups/
