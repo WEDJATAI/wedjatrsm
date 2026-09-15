@@ -14,10 +14,13 @@ import { useAppSettings } from '@/lib/use-settings'
 
 import LoginView from '@/components/auth/login-view'
 import AppNavbar from '@/components/app-navbar'
+import MobileShell from '@/components/mobile/mobile-shell'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { IdleLogoutWatcher } from '@/components/idle-logout-watcher'
 import GuidedTour from '@/components/tour/guided-tour'
 import OfflineBanner from '@/components/offline-banner'
 import PwaRegister from '@/components/pwa-register'
+import { SyncWatcher } from '@/components/admin/sync-watcher'
 import PosView from '@/components/pos/pos-view'
 import KitchenView from '@/components/kitchen/kitchen-view'
 import DashboardView from '@/components/admin/dashboard-view'
@@ -184,6 +187,10 @@ function AdminFooter() {
 
 function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const { t } = useI18n()
+  // R15: one platform, one login — phones (< 768px) render the role-adaptive
+  // mobile shell instead of the desktop tree. useIsMobile() returns false on
+  // first render then flips on mount (documented, acceptable brief flash).
+  const isMobile = useIsMobile()
   // Round 7: the top-level view lives in the location hash (#/pos, #/kitchen,
   // #/reports… — the POS appends sub-hashes like #/pos/order/12, owned by
   // PosView). A deep-linked/refreshed hash is honored when the user is
@@ -230,6 +237,11 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
   const allowed = isViewAllowed(user, view) ? view : defaultView(user)
   const isAdminScreen = ADMIN_VIEWS.includes(allowed)
   const posAllowed = isViewAllowed(user, 'pos')
+  // R15: every view this user may open — feeds the mobile More sheet.
+  const allowedViews = useMemo(
+    () => (Object.keys(VIEW_PERMISSION) as View[]).filter((v) => isViewAllowed(user, v)),
+    [user],
+  )
 
   const content = useMemo(() => {
     switch (allowed) {
@@ -276,6 +288,41 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
     }
   }, [allowed, setView])
 
+  // ── R15: mobile branch — role-adaptive portal shell ──
+  // The Waiter Portal is the mobile POS surface and owns its own state
+  // (MobileShell keeps it mounted-hidden while other views are open, like
+  // the desktop keeps PosView). Same helpers, same setView, same hash nav.
+  // Shell-level overlays (idle timeout, tour, offline banner, PWA) stay
+  // mounted on BOTH branches.
+  if (isMobile) {
+    return (
+      <>
+        <MobileShell
+          user={user}
+          view={allowed}
+          setView={setView}
+          onLogout={onLogout}
+          allowedViews={allowedViews}
+          defaultViewName={defaultView(user)}
+          content={allowed === 'pos' ? null : content}
+          posAllowed={posAllowed}
+        />
+        {/* Idle session timeout (shared terminals) — 15 min warn + 60s countdown */}
+        <IdleLogoutWatcher onLogout={onLogout} />
+        {/* R13: first-run guided tour (replayable from the navbar ? button) */}
+        <GuidedTour user={user} />
+        {/* R13 PWA: offline queue banner (order sends queued while offline) */}
+        <OfflineBanner />
+        {/* R13 PWA: service worker registration (installable app shell) */}
+        <PwaRegister />
+        {/* R15: auto-export watcher — pushes pending updates to the cloud
+            target whenever the browser is online (silent without settings
+            permission or when auto-export is off). */}
+        <SyncWatcher />
+      </>
+    )
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       {/* R13 a11y: keyboard users can jump past the navbar to the content */}
@@ -306,6 +353,10 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
       <OfflineBanner />
       {/* R13 PWA: service worker registration (installable app shell) */}
       <PwaRegister />
+      {/* R15: auto-export watcher — pushes pending updates to the cloud
+          target whenever the browser is online (silent without settings
+          permission or when auto-export is off). */}
+      <SyncWatcher />
     </div>
   )
 }

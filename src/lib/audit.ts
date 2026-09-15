@@ -63,6 +63,12 @@ export const AUDIT_ACTIONS = [
   'backup.auto',
   'backup.manual',
   'backup.download',
+  // R15: offline-first Windows deployment — sync bundles + desktop package
+  'sync.export',
+  'sync.import',
+  'sync.push',
+  'sync.settings',
+  'desktop.package',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 

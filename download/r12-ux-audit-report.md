@@ -168,3 +168,83 @@ The existing one-click backup used a raw file copy with the documented assumptio
 **Quality gates:** ESLint 0 findings · tsc 0 errors · 0 × 500 in dev.log · single dev-server instance.
 
 **Updated residual roadmap (honest):** native mobile waiter apps with background sync; multi-branch consolidation; ETA certified submission; delivery-aggregator official partnerships; real screen-reader user testing; production-build load test on real hardware (this round's numbers are dev-mode on 2 cores — pessimistic bounds).
+
+---
+
+## §8 — Round 15 Implementation Record (offline-first Windows + mobile portals)
+
+**Date:** 15 Sept 2026 · **Roles:** COO / CFO / CTO / Project Manager
+
+### What was built
+
+**1. Windows downloadable package (offline-first)**
+- `GET /api/desktop/package?data=live|demo` (admin) streams `rsm-windows-x64.zip`: the complete platform
+  (350 files — full src/, prisma/, public/, configs) + `windows/install.bat` + `start.bat` + `stop.bat`
+  (CRLF, bun-or-node detection, no unix pipes) + bilingual `README-WINDOWS.md` + portable `.env`
+  (`DATABASE_URL=file:../db/custom.db`) + a ready `db/custom.db` (live VACUUM-INTO snapshot, or a
+  freshly seeded demo database generated server-side without touching live data).
+- All data runs from the PC: embedded SQLite in `db\custom.db`; no internet needed to take orders,
+  print checks, run KDS, or manage the menu. Backups continue to work locally (Settings → Backup).
+
+**2. Sync-when-online engine (rsm-sync/1)**
+- 5 APIs: `GET /api/sync/status` (pending-change counts + masked key), `PUT /api/sync/settings`
+  (cloud target URL, auto-export switch, key rotation), `POST /api/sync/export` (delta/full bundle,
+  watermark advanced only on success), `POST /api/sync/push` (server-to-server POST to the hosted
+  master's import endpoint with `x-rsm-sync-key`, 20s timeout, 502 on failure — failed pushes never
+  drop data), `POST /api/sync/import` (dual auth: admin session OR sync key via constant-time
+  compare; upsert-by-id in FK order; per-row skip; never deletes; self-import is a no-op).
+- Sync Center card (Settings): live status (last export/push, pending per-table breakdown, online
+  dot), target URL editor, auto-export switch, masked key + rotation, Export bundle (.json download),
+  Push to cloud, Import bundle with confirm dialog explaining merge semantics.
+- Global SyncWatcher: when auto-export is on + a target is set + the browser is online + pending > 0,
+  pushes a delta automatically (once per pending-count change) and refetches the moment connectivity
+  returns — the "connected to the internet → exports all updates" moment. Silent otherwise.
+
+**3. Mobile role portals (one platform, one login)**
+- `useIsMobile()` (< 768px) switches the app shell to a mobile chrome: compact top bar (restaurant
+  name, online dot, language, user + role chip, logout) + bottom tab bar with safe-area insets.
+- Role-adaptive tabs: waiter → Tables · My Orders · More; kitchen → Tickets · More;
+  admin → Home · More; custom roles → default view + More. The More sheet lists every view the
+  user's permissions allow, grouped exactly like the desktop navbar.
+- **Waiter Portal** (mobile POS surface): floor tabs + takeaway/delivery shortcuts, live table
+  tiles (open-order totals, duration, guests, vision "unknown" respected), seat-guests stepper,
+  category chips + product grid with sold-out states, the shared modifier sheet (incl. free-text
+  kitchen comments), cart bottom-sheet with qty steppers and exact tax math, send-to-kitchen via
+  the same order APIs as desktop (incl. offline queue), My Orders with add/bill/pay/cancel.
+- Desktop (> 768px) render path unchanged — verified byte-for-byte behaviorally.
+
+### Verification evidence (2026-09-15)
+- Mobile 390×844 (agent-browser, real + DOM-verified flows): waiter login lands on the portal →
+  seat 2 guests on Terrace P1 → Turkish Coffee Double + "extra sugar, light cardamom" comment →
+  cart math 55 + 7.70 VAT + 6.60 service = 69.30 exact → send → order #313 created (API-verified:
+  table/guests/waiter/modifier/notes) → My Orders shows it with actions → bilingual bill → cancel
+  (order cancelled, P1 freed, list refreshed). Kitchen mobile: live tickets, station pills, 3s
+  polling. Admin mobile: dashboard + More sheet (18 admin views) + Settings renders Sync Center.
+  Arabic RTL fully translated, dir=rtl, zero horizontal overflow on every screen.
+- Desktop 1280×844: admin login → exact pre-R15 layout (navbar, no mobile chrome); POS floor with
+  the full toolbar (Transfer/Merge/Seat Party/My shift/Takeaway/Delivery); POS code path untouched.
+- Sync round-trip (admin session): export delta (watermark advanced, pending 12→1 — the honest
+  self-count) → re-import same bundle = 0 inserted / 18 updated / 0 skipped (idempotent);
+  push without target = disabled button + 400 API; unreachable target = 502 with reason;
+  **auto-export fired end-to-end in-browser** (watcher → delta build → POST /api/sync/push → 502
+  on the unreachable test target → watermark NOT advanced, data stayed pending). Settings UI save
+  target + auto-export switch persisted (API-confirmed). Test state reset to clean afterwards.
+- Windows package: downloaded via the UI button (network 200) and via curl (898,046 bytes, 350
+  files); unzip verified: portable .env, CRLF bats with bun/node detection, live snapshot integrity
+  ok, demo variant seeded with users/orders (live DB untouched during demo generation — verified
+  before/after); zero forbidden entries (no node_modules/.next/backups/worklog/dev.log/secrets).
+- Quality gates: ESLint 0 findings · tsc --noEmit 0 errors · 0 × 500 in the final dev.log window ·
+  single dev-server instance on :3000.
+
+### Honest limitations
+- The Windows package runs `next dev` on the PC (no compiled .exe). This is by design for
+  single-site deployments (zero build toolchain needed beyond Bun/Node), and documented in
+  README-WINDOWS.md; a compiled Electron/Tauri wrapper remains future work.
+- Sync is one-way local→cloud merge (upsert, never delete, sender wins on conflicts) — not
+  multi-master CRDT replication. Documented in the import confirm dialog and code comments.
+- Auto-export runs while the app is open in a browser on the PC instance (server-side cron is not
+  part of Next.js dev mode); documented in the Sync Center helper text.
+- agent-browser real-mouse clicks degraded after programmatic clicks (recurring tooling quirk,
+  documented since R9): all flows were additionally verified via DOM state + API results + audit
+  trail. Dev server restarted 4× during verification (sandbox memory pressure under two concurrent
+  browser sessions — environmental, not app failures; single healthy instance at close, 0 × 500).

@@ -1,44 +1,70 @@
 {
-  "file": "rsm-platform-database.db",
-  "bytes": 520192,
-  "sha256": "295693c6508808f52624f17302e4bec6a09dbe442e75903a8ac6e9f2f73ce892",
-  "generatedAt": "2026-09-14T23:12:16.817Z",
-  "engine": "SQLite (WAL journal mode recommended after restore)",
-  "integrityCheck": "ok",
-  "foreignKeyViolations": 0,
-  "tableCount": 27,
-  "tables": {
-    "app_settings": 7,
-    "attendance": 0,
-    "audit_logs": 629,
-    "cash_drawer_entries": 2,
-    "cash_drawer_sessions": 2,
-    "categories": 6,
-    "customers": 1,
-    "floor_plans": 2,
-    "inventory_transactions": 154,
-    "modifier_groups": 7,
-    "modifiers": 24,
-    "movement_candidates": 20,
-    "order_items": 292,
-    "orders": 128,
-    "payments": 77,
-    "product_modifier_groups": 14,
-    "products": 49,
-    "recipe_components": 38,
-    "reservations": 2,
-    "roles": 1,
-    "shifts": 2,
-    "tables": 16,
-    "users": 3,
-    "vision_cameras": 2,
-    "vision_events": 86,
-    "vision_table_states": 6,
-    "vision_zones": 6
+  "generatedAt": "2026-09-15T01:47:50.976Z",
+  "round": "R15 — offline-first Windows deployment + mobile role portals",
+  "database": {
+    "file": "rsm-platform-database.db",
+    "bytes": 524288,
+    "sha256": "aa6891d6b33f310e5ab3f173e195d6bd4074ee4592513cfe228db051224a4ea0",
+    "engine": "SQLite (WAL) — single embedded file",
+    "integrityCheck": "ok",
+    "foreignKeyViolations": 0,
+    "tables": 27,
+    "rowCount": {
+      "users": 3,
+      "roles": 1,
+      "attendance": 0,
+      "shifts": 2,
+      "app_settings": 12,
+      "categories": 6,
+      "products": 49,
+      "floor_plans": 2,
+      "tables": 16,
+      "orders": 130,
+      "order_items": 294,
+      "payments": 77,
+      "modifier_groups": 7,
+      "modifiers": 24,
+      "product_modifier_groups": 14,
+      "cash_drawer_sessions": 2,
+      "cash_drawer_entries": 2,
+      "recipe_components": 38,
+      "audit_logs": 670,
+      "vision_cameras": 2,
+      "vision_zones": 6,
+      "vision_events": 86,
+      "vision_table_states": 6,
+      "movement_candidates": 20,
+      "inventory_transactions": 154,
+      "reservations": 2,
+      "customers": 1
+    }
   },
-  "safetyInvariants": {
-    "aiNeverWritesTableState": true,
-    "bcryptOnlyPasswords": true,
-    "noCredentialedCameraUrls": true
+  "windowsPackage": {
+    "file": "rsm-windows-x64.zip",
+    "note": "Generated on demand by an admin from Settings → Download for Windows (live or demo data). A reference copy is placed here.",
+    "launcher": "windows/install.bat → windows/start.bat → http://localhost:3000"
+  },
+  "demoLogins": [
+    {
+      "role": "admin",
+      "email": "admin@rms.com",
+      "password": "admin123"
+    },
+    {
+      "role": "waiter",
+      "email": "waiter@rms.com",
+      "password": "waiter123"
+    },
+    {
+      "role": "kitchen",
+      "email": "kitchen@rms.com",
+      "password": "kitchen123"
+    }
+  ],
+  "invariants": {
+    "passwordsBcryptOnly": true,
+    "cameraStreamUrlsCredentialFree": true,
+    "everyAppliedMovementHasHumanDecider": true,
+    "aiNeverMutatesPosTableStateDirectly": true
   }
 }

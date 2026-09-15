@@ -691,3 +691,52 @@ export type Reservation = {
   createdAt: string
   updatedAt: string
 }
+
+// ─── R15: Offline-first Windows deployment — sync contracts ─────────
+export type SyncPendingCounts = {
+  orders: number
+  orderItems: number
+  payments: number
+  customers: number
+  attendance: number
+  cashEntries: number
+  inventoryTransactions: number
+  reservations: number
+  auditLogs: number
+  total: number
+}
+
+export type SyncSettingsDTO = {
+  targetUrl: string
+  autoExport: boolean
+  lastExportAt: string | null
+  lastPushAt: string | null
+  syncKeyMasked: string
+  pending: SyncPendingCounts
+}
+
+export type SyncBundle = {
+  format: 'rsm-sync/1'
+  mode: 'delta' | 'full'
+  since: string | null
+  generatedAt: string
+  source: string
+  counts: Record<string, number>
+  data: {
+    customers: unknown[]
+    orders: unknown[]
+    orderItems: unknown[]
+    payments: unknown[]
+    attendance: unknown[]
+    cashEntries: unknown[]
+    inventoryTransactions: unknown[]
+    reservations: unknown[]
+    auditLogs: unknown[]
+  }
+}
+
+export type SyncImportSummary = {
+  inserted: Record<string, number>
+  updated: Record<string, number>
+  skipped: Record<string, number>
+}

@@ -1,0 +1,772 @@
+     1→'use client'
+     2→
+     3→import { useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import { toast } from 'sonner'
+     6→import {
+     7→  CalendarClock,
+     8→  Clock,
+     9→  DatabaseBackup,
+    10→  Download,
+    11→  Info,
+    12→  Loader2,
+    13→  MoonStar,
+    14→  Pencil,
+    15→  Plus,
+    16→  Save,
+    17→  ShieldAlert,
+    18→  TriangleAlert,
+    19→} from 'lucide-react'
+    20→
+    21→import { apiFetch, apiFetchBlob, fetcher } from '@/lib/api'
+    22→import { formatTime } from '@/lib/format'
+    23→import type { AppSettings, AutoBackupStatus, BackupInfo, Shift } from '@/lib/types'
+    24→import { useAppSettings, updateAppSettings } from '@/lib/use-settings'
+    25→import { useI18n } from '@/lib/i18n'
+    26→import { cn } from '@/lib/utils'
+    27→import { Badge } from '@/components/ui/badge'
+    28→import { Button } from '@/components/ui/button'
+    29→import {
+    30→  Card,
+    31→  CardContent,
+    32→  CardDescription,
+    33→  CardHeader,
+    34→  CardTitle,
+    35→} from '@/components/ui/card'
+    36→import {
+    37→  Dialog,
+    38→  DialogContent,
+    39→  DialogDescription,
+    40→  DialogFooter,
+    41→  DialogHeader,
+    42→  DialogTitle,
+    43→} from '@/components/ui/dialog'
+    44→import { Input } from '@/components/ui/input'
+    45→import { Label } from '@/components/ui/label'
+    46→import { Skeleton } from '@/components/ui/skeleton'
+    47→import { Switch } from '@/components/ui/switch'
+    48→
+    49→const TIME_INPUT_CLASS = 'h-11 text-base'
+    50→
+    51→/** true when the shift crosses midnight (e.g. 23:00 → 07:00). */
+    52→function isOvernight(shift: Pick<Shift, 'startTime' | 'endTime'>): boolean {
+    53→  return shift.endTime < shift.startTime
+    54→}
+    55→
+    56→// ─── View ───────────────────────────────────────────────────────────
+    57→
+    58→export default function SettingsView() {
+    59→  const { t } = useI18n()
+    60→  const { query: settingsQuery, settings, restaurantName, restaurantNameAr } = useAppSettings()
+    61→
+    62→  return (
+    63→    <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6">
+    64→      {/* Header — Odoo control-panel style */}
+    65→      <div className="space-y-1">
+    66→        <nav aria-label="Breadcrumb" className="text-xs text-muted-foreground">
+    67→          <span>{t('nav.home')}</span>
+    68→          <span className="mx-1.5" aria-hidden>
+    69→            /
+    70→          </span>
+    71→          <span className="font-medium text-primary">{t('nav.settings')}</span>
+    72→        </nav>
+    73→        <h1 className="text-2xl font-bold tracking-tight">{t('nav.settings')}</h1>
+    74→        <p className="text-sm text-muted-foreground">{t('admin.settingsSubtitle')}</p>
+    75→      </div>
+    76→
+    77→      {/* Card 1 — restaurant profile */}
+    78→      {settingsQuery.isLoading ? (
+    79→        <Card className="space-y-4 p-6">
+    80→          <Skeleton className="h-6 w-44" />
+    81→          <Skeleton className="h-3 w-64" />
+    82→          <Skeleton className="h-11 w-full" />
+    83→          <Skeleton className="h-11 w-28" />
+    84→        </Card>
+    85→      ) : settingsQuery.isError ? (
+    86→        <Card className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+    87→          <TriangleAlert className="size-10 text-destructive" aria-hidden />
+    88→          <p className="font-medium">
+    89→            {settingsQuery.error?.message ?? t('error.generic')}
+    90→          </p>
+    91→          <Button
+    92→            variant="outline"
+    93→            className="h-11"
+    94→            onClick={() => void settingsQuery.refetch()}
+    95→          >
+    96→            {t('common.retry')}
+    97→          </Button>
+    98→        </Card>
+    99→      ) : (
+   100→        // Keyed by the loaded names: the form (re)mounts with the fresh values
+   101→        // after the query loads or after a successful save invalidation.
+   102→        <ProfileForm
+   103→          key={`${settings?.restaurantName ?? restaurantName}|${settings?.restaurantNameAr ?? restaurantNameAr}`}
+   104→          initialName={settings?.restaurantName ?? restaurantName}
+   105→          initialNameAr={settings?.restaurantNameAr ?? restaurantNameAr}
+   106→        />
+   107→      )}
+   108→
+   109→      {/* Card 2 — security (item-deletion PIN) */}
+   110→      <SecurityCard />
+   111→
+   112→      {/* Card 3 — data & backups (one-click SQLite snapshot) */}
+   113→      <BackupCard />
+   114→
+   115→      {/* Card 4 — shifts */}
+   116→      <ShiftsCard />
+   117→    </div>
+   118→  )
+   119→}
+   120→
+   121→// ─── Restaurant profile form ────────────────────────────────────────
+   122→
+   123→function ProfileForm({ initialName, initialNameAr }: { initialName: string; initialNameAr: string }) {
+   124→  const { t } = useI18n()
+   125→  const queryClient = useQueryClient()
+   126→  const [name, setName] = useState(initialName)
+   127→  const [nameAr, setNameAr] = useState(initialNameAr)
+   128→
+   129→  const saveMutation = useMutation({
+   130→    mutationFn: () =>
+   131→      updateAppSettings(queryClient, {
+   132→        restaurantName: name.trim() || initialName,
+   133→        restaurantNameAr: nameAr,
+   134→      }),
+   135→    onSuccess: () => toast.success(t('settings.saved')),
+   136→    onError: (err: Error) => toast.error(err.message),
+   137→  })
+   138→
+   139→  const dirty = name.trim() !== initialName.trim() || nameAr.trim() !== initialNameAr.trim()
+   140→
+   141→  return (
+   142→    <Card>
+   143→      <CardHeader>
+   144→        <CardTitle>{t('settings.profile')}</CardTitle>
+   145→        <CardDescription>{t('admin.settingsProfileDesc')}</CardDescription>
+   146→      </CardHeader>
+   147→      <CardContent className="grid gap-4">
+   148→        <div className="grid gap-2">
+   149→          <Label htmlFor="restaurant-name">{t('settings.restaurantName')}</Label>
+   150→          <Input
+   151→            id="restaurant-name"
+   152→            value={name}
+   153→            onChange={(e) => setName(e.target.value)}
+   154→            className="h-11"
+   155→            maxLength={60}
+   156→            placeholder="Saffron Table"
+   157→          />
+   158→        </div>
+   159→        <div className="grid gap-2">
+   160→          <Label htmlFor="restaurant-name-ar">{t('settings.restaurantNameAr')}</Label>
+   161→          <Input
+   162→            id="restaurant-name-ar"
+   163→            lang="ar"
+   164→            dir="rtl"
+   165→            value={nameAr}
+   166→            onChange={(e) => setNameAr(e.target.value)}
+   167→            className="h-11"
+   168→            maxLength={60}
+   169→            placeholder="ليلو كافيه ومطعم"
+   170→          />
+   171→          <p className="text-xs text-muted-foreground">{t('settings.restaurantNameArHint')}</p>
+   172→        </div>
+   173→        <div className="flex items-center justify-end gap-2">
+   174→          <Button
+   175→            className="h-11"
+   176→            disabled={saveMutation.isPending || !dirty}
+   177→            onClick={() => saveMutation.mutate()}
+   178→          >
+   179→            {saveMutation.isPending ? (
+   180→              <Loader2 className="animate-spin" />
+   181→            ) : (
+   182→              <Save className="size-4" />
+   183→            )}
+   184→            {t('common.save')}
+   185→          </Button>
+   186→        </div>
+   187→      </CardContent>
+   188→    </Card>
+   189→  )
+   190→}
+   191→
+   192→// ─── Security card (item-deletion PIN) ───────────────────────────────
+   193→
+   194→/** Digit-only filter for the PIN input (paste-safe). */
+   195→const DIGITS_ONLY = /\D/g
+   196→
+   197→function SecurityCard() {
+   198→  const { t } = useI18n()
+   199→  const queryClient = useQueryClient()
+   200→  // The PIN is write-only (GET /api/settings never returns it), so the input
+   201→  // starts EMPTY: saving requires typing all 6 digits; leaving it blank keeps
+   202→  // the current PIN (no request is sent).
+   203→  const [pin, setPin] = useState('')
+   204→
+   205→  const saveMutation = useMutation({
+   206→    mutationFn: () =>
+   207→      updateAppSettings(queryClient, { deleteItemPin: pin } as Partial<AppSettings>),
+   208→    onSuccess: () => {
+   209→      toast.success(t('settings.deletePinSaved'))
+   210→      setPin('')
+   211→    },
+   212→    onError: (err: Error) => toast.error(err.message),
+   213→  })
+   214→
+   215→  const pinInvalid = pin !== '' && !/^\d{6}$/.test(pin)
+   216→
+   217→  return (
+   218→    <Card>
+   219→      <CardHeader>
+   220→        <CardTitle className="flex items-center gap-2">
+   221→          <ShieldAlert className="size-5 text-primary" aria-hidden />
+   222→          {t('settings.security')}
+   223→        </CardTitle>
+   224→        <CardDescription>{t('settings.deletePinHint')}</CardDescription>
+   225→      </CardHeader>
+   226→      <CardContent className="grid gap-4">
+   227→        <div className="grid gap-2">
+   228→          <Label htmlFor="delete-item-pin">{t('settings.deletePin')}</Label>
+   229→          <Input
+   230→            id="delete-item-pin"
+   231→            type="password"
+   232→            inputMode="numeric"
+   233→            autoComplete="new-password"
+   234→            value={pin}
+   235→            onChange={(e) => setPin(e.target.value.replace(DIGITS_ONLY, '').slice(0, 6))}
+   236→            className="h-11"
+   237→            maxLength={6}
+   238→            placeholder="••••••"
+   239→            aria-invalid={pinInvalid || undefined}
+   240→          />
+   241→          {pinInvalid ? (
+   242→            <p className="text-destructive text-xs" role="alert">
+   243→              {t('settings.deletePinInvalid')}
+   244→            </p>
+   245→          ) : (
+   246→            <p className="text-muted-foreground text-xs">
+   247→              {t('auth.pinStatus', { n: pin.length, total: 6 })}
+   248→            </p>
+   249→          )}
+   250→        </div>
+   251→        <div className="flex items-center justify-end gap-2">
+   252→          <Button
+   253→            className="h-11"
+   254→            disabled={saveMutation.isPending || pin === '' || pinInvalid}
+   255→            onClick={() => saveMutation.mutate()}
+   256→          >
+   257→            {saveMutation.isPending ? (
+   258→              <Loader2 className="animate-spin" />
+   259→            ) : (
+   260→              <Save className="size-4" />
+   261→            )}
+   262→            {t('common.save')}
+   263→          </Button>
+   264→        </div>
+   265→      </CardContent>
+   266→    </Card>
+   267→  )
+   268→}
+   269→
+   270→// ─── Data & backups card (one-click SQLite snapshot) ────────────────
+   271→
+   272→/** Human-readable file size: B below 1 KB, then KB / MB with one decimal. */
+   273→function formatBackupSize(bytes: number): string {
+   274→  if (bytes < 1024) return `${bytes} B`
+   275→  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+   276→  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+   277→}
+   278→
+   279→function BackupCard() {
+   280→  const { t } = useI18n()
+   281→  const queryClient = useQueryClient()
+   282→  // Shown when the API answers 501 (remote database — no local file to copy).
+   283→  const [unavailable, setUnavailable] = useState(false)
+   284→  const [downloading, setDownloading] = useState<string | null>(null)
+   285→
+   286→  const backupsQuery = useQuery({
+   287→    queryKey: ['backups'],
+   288→    queryFn: () =>
+   289→      fetcher<{ backups: BackupInfo[]; auto: AutoBackupStatus }>('/api/admin/backup'),
+   290→    refetchInterval: 15000,
+   291→  })
+   292→
+   293→  const backupMutation = useMutation({
+   294→    mutationFn: () =>
+   295→      apiFetch<{ backup: BackupInfo }>('/api/admin/backup', { method: 'POST' }),
+   296→    onSuccess: (data) => {
+   297→      setUnavailable(false)
+   298→      toast.success(t('admin.backupDone', { name: data.backup.name }))
+   299→      void queryClient.invalidateQueries({ queryKey: ['backups'] })
+   300→    },
+   301→    onError: (err: Error) => {
+   302→      if (/unavailable/i.test(err.message)) {
+   303→        // 501 — remote-database deployment: friendly amber note, no red toast.
+   304→        setUnavailable(true)
+   305→        toast(err.message)
+   306→      } else {
+   307→        toast.error(err.message)
+   308→      }
+   309→    },
+   310→  })
+   311→
+   312→  const backups = backupsQuery.data?.backups ?? []
+   313→  const auto = backupsQuery.data?.auto
+   314→
+   315→  /** Authenticated download: fetch bytes with the session header, then hand
+   316→   *  the blob to the browser as a file save (same pattern as the ETA export). */
+   317→  const downloadBackup = async (name: string) => {
+   318→    setDownloading(name)
+   319→    try {
+   320→      const blob = await apiFetchBlob(`/api/admin/backup/download?name=${encodeURIComponent(name)}`)
+   321→      const url = URL.createObjectURL(blob)
+   322→      const link = document.createElement('a')
+   323→      link.href = url
+   324→      link.download = name
+   325→      document.body.appendChild(link)
+   326→      link.click()
+   327→      link.remove()
+   328→      URL.revokeObjectURL(url)
+   329→      toast.success(t('admin.backupDownloaded', { name }))
+   330→    } catch (err) {
+   331→      toast.error((err as Error).message)
+   332→    } finally {
+   333→      setDownloading(null)
+   334→    }
+   335→  }
+   336→
+   337→  return (
+   338→    <Card>
+   339→      <CardHeader>
+   340→        <CardTitle className="flex items-center gap-2">
+   341→          <DatabaseBackup className="size-5 text-primary" aria-hidden />
+   342→          {t('admin.backupTitle')}
+   343→        </CardTitle>
+   344→        <CardDescription>{t('admin.backupSubtitle')}</CardDescription>
+   345→      </CardHeader>
+   346→      <CardContent className="grid gap-4">
+   347→        {/* R14: auto-backup schedule status */}
+   348→        {auto ? (
+   349→          <p
+   350→            className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground"
+   351→            role="status"
+   352→          >
+   353→            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   354→            <span>
+   355→              {auto.lastAt
+   356→                ? t('admin.backupAutoStatus', { last: formatTime(auto.lastAt) })
+   357→                : t('admin.backupAutoPending')}
+   358→              {' '}
+   359→              {t('admin.backupAutoRetention', { count: auto.retention })}
+   360→            </span>
+   361→          </p>
+   362→        ) : null}
+   363→
+   364→        <div className="flex items-center justify-end gap-2">
+   365→          <Button
+   366→            className="h-11"
+   367→            disabled={backupMutation.isPending}
+   368→            onClick={() => backupMutation.mutate()}
+   369→          >
+   370→            {backupMutation.isPending ? (
+   371→              <Loader2 className="animate-spin" />
+   372→            ) : (
+   373→              <DatabaseBackup className="size-4" />
+   374→            )}
+   375→            {backupMutation.isPending ? t('admin.backupBackingUp') : t('admin.backupNow')}
+   376→          </Button>
+   377→        </div>
+   378→
+   379→        {unavailable ? (
+   380→          <p
+   381→            className="flex items-start gap-2 rounded-lg border border-amber-600/40 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400"
+   382→            role="note"
+   383→          >
+   384→            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   385→            <span>{t('admin.backupUnavailable')}</span>
+   386→          </p>
+   387→        ) : null}
+   388→
+   389→        <div className="grid gap-2">
+   390→          <p className="text-sm font-medium">{t('admin.backupListTitle')}</p>
+   391→          {backupsQuery.isLoading ? (
+   392→            <div className="space-y-2">
+   393→              {Array.from({ length: 3 }, (_, i) => (
+   394→                <Skeleton key={i} className="h-9 w-full" />
+   395→              ))}
+   396→            </div>
+   397→          ) : backupsQuery.isError ? (
+   398→            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+   399→              <TriangleAlert className="size-10 text-destructive" aria-hidden />
+   400→              <div>
+   401→                <p className="font-medium">{t('admin.backupLoadFailed')}</p>
+   402→                <p className="text-muted-foreground text-sm">
+   403→                  {backupsQuery.error?.message ?? t('common.error')}
+   404→                </p>
+   405→              </div>
+   406→              <Button
+   407→                variant="outline"
+   408→                className="h-11"
+   409→                onClick={() => void backupsQuery.refetch()}
+   410→              >
+   411→                {t('common.retry')}
+   412→              </Button>
+   413→            </div>
+   414→          ) : backups.length === 0 ? (
+   415→            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-8 text-center">
+   416→              <DatabaseBackup className="size-10 text-muted-foreground/40" aria-hidden />
+   417→              <p className="font-medium">{t('admin.backupEmpty')}</p>
+   418→            </div>
+   419→          ) : (
+   420→            <div className="rms-scroll max-h-64 overflow-y-auto rounded-lg border">
+   421→              <table className="w-full">
+   422→                <thead className="sticky top-0 z-10 bg-muted">
+   423→                  <tr>
+   424→                    <th
+   425→                      scope="col"
+   426→                      className="p-2.5 text-start text-xs font-medium text-muted-foreground"
+   427→                    >
+   428→                      {t('admin.backupName')}
+   429→                    </th>
+   430→                    <th
+   431→                      scope="col"
+   432→                      className="w-20 p-2.5 text-end text-xs font-medium text-muted-foreground"
+   433→                    >
+   434→                      {t('admin.backupSize')}
+   435→                    </th>
+   436→                    <th
+   437→                      scope="col"
+   438→                      className="w-16 p-2.5 text-end text-xs font-medium text-muted-foreground"
+   439→                    >
+   440→                      {t('admin.backupCreated')}
+   441→                    </th>
+   442→                    <th
+   443→                      scope="col"
+   444→                      className="w-20 p-2.5 text-end text-xs font-medium text-muted-foreground"
+   445→                    >
+   446→                      <span className="sr-only">{t('admin.backupDownload')}</span>
+   447→                    </th>
+   448→                  </tr>
+   449→                </thead>
+   450→                <tbody className="divide-y">
+   451→                  {backups.map((backup, i) => (
+   452→                    <tr
+   453→                      key={backup.name}
+   454→                      className={cn(i === 0 && 'bg-amber-50/50 dark:bg-amber-500/5')}
+   455→                    >
+   456→                      <td className="max-w-0 p-2.5">
+   457→                        <div className="flex items-center gap-2">
+   458→                          <span className="truncate font-mono text-xs">{backup.name}</span>
+   459→                          <Badge
+   460→                            variant="outline"
+   461→                            className="h-5 shrink-0 px-1.5 text-[10px] font-medium"
+   462→                          >
+   463→                            {backup.kind === 'auto'
+   464→                              ? t('admin.backupKindAuto')
+   465→                              : t('admin.backupKindManual')}
+   466→                          </Badge>
+   467→                        </div>
+   468→                      </td>
+   469→                      <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
+   470→                        {formatBackupSize(backup.sizeBytes)}
+   471→                      </td>
+   472→                      <td className="p-2.5 text-end text-xs tabular-nums text-muted-foreground">
+   473→                        {formatTime(backup.createdAt)}
+   474→                      </td>
+   475→                      <td className="p-2.5 text-end">
+   476→                        <Button
+   477→                          variant="ghost"
+   478→                          size="sm"
+   479→                          className="h-8 gap-1 px-2 text-xs"
+   480→                          disabled={downloading === backup.name}
+   481→                          onClick={() => void downloadBackup(backup.name)}
+   482→                        >
+   483→                          {downloading === backup.name ? (
+   484→                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+   485→                          ) : (
+   486→                            <Download className="size-3.5" aria-hidden />
+   487→                          )}
+   488→                          {t('admin.backupDownload')}
+   489→                        </Button>
+   490→                      </td>
+   491→                    </tr>
+   492→                  ))}
+   493→                </tbody>
+   494→              </table>
+   495→            </div>
+   496→          )}
+   497→        </div>
+   498→      </CardContent>
+   499→    </Card>
+   500→  )
+   501→}
+   502→
+   503→// ─── Shifts card ────────────────────────────────────────────────────
+   504→
+   505→type ShiftForm = { name: string; startTime: string; endTime: string }
+   506→
+   507→const EMPTY_SHIFT_FORM: ShiftForm = { name: '', startTime: '09:00', endTime: '17:00' }
+   508→
+   509→function ShiftsCard() {
+   510→  const { t } = useI18n()
+   511→  const queryClient = useQueryClient()
+   512→
+   513→  const [dialogOpen, setDialogOpen] = useState(false)
+   514→  const [editing, setEditing] = useState<Shift | null>(null)
+   515→  const [form, setForm] = useState<ShiftForm>(EMPTY_SHIFT_FORM)
+   516→
+   517→  const shiftsQuery = useQuery({
+   518→    queryKey: ['shifts'],
+   519→    queryFn: () => fetcher<{ shifts: Shift[] }>('/api/shifts'),
+   520→  })
+   521→
+   522→  const shifts = [...(shiftsQuery.data?.shifts ?? [])].sort((a, b) => a.id - b.id)
+   523→
+   524→  const saveMutation = useMutation({
+   525→    mutationFn: async () => {
+   526→      const payload = {
+   527→        name: form.name.trim(),
+   528→        startTime: form.startTime,
+   529→        endTime: form.endTime,
+   530→      }
+   531→      return editing === null
+   532→        ? apiFetch<{ shift: Shift }>('/api/shifts', { method: 'POST', body: payload })
+   533→        : apiFetch<{ shift: Shift }>(`/api/shifts/${editing.id}`, {
+   534→            method: 'PUT',
+   535→            body: payload,
+   536→          })
+   537→    },
+   538→    onSuccess: () => {
+   539→      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+   540→      toast.success(editing === null ? t('admin.shiftCreated') : t('admin.shiftUpdated'))
+   541→      setDialogOpen(false)
+   542→    },
+   543→    onError: (err: Error) => toast.error(err.message),
+   544→  })
+   545→
+   546→  const toggleMutation = useMutation({
+   547→    mutationFn: ({ id, active }: { id: number; active: boolean }) =>
+   548→      apiFetch<{ shift: Shift }>(`/api/shifts/${id}`, { method: 'PUT', body: { active } }),
+   549→    onMutate: async ({ id, active }) => {
+   550→      await queryClient.cancelQueries({ queryKey: ['shifts'] })
+   551→      const prev = queryClient.getQueryData<{ shifts: Shift[] }>(['shifts'])
+   552→      if (prev) {
+   553→        queryClient.setQueryData(['shifts'], {
+   554→          shifts: prev.shifts.map((s) => (s.id === id ? { ...s, active } : s)),
+   555→        })
+   556→      }
+   557→      return { prev }
+   558→    },
+   559→    onSuccess: (_data, vars) => {
+   560→      toast.success(vars.active ? t('admin.shiftActivated') : t('admin.shiftDeactivated'))
+   561→    },
+   562→    onError: (err: Error, _vars, ctx) => {
+   563→      if (ctx?.prev) queryClient.setQueryData(['shifts'], ctx.prev)
+   564→      toast.error(err.message)
+   565→    },
+   566→    onSettled: () => {
+   567→      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+   568→    },
+   569→  })
+   570→
+   571→  function openCreate() {
+   572→    setEditing(null)
+   573→    setForm(EMPTY_SHIFT_FORM)
+   574→    setDialogOpen(true)
+   575→  }
+   576→
+   577→  function openEdit(shift: Shift) {
+   578→    setEditing(shift)
+   579→    setForm({ name: shift.name, startTime: shift.startTime, endTime: shift.endTime })
+   580→    setDialogOpen(true)
+   581→  }
+   582→
+   583→  const isCreate = editing === null
+   584→  const nameError = form.name.trim() === '' ? t('admin.shiftNameRequired') : undefined
+   585→  const timesError =
+   586→    form.startTime === '' || form.endTime === '' ? t('admin.shiftTimesRequired') : undefined
+   587→
+   588→  return (
+   589→    <Card>
+   590→      <CardHeader>
+   591→        <CardTitle className="flex flex-wrap items-center justify-between gap-3">
+   592→          <span>{t('shift.shifts')}</span>
+   593→          <Button variant="outline" size="sm" className="h-9" onClick={openCreate}>
+   594→            <Plus className="size-4" /> {t('admin.addShift')}
+   595→          </Button>
+   596→        </CardTitle>
+   597→        <CardDescription>{t('admin.settingsShiftsDesc')}</CardDescription>
+   598→      </CardHeader>
+   599→      <CardContent className="space-y-3">
+   600→        {shiftsQuery.isLoading ? (
+   601→          <div className="space-y-2">
+   602→            {Array.from({ length: 2 }, (_, i) => (
+   603→              <Skeleton key={i} className="h-14 w-full" />
+   604→            ))}
+   605→          </div>
+   606→        ) : shiftsQuery.isError ? (
+   607→          <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+   608→            <TriangleAlert className="size-10 text-destructive" aria-hidden />
+   609→            <div>
+   610→              <p className="font-medium">{t('admin.loadShiftsFailed')}</p>
+   611→              <p className="text-muted-foreground text-sm">
+   612→                {shiftsQuery.error?.message ?? t('common.error')}
+   613→              </p>
+   614→            </div>
+   615→            <Button
+   616→              variant="outline"
+   617→              className="h-11"
+   618→              onClick={() => void shiftsQuery.refetch()}
+   619→            >
+   620→              {t('common.retry')}
+   621→            </Button>
+   622→          </div>
+   623→        ) : shifts.length === 0 ? (
+   624→          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-10 text-center">
+   625→            <CalendarClock className="size-10 text-muted-foreground/40" aria-hidden />
+   626→            <p className="font-medium">{t('admin.noShifts')}</p>
+   627→            <p className="text-sm text-muted-foreground">{t('admin.noShiftsHint')}</p>
+   628→            <Button variant="outline" className="h-11" onClick={openCreate}>
+   629→              <Plus /> {t('admin.addShift')}
+   630→            </Button>
+   631→          </div>
+   632→        ) : (
+   633→          <div className="divide-y rounded-lg border">
+   634→            {shifts.map((shift) => (
+   635→              <div
+   636→                key={shift.id}
+   637→                className={cn(
+   638→                  'flex flex-wrap items-center gap-3 p-3',
+   639→                  !shift.active && 'bg-muted/40',
+   640→                )}
+   641→              >
+   642→                <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+   643→                <div className="min-w-0 flex-1">
+   644→                  <div className="flex flex-wrap items-center gap-2">
+   645→                    <p
+   646→                      className={cn(
+   647→                        'truncate text-sm font-semibold',
+   648→                        !shift.active && 'text-muted-foreground',
+   649→                      )}
+   650→                    >
+   651→                      {shift.name}
+   652→                    </p>
+   653→                    {isOvernight(shift) && (
+   654→                      <Badge
+   655→                        variant="outline"
+   656→                        className="gap-1 border-violet-500/30 bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-400"
+   657→                      >
+   658→                        <MoonStar className="size-3" aria-hidden />
+   659→                        {t('admin.overnight')}
+   660→                      </Badge>
+   661→                    )}
+   662→                  </div>
+   663→                  <p className="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">
+   664→                    {shift.startTime} – {shift.endTime}
+   665→                  </p>
+   666→                </div>
+   667→                <div className="flex shrink-0 items-center gap-1">
+   668→                  <Button
+   669→                    variant="ghost"
+   670→                    size="icon"
+   671→                    className="size-11 text-muted-foreground"
+   672→                    onClick={() => openEdit(shift)}
+   673→                    aria-label={`${t('common.edit')} ${shift.name}`}
+   674→                  >
+   675→                    <Pencil />
+   676→                  </Button>
+   677→                  <Switch
+   678→                    checked={shift.active}
+   679→                    disabled={toggleMutation.isPending && toggleMutation.variables?.id === shift.id}
+   680→                    onCheckedChange={(checked) =>
+   681→                      toggleMutation.mutate({ id: shift.id, active: checked })
+   682→                    }
+   683→                    aria-label={`${t('common.active')}: ${shift.name}`}
+   684→                  />
+   685→                </div>
+   686→              </div>
+   687→            ))}
+   688→          </div>
+   689→        )}
+   690→
+   691→        <p className="flex items-start gap-2 rounded-lg border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
+   692→          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   693→          <span>{t('shift.note')}</span>
+   694→        </p>
+   695→      </CardContent>
+   696→
+   697→      {/* Add / edit shift dialog */}
+   698→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   699→        <DialogContent className="sm:max-w-md">
+   700→          <DialogHeader>
+   701→            <DialogTitle>
+   702→              {isCreate ? t('admin.addShift') : `${t('admin.editShift')} — ${editing?.name ?? ''}`}
+   703→            </DialogTitle>
+   704→            <DialogDescription>{t('admin.shiftDialogDesc')}</DialogDescription>
+   705→          </DialogHeader>
+   706→          <div className="grid gap-4">
+   707→            <div className="grid gap-2">
+   708→              <Label htmlFor="shift-name">{t('admin.shiftName')} *</Label>
+   709→              <Input
+   710→                id="shift-name"
+   711→                value={form.name}
+   712→                onChange={(e) => setForm({ ...form, name: e.target.value })}
+   713→                placeholder={t('admin.shiftNamePlaceholder')}
+   714→                className="h-11"
+   715→                aria-invalid={nameError ? true : undefined}
+   716→              />
+   717→              {nameError ? <p className="text-destructive text-xs">{nameError}</p> : null}
+   718→            </div>
+   719→            <div className="grid grid-cols-2 gap-4">
+   720→              <div className="grid gap-2">
+   721→                <Label htmlFor="shift-start">{t('shift.startTime')} *</Label>
+   722→                <Input
+   723→                  id="shift-start"
+   724→                  type="time"
+   725→                  value={form.startTime}
+   726→                  onChange={(e) => setForm({ ...form, startTime: e.target.value })}
+   727→                  className={TIME_INPUT_CLASS}
+   728→                  aria-invalid={timesError ? true : undefined}
+   729→                />
+   730→              </div>
+   731→              <div className="grid gap-2">
+   732→                <Label htmlFor="shift-end">{t('shift.endTime')} *</Label>
+   733→                <Input
+   734→                  id="shift-end"
+   735→                  type="time"
+   736→                  value={form.endTime}
+   737→                  onChange={(e) => setForm({ ...form, endTime: e.target.value })}
+   738→                  className={TIME_INPUT_CLASS}
+   739→                  aria-invalid={timesError ? true : undefined}
+   740→                />
+   741→              </div>
+   742→            </div>
+   743→            {timesError ? <p className="text-destructive text-xs">{timesError}</p> : null}
+   744→          </div>
+   745→          <DialogFooter>
+   746→            <Button
+   747→              variant="outline"
+   748→              className="h-11"
+   749→              onClick={() => setDialogOpen(false)}
+   750→              disabled={saveMutation.isPending}
+   751→            >
+   752→              {t('common.cancel')}
+   753→            </Button>
+   754→            <Button
+   755→              className="h-11"
+   756→              disabled={saveMutation.isPending || nameError !== undefined || timesError !== undefined}
+   757→              onClick={() => saveMutation.mutate()}
+   758→            >
+   759→              {saveMutation.isPending ? (
+   760→                <Loader2 className="animate-spin" />
+   761→              ) : (
+   762→                <Plus />
+   763→              )}
+   764→              {isCreate ? t('admin.addShift') : t('common.save')}
+   765→            </Button>
+   766→          </DialogFooter>
+   767→        </DialogContent>
+   768→      </Dialog>
+   769→    </Card>
+   770→  )
+   771→}
+   772→

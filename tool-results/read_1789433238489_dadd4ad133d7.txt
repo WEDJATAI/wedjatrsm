@@ -1,0 +1,1385 @@
+     1→'use client'
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import { ArrowLeftRight, Ban, Check, ChevronLeft, Combine, Loader2, Minus, Plus, Users } from 'lucide-react'
+     6→
+     7→import {
+     8→  AlertDialog,
+     9→  AlertDialogAction,
+    10→  AlertDialogCancel,
+    11→  AlertDialogContent,
+    12→  AlertDialogDescription,
+    13→  AlertDialogFooter,
+    14→  AlertDialogHeader,
+    15→  AlertDialogTitle,
+    16→} from '@/components/ui/alert-dialog'
+    17→import { Badge } from '@/components/ui/badge'
+    18→import { Button } from '@/components/ui/button'
+    19→import {
+    20→  Dialog,
+    21→  DialogContent,
+    22→  DialogDescription,
+    23→  DialogFooter,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→} from '@/components/ui/dialog'
+    27→import { apiFetch, fetcher } from '@/lib/api'
+    28→import { MAX_GUESTS, MIN_GUESTS } from '@/lib/constants'
+    29→import { elapsedSince, formatCurrency } from '@/lib/format'
+    30→import { useI18n } from '@/lib/i18n'
+    31→import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
+    32→import { enqueueOfflineAction } from '@/lib/offline-queue'
+    33→import { cn } from '@/lib/utils'
+    34→import { toast } from 'sonner'
+    35→import type { Customer, FloorPlan, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
+    36→import CartPanel from './cart-panel'
+    37→import CheckModal from './check-modal'
+    38→import ModifierSheet, { type ModifierSheetSelection } from './modifier-sheet'
+    39→import PaymentModal from './payment-modal'
+    40→import MyShiftSheet from './my-shift-sheet'
+    41→import ReceiptModal from './receipt-modal'
+    42→import ProductGrid from './product-grid'
+    43→import TableSelect from './table-select'
+    44→import { guessCourse, modifierSignature, newDraftKey, round2, type DraftItem } from './pos-utils'
+    45→
+    46→/** Who the guests dialog edits: a fresh table draft, the unsent draft guest
+    47→ *  count, the persisted guests value of an existing order, or a Seat Party
+    48→ *  (multi-table seating) about to enter order mode. */
+    49→type GuestsTarget =
+    50→  | { kind: 'new-table'; table: RestaurantTable }
+    51→  | { kind: 'draft' }
+    52→  | { kind: 'order'; orderId: number }
+    53→  | { kind: 'seat-party' }
+    54→  | null
+    55→
+    56→const GUEST_QUICK_CHIPS = [1, 2, 3, 4, 5, 6, 7, 8]
+    57→
+    58→/** Table-less order kinds (R11): takeaway + delivery both skip tables. */
+    59→type OrderKind = 'dinein' | 'takeaway' | 'delivery'
+    60→
+    61→const DELIVERY_INFO_KEY = 'rms-delivery-info'
+    62→
+    63→/** Persist the delivery contact for this tab (survives a reload on
+    64→ *  '#/pos/delivery' so the screen can be restored after a refresh). */
+    65→function persistDeliveryInfo(info: { phone: string; address: string } | null): void {
+    66→  try {
+    67→    if (info) window.sessionStorage.setItem(DELIVERY_INFO_KEY, JSON.stringify(info))
+    68→    else window.sessionStorage.removeItem(DELIVERY_INFO_KEY)
+    69→  } catch {
+    70→    // storage unavailable — in-memory state still covers the session
+    71→  }
+    72→}
+    73→
+    74→function readDeliveryInfo(): { phone: string; address: string } | null {
+    75→  try {
+    76→    const raw = window.sessionStorage.getItem(DELIVERY_INFO_KEY)
+    77→    if (!raw) return null
+    78→    const parsed: unknown = JSON.parse(raw)
+    79→    if (parsed && typeof parsed === 'object' && typeof (parsed as { phone?: unknown }).phone === 'string') {
+    80→      const address = (parsed as { address?: unknown }).address
+    81→      return {
+    82→        phone: (parsed as { phone: string }).phone,
+    83→        address: typeof address === 'string' ? address : '',
+    84→      }
+    85→    }
+    86→  } catch {
+    87→    // corrupt entry — ignore
+    88→  }
+    89→  return null
+    90→}
+    91→
+    92→/** `active` — true while the POS view is the visible top-level view. page.tsx
+    93→ *  keeps PosView mounted (hidden) when the user switches views so the order
+    94→ *  state survives; defaults to true when the prop is not passed. */
+    95→/** R13 PWA: read the mirrored product catalog (undefined when never cached). */
+    96→function readProductsCache(): { products: Product[] } | undefined {
+    97→  if (typeof window === 'undefined') return undefined
+    98→  try {
+    99→    const raw = window.localStorage.getItem('rms-pos-products-cache')
+   100→    if (!raw) return undefined
+   101→    const parsed: unknown = JSON.parse(raw)
+   102→    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { products?: unknown }).products)) {
+   103→      return parsed as { products: Product[] }
+   104→    }
+   105→  } catch {
+   106→    // corrupt cache — treat as absent
+   107→  }
+   108→  return undefined
+   109→}
+   110→
+   111→export default function PosView({ active = true }: { active?: boolean }) {
+   112→  const queryClient = useQueryClient()
+   113→  const { t } = useI18n()
+   114→
+   115→  // ── State machine ────────────────────────────────────────────────
+   116→  const [mode, setMode] = useState<'tables' | 'order'>('tables')
+   117→  const [selectedTable, setSelectedTable] = useState<{ id: number | null; name: string } | null>(null)
+   118→  const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
+   119→  const [draft, setDraft] = useState<DraftItem[]>([])
+   120→  const [sending, setSending] = useState(false)
+   121→  // R13: loyalty — customer attached to the DRAFT (sent with the create
+   122→  // payload; existing orders attach via PUT /api/orders/[id]).
+   123→  const [draftCustomer, setDraftCustomer] = useState<Customer | null>(null)
+   124→
+   125→  // Guest count for the order that will be created from this screen
+   126→  // (takeaway defaults to 1, table drafts to the dialog value).
+   127→  const [guestsDraft, setGuestsDraft] = useState(2)
+   128→
+   129→  // Guests dialog (create-before-order-mode + edit on the order screen).
+   130→  const [guestsDialogOpen, setGuestsDialogOpen] = useState(false)
+   131→  // R8: per-server shift closeout sheet ("My shift" button on the floor)
+   132→  const [myShiftOpen, setMyShiftOpen] = useState(false)
+   133→  const [guestsValue, setGuestsValue] = useState(2)
+   134→  const [guestsTarget, setGuestsTarget] = useState<GuestsTarget>(null)
+   135→
+   136→  // Order being transferred (passed to TableSelect → starts at destination step).
+   137→  const [transferOrderId, setTransferOrderId] = useState<number | null>(null)
+   138→
+   139→  // Round5 Seat Party: the free tables picked on the floor, awaiting the
+   140→  // guests dialog before entering order mode.
+   141→  const [pendingSeatTables, setPendingSeatTables] = useState<RestaurantTable[] | null>(null)
+   142→  // Round5: the full seating list backing this order screen (merged seating
+   143→  // from the beginning). null/[single] = a regular single-table order.
+   144→  const [seatingTables, setSeatingTables] = useState<{ id: number; name: string }[] | null>(null)
+   145→
+   146→  const [payOpen, setPayOpen] = useState(false)
+   147→  const [payOrder, setPayOrder] = useState<Order | null>(null)
+   148→  const [checkOpen, setCheckOpen] = useState(false)
+   149→  const [checkOrder, setCheckOrder] = useState<Order | null>(null)
+   150→  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
+   151→  const [cancelOpen, setCancelOpen] = useState(false)
+   152→
+   153→  // R8: product tapped on the grid that has option groups — the modifier
+   154→  // sheet opens instead of an instant add (plain products add directly).
+   155→  const [sheetProduct, setSheetProduct] = useState<Product | null>(null)
+   156→
+   157→  // R11: order-type context of this screen — 'dinein' (table-bound),
+   158→  // 'takeaway' or 'delivery' (both table-less). Kept in a ref only: every
+   159→  // read is inside event handlers / entry helpers (header text comes from
+   160→  // selectedTable.name), so no render ever depends on it.
+   161→  const orderKindRef = useRef<OrderKind>('dinein')
+   162→  // R11: delivery contact backing a table-less delivery draft (phone is
+   163→  // required by the API when the order is created).
+   164→  const [deliveryInfo, setDeliveryInfo] = useState<{ phone: string; address: string } | null>(null)
+   165→
+   166→  /** Apply the order-type context (ref + persisted delivery info). */
+   167→  const applyKind = useCallback((kind: OrderKind, info: { phone: string; address: string } | null = null) => {
+   168→    orderKindRef.current = kind
+   169→    const effective = kind === 'delivery' ? info : null
+   170→    setDeliveryInfo(effective)
+   171→    persistDeliveryInfo(effective)
+   172→  }, [])
+   173→
+   174→  // ── Round 7: history-aware navigation (browser/OS back button) ────
+   175→  // Unsent drafts stashed per context (table:N / takeaway) so going back
+   176→  // never loses items that were never sent to the kitchen.
+   177→  const draftStashRef = useRef<Map<string, DraftItem[]>>(new Map())
+   178→  // Sub-hash of the screen the state currently shows ('order/5', 'table/7',
+   179→  // 'takeaway'; null = floor). Set SYNCHRONOUSLY by the entry helpers so the
+   180→  // onNav idempotency checks hold even before React re-renders — a single
+   181→  // back press can fire both popstate and hashchange.
+   182→  const appliedNavRef = useRef<string | null>(null)
+   183→  // True only while a restore applies state through an entry helper: navPush()
+   184→  // stays silent then, so popstate-driven restores never add duplicate
+   185→  // history entries (otherwise Back would bounce forward).
+   186→  const suppressNavPushRef = useRef(false)
+   187→  // In-flight restore target + epoch: rejects duplicate restores (the
+   188→  // popstate/hashchange double fire) and aborts stale ones when the user
+   189→  // navigates again mid-flight.
+   190→  const navInFlightRef = useRef<string | null>(null)
+   191→  const navEpochRef = useRef(0)
+   192→  // Latest onNav handler (single subscription, always-fresh state).
+   193→  const navHandlerRef = useRef<(nav: NavHash | null) => void>(() => {})
+   194→  // Previous `active` value — detects the hidden → visible flip used to
+   195→  // re-assert the deep hash after page.tsx pushed a shallow '#/pos'.
+   196→  const prevActiveRef = useRef(active)
+   197→
+   198→  // 30s tick so elapsed times stay fresh.
+   199→  const [elapsedTick, setElapsedTick] = useState(0)
+   200→  useEffect(() => {
+   201→    if (mode !== 'order') return
+   202→    const timer = window.setInterval(() => setElapsedTick((x) => x + 1), 30000)
+   203→    return () => window.clearInterval(timer)
+   204→  }, [mode])
+   205→
+   206→  // ── Session (for cancel permission display — server enforces anyway) ──
+   207→  const { data: sessionData } = useQuery({
+   208→    queryKey: ['session'],
+   209→    queryFn: () => fetcher<{ user: SessionUser }>('/api/auth/me'),
+   210→    retry: false,
+   211→    staleTime: 5 * 60 * 1000,
+   212→  })
+   213→  const user = sessionData?.user
+   214→
+   215→  // ── Live order (poll while open) ─────────────────────────────────
+   216→  const { data: orderData, isLoading: orderLoading } = useQuery({
+   217→    queryKey: ['pos-order', activeOrderId],
+   218→    queryFn: () => fetcher<{ order: Order }>(`/api/orders/${activeOrderId}`),
+   219→    enabled: mode === 'order' && activeOrderId != null,
+   220→    refetchInterval: 5000,
+   221→  })
+   222→  const order: Order | null =
+   223→    mode === 'order' && activeOrderId != null ? (orderData?.order ?? null) : null
+   224→
+   225→  // ── Products ─────────────────────────────────────────────────────
+   226→  // R13 PWA: the sellable catalog is mirrored to localStorage so an offline
+   227→  // terminal (or a reload while offline) still shows the menu — the query
+   228→  // refetches normally whenever the network is back. Slightly-stale menu
+   229→  // offline is the honest trade-off vs. a blank grid.
+   230→  const productsQuery = useQuery({
+   231→    queryKey: ['pos-products'],
+   232→    queryFn: async () => {
+   233→      const fetched = await fetcher<{ products: Product[] }>('/api/products?sellable=1')
+   234→      try {
+   235→        window.localStorage.setItem('rms-pos-products-cache', JSON.stringify(fetched))
+   236→      } catch {
+   237→        // storage unavailable — cache skip is non-fatal
+   238→      }
+   239→      return fetched
+   240→    },
+   241→    enabled: mode === 'order',
+   242→    staleTime: 15000,
+   243→    placeholderData: readProductsCache(),
+   244→  })
+   245→  const productsData = productsQuery.data
+   246→  const products = productsData?.products ?? []
+   247→
+   248→  // ── Newly-ready items → toast (once) ─────────────────────────────
+   249→  // PosView stays mounted while another view is active (page.tsx keeps it
+   250→  // hidden), so only toast while the POS is actually on screen — the ref
+   251→  // still tracks readiness so nothing double-fires on return.
+   252→  const readyRef = useRef<Set<number> | null>(null)
+   253→  useEffect(() => {
+   254→    if (!order) {
+   255→      readyRef.current = null
+   256→      return
+   257→    }
+   258→    const readyIds = new Set(order.items.filter((i) => i.status === 'ready').map((i) => i.id))
+   259→    const prev = readyRef.current
+   260→    if (prev) {
+   261→      const newlyReady = order.items.filter((i) => i.status === 'ready' && !prev.has(i.id))
+   262→      if (newlyReady.length > 0 && active) {
+   263→        toast.success(
+   264→          t('pos.readyToast', {
+   265→            n: newlyReady.length,
+   266→            table: selectedTable?.name ?? t('pos.order'),
+   267→          }),
+   268→        )
+   269→      }
+   270→    }
+   271→    readyRef.current = readyIds
+   272→  }, [order, selectedTable?.name, t, active])
+   273→
+   274→  // ── Helpers ──────────────────────────────────────────────────────
+   275→  const clampGuests = useCallback(
+   276→    (raw: number) => {
+   277→      const n = Math.round(Number.isFinite(raw) ? raw : 2)
+   278→      return Math.min(MAX_GUESTS, Math.max(MIN_GUESTS, n))
+   279→    },
+   280→    [],
+   281→  )
+   282→
+   283→  // ── Round 7: nav + draft-stash helpers ───────────────────────────
+   284→
+   285→  /** pushNav wrapper — silent while a restore applies state (restores must
+   286→   *  not create history entries); a user-initiated push supersedes any
+   287→   *  in-flight restore (aborts it via the epoch). */
+   288→  const navPush = (view: string, sub?: string | null) => {
+   289→    if (suppressNavPushRef.current) return
+   290→    if (navInFlightRef.current != null) navEpochRef.current += 1
+   291→    pushNav(view, sub)
+   292→  }
+   293→
+   294→  /** Stash key for a draft context (per-table, takeaway or delivery). */
+   295→  const draftStashKey = (table: { id: number | null } | null) =>
+   296→    table?.id != null ? `table:${table.id}` : orderKindRef.current === 'delivery' ? 'delivery' : 'takeaway'
+   297→
+   298→  /** Stash the unsent draft of the current context before leaving it. */
+   299→  const stashDraft = () => {
+   300→    if (draft.length > 0) {
+   301→      draftStashRef.current.set(draftStashKey(selectedTable), draft)
+   302→    }
+   303→  }
+   304→
+   305→  /** Pop a stashed draft for `key`: restored (with a toast) when non-empty;
+   306→   *  the entry is removed either way so stashes never leak. */
+   307→  const restoreStash = (key: string, label: string) => {
+   308→    const stashed = draftStashRef.current.get(key)
+   309→    draftStashRef.current.delete(key)
+   310→    if (stashed?.length) {
+   311→      setDraft(stashed)
+   312→      toast.success(t('pos.draftRestoredToast', { table: label }))
+   313→    }
+   314→  }
+   315→
+   316→  /** Run a state-applying entry helper with nav pushes suppressed. */
+   317→  const withNavSuppression = (fn: () => void) => {
+   318→    suppressNavPushRef.current = true
+   319→    try {
+   320→      fn()
+   321→    } finally {
+   322→      suppressNavPushRef.current = false
+   323→    }
+   324→  }
+   325→
+   326→  /** Leave order mode for the floor: stash any unsent draft, full state
+   327→   *  reset, then rewrite the current history entry to '#/pos' (replace, never
+   328→   *  push — the in-app back button must not spam history). Every exit path
+   329→   *  goes through here, so the browser back button and the in-app button
+   330→   *  land the user on the floor with the same draft preservation. */
+   331→  const resetToTables = () => {
+   332→    stashDraft()
+   333→    setMode('tables')
+   334→    setSelectedTable(null)
+   335→    setActiveOrderId(null)
+   336→    setDraft([])
+   337→    setGuestsDraft(2)
+   338→    setGuestsDialogOpen(false)
+   339→    setGuestsTarget(null)
+   340→    setPayOpen(false)
+   341→    setPayOrder(null)
+   342→    setCheckOpen(false)
+   343→    setCheckOrder(null)
+   344→    setCancelOpen(false)
+   345→    setTransferOrderId(null)
+   346→    setSheetProduct(null)
+   347→    setPendingSeatTables(null)
+   348→    setSeatingTables(null)
+   349→    readyRef.current = null
+   350→    appliedNavRef.current = null
+   351→    replaceNav('pos')
+   352→  }
+   353→
+   354→  const invalidateShared = useCallback(
+   355→    async () => {
+   356→      await Promise.all([
+   357→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   358→        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
+   359→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   360→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   361→        queryClient.invalidateQueries({ queryKey: ['pos-products'] }),
+   362→      ])
+   363→    },
+   364→    [queryClient],
+   365→  )
+   366→
+   367→  /** Enter order mode for a table (occupied → live order, free → fresh draft). */
+   368→  const applySelectTable = (table: RestaurantTable, guests: number) => {
+   369→    setSelectedTable({ id: table.id, name: table.name })
+   370→    setMode('order')
+   371→    setDraft([])
+   372→    setTransferOrderId(null)
+   373→    setGuestsDraft(clampGuests(guests))
+   374→    setSeatingTables([{ id: table.id, name: table.name }])
+   375→    applyKind('dinein')
+   376→    readyRef.current = null
+   377→    if (table.openOrderId) {
+   378→      setActiveOrderId(table.openOrderId)
+   379→    } else {
+   380→      setActiveOrderId(null)
+   381→    }
+   382→    appliedNavRef.current = table.openOrderId ? `order/${table.openOrderId}` : `table/${table.id}`
+   383→    // Entering an order screen adds a history entry (occupied → live order
+   384→    // hash, free → table draft hash); silent during popstate restores.
+   385→    navPush('pos', table.openOrderId ? `order/${table.openOrderId}` : `table/${table.id}`)
+   386→    // Re-entering a table pops its stashed unsent draft — occupied or free:
+   387→    // a waiter may have backed out of this table with items not yet sent.
+   388→    restoreStash(`table:${table.id}`, table.name)
+   389→  }
+   390→
+   391→  // Table clicked on the floor: occupied tables open their order directly;
+   392→  // a FREE table first asks for the number of guests (quick dialog), then
+   393→  // enters order mode with that guest count baked into the draft.
+   394→  const selectTable = (table: RestaurantTable) => {
+   395→    if (table.openOrderId != null) {
+   396→      applySelectTable(table, table.openOrderGuests ?? 2)
+   397→      return
+   398→    }
+   399→    setGuestsTarget({ kind: 'new-table', table })
+   400→    setGuestsValue(2)
+   401→    setGuestsDialogOpen(true)
+   402→  }
+   403→
+   404→  const startTakeaway = () => {
+   405→    setSelectedTable({ id: null, name: t('common.takeaway') })
+   406→    setMode('order')
+   407→    setDraft([])
+   408→    setActiveOrderId(null)
+   409→    setTransferOrderId(null)
+   410→    setGuestsDraft(1) // takeaway orders default to a single guest — no dialog
+   411→    setSeatingTables(null) // no tables — tableIds stays unset
+   412→    applyKind('takeaway') // R11: orderType 'takeaway' on creation
+   413→    readyRef.current = null
+   414→    appliedNavRef.current = 'takeaway'
+   415→    navPush('pos', 'takeaway')
+   416→    restoreStash('takeaway', t('common.takeaway'))
+   417→  }
+   418→
+   419→  /** R11: enter order mode for a table-less DELIVERY draft — exactly like
+   420→   *  takeaway, but the header reads 'Delivery · {phone}' and the eventual
+   421→   *  order-creation body carries orderType 'delivery' + the contact. */
+   422→  const startDelivery = (phone: string, address: string) => {
+   423→    setSelectedTable({ id: null, name: `${t('pos.delivery')} · ${phone}` })
+   424→    setMode('order')
+   425→    setDraft([])
+   426→    setActiveOrderId(null)
+   427→    setTransferOrderId(null)
+   428→    setGuestsDraft(1) // one delivery customer — no guests dialog
+   429→    setSeatingTables(null) // no tables — delivery MUST NOT carry a tableId
+   430→    applyKind('delivery', { phone, address })
+   431→    readyRef.current = null
+   432→    appliedNavRef.current = 'delivery'
+   433→    navPush('pos', 'delivery')
+   434→    restoreStash('delivery', t('pos.delivery'))
+   435→  }
+   436→
+   437→  /** Open a table-less order (takeaway OR delivery) from the floor chips. */
+   438→  const openTablelessOrder = (o: Order) => {
+   439→    const isDelivery = o.orderType === 'delivery'
+   440→    setSelectedTable({
+   441→      id: null,
+   442→      name: isDelivery
+   443→        ? `${t('pos.delivery')} · ${o.deliveryPhone ?? ''}`
+   444→        : t('common.takeaway'),
+   445→    })
+   446→    setMode('order')
+   447→    setDraft([])
+   448→    setTransferOrderId(null)
+   449→    setGuestsDraft(o.guests ?? 1)
+   450→    setSeatingTables(null) // no tables — tableIds stays unset
+   451→    applyKind(
+   452→      isDelivery ? 'delivery' : 'takeaway',
+   453→      isDelivery ? { phone: o.deliveryPhone ?? '', address: o.deliveryAddress ?? '' } : null,
+   454→    )
+   455→    readyRef.current = null
+   456→    queryClient.setQueryData(['pos-order', o.id], { order: o })
+   457→    setActiveOrderId(o.id)
+   458→    appliedNavRef.current = `order/${o.id}`
+   459→    navPush('pos', `order/${o.id}`)
+   460→  }
+   461→
+   462→  // ── Seat Party (merged seating from the beginning) ────────────────
+   463→  // TableSelect hands over the selected free tables → ask for the guest
+   464→  // count (seeded to the total capacity), then enter order mode with the
+   465→  // full seating list. The first table is the primary table.
+   466→  const handleSeatParty = (tables: RestaurantTable[]) => {
+   467→    if (tables.length === 0) return
+   468→    setPendingSeatTables(tables)
+   469→    const totalSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   470→    setGuestsValue(clampGuests(totalSeats))
+   471→    setGuestsTarget({ kind: 'seat-party' })
+   472→    setGuestsDialogOpen(true)
+   473→  }
+   474→
+   475→  // ── Guests dialog handlers ───────────────────────────────────────
+   476→  const cancelGuestsDialog = () => {
+   477→    if (guestsTarget?.kind === 'seat-party') setPendingSeatTables(null)
+   478→    setGuestsDialogOpen(false)
+   479→    setGuestsTarget(null)
+   480→  }
+   481→
+   482→  const openGuestsEdit = () => {
+   483→    setGuestsValue(order ? order.guests : guestsDraft)
+   484→    setGuestsTarget(order ? { kind: 'order', orderId: order.id } : { kind: 'draft' })
+   485→    setGuestsDialogOpen(true)
+   486→  }
+   487→
+   488→  const updateGuests = useMutation({
+   489→    mutationFn: (vars: { id: number; guests: number }) =>
+   490→      apiFetch<{ order: Order }>(`/api/orders/${vars.id}`, {
+   491→        method: 'PUT',
+   492→        body: { guests: vars.guests },
+   493→      }),
+   494→    onSuccess: async ({ order: updated }) => {
+   495→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   496→      await Promise.all([
+   497→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   498→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   499→      ])
+   500→      toast.success(t('pos.guestsUpdatedToast'))
+   501→    },
+   502→    onError: (err: Error) => toast.error(err.message),
+   503→  })
+   504→
+   505→  const confirmGuests = () => {
+   506→    const value = clampGuests(guestsValue)
+   507→    if (guestsTarget?.kind === 'new-table') {
+   508→      applySelectTable(guestsTarget.table, value)
+   509→    } else if (guestsTarget?.kind === 'seat-party') {
+   510→      const seatTables = pendingSeatTables ?? []
+   511→      const primary = seatTables[0]
+   512→      if (primary) {
+   513→        // Enter order mode on the primary table, then widen the seating list
+   514→        // to the full party selection (batched setStates — last write wins).
+   515→        applySelectTable(primary, value)
+   516→        setSeatingTables(seatTables.map((tb) => ({ id: tb.id, name: tb.name })))
+   517→      }
+   518→      setPendingSeatTables(null)
+   519→    } else if (guestsTarget?.kind === 'draft') {
+   520→      setGuestsDraft(value)
+   521→    } else if (guestsTarget?.kind === 'order' && order) {
+   522→      updateGuests.mutate({ id: order.id, guests: value })
+   523→    }
+   524→    setGuestsDialogOpen(false)
+   525→    setGuestsTarget(null)
+   526→  }
+   527→
+   528→  /** Append (or merge into) a draft line. Merging happens ONLY when the
+   529→   *  product + course match, the line has no notes AND the modifier
+   530→   *  signature is identical (same option ids in the same order) — otherwise
+   531→   *  the optioned/commented item becomes its own line. `price` stays the
+   532→   *  BASE product price; `modifiers` carries the deltas (see lineUnitPrice). */
+   533→  const appendDraftLine = (
+   534→    p: Product,
+   535→    quantity: number,
+   536→    modifiers?: SelectedModifier[],
+   537→    notes?: string,
+   538→  ) => {
+   539→    const sig = modifierSignature(modifiers)
+   540→    const trimmedNotes = notes?.trim() ?? ''
+   541→    setDraft((prev) => {
+   542→      const course = guessCourse(p)
+   543→      // R11: a special-request comment forces its own row (merge rule)
+   544→      const existing =
+   545→        trimmedNotes === ''
+   546→          ? prev.find(
+   547→              (d) =>
+   548→                d.productId === p.id &&
+   549→                !d.notes &&
+   550→                d.course === course &&
+   551→                modifierSignature(d.modifiers) === sig,
+   552→            )
+   553→          : undefined
+   554→      if (existing) {
+   555→        return prev.map((d) =>
+   556→          d.key === existing.key ? { ...d, quantity: round2(d.quantity + quantity) } : d,
+   557→        )
+   558→      }
+   559→      return [
+   560→        ...prev,
+   561→        {
+   562→          key: newDraftKey(),
+   563→          productId: p.id,
+   564→          name: p.name,
+   565→          nameAr: p.nameAr ?? null,
+   566→          price: p.price,
+   567→          quantity,
+   568→          notes: trimmedNotes,
+   569→          course,
+   570→          modifiers,
+   571→        },
+   572→      ]
+   573→    })
+   574→  }
+   575→
+   576→  const addProduct = (p: Product) => {
+   577→    // Products with (active) option groups open the customize sheet; the
+   578→    // rest keep the classic one-tap add.
+   579→    if ((p.modifierGroups ?? []).some((g) => g.active && g.modifiers.some((m) => m.active))) {
+   580→      setSheetProduct(p)
+   581→      return
+   582→    }
+   583→    appendDraftLine(p, 1)
+   584→  }
+   585→
+   586→  const handleSheetConfirm = ({ product, quantity, modifiers, notes }: ModifierSheetSelection) => {
+   587→    appendDraftLine(product, quantity, modifiers.length > 0 ? modifiers : undefined, notes)
+   588→    setSheetProduct(null)
+   589→  }
+   590→
+   591→  const draftToPayload = (d: DraftItem[]) =>
+   592→    d.map((d) => ({
+   593→      productId: d.productId,
+   594→      quantity: d.quantity,
+   595→      notes: d.notes.trim() || undefined,
+   596→      course: d.course,
+   597→      selectedModifiers: d.modifiers?.length ? d.modifiers : undefined,
+   598→    }))
+   599→
+   600→  const sendToKitchen = async (): Promise<Order | null> => {
+   601→    if (draft.length === 0 || sending) return order
+   602→    setSending(true)
+   603→    try {
+   604→      let result: { order: Order }
+   605→      // R13 PWA: offline path — queue the creation and finish locally.
+   606→      // The draft is cleared (same as online) so a replay cannot duplicate
+   607→      // an order the waiter still sees; the banner shows the queued count.
+   608→      const payloadBase = {
+   609→        items: draftToPayload(draft),
+   610→        guests: clampGuests(guestsDraft),
+   611→        ...(draftCustomer != null ? { customerId: draftCustomer.id } : {}),
+   612→      }
+   613→      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+   614→        const tableless = selectedTable?.id == null
+   615→        const kind = orderKindRef.current
+   616→        enqueueOfflineAction({
+   617→          url: '/api/orders',
+   618→          method: 'POST',
+   619→          body:
+   620→            tableless && kind === 'delivery' && deliveryInfo
+   621→              ? { ...payloadBase, orderType: 'delivery', deliveryPhone: deliveryInfo.phone }
+   622→              : selectedTable?.id != null
+   623→                ? { ...payloadBase, tableId: selectedTable.id, orderType: 'dinein' }
+   624→                : { ...payloadBase, orderType: 'takeaway' },
+   625→          label: selectedTable?.name ?? 'order',
+   626→        })
+   627→        setDraft([])
+   628→        setDraftCustomer(null)
+   629→        toast.info(t('offline.bannerSingle'))
+   630→        // leave order mode — the floor view shows the queued state via banner
+   631→        setMode('tables')
+   632→        setSelectedTable(null)
+   633→        return null
+   634→      }
+   635→      // Multi-table seating (Seat Party): create the order spanning ALL the
+   636→      // selected tables (tableIds — primary first). Single-table, takeaway
+   637→      // and delivery paths keep the classic tableId payload (null = absent).
+   638→      const seatingList = seatingTables ?? null
+   639→      const multiSeating = (seatingList?.length ?? 0) > 1
+   640→      // R11: explicit order type — dinein (table paths), takeaway or delivery
+   641→      // (table-less). Delivery additionally carries the customer contact.
+   642→      const kind = orderKindRef.current
+   643→      if (!order && multiSeating && seatingList) {
+   644→        result = await apiFetch<{ order: Order }>('/api/orders', {
+   645→          method: 'POST',
+   646→          body: {
+   647→            tableIds: seatingList.map((tb) => tb.id),
+   648→            ...payloadBase,
+   649→            orderType: 'dinein',
+   650→          },
+   651→        })
+   652→      } else if (!order) {
+   653→        const tableless = selectedTable?.id == null
+   654→        const delivery = tableless && kind === 'delivery' && deliveryInfo
+   655→        result = await apiFetch<{ order: Order }>('/api/orders', {
+   656→          method: 'POST',
+   657→          body: {
+   658→            tableId: selectedTable?.id ?? null,
+   659→            ...payloadBase,
+   660→            orderType: tableless ? (delivery ? 'delivery' : 'takeaway') : 'dinein',
+   661→            ...(delivery
+   662→              ? {
+   663→                  deliveryPhone: deliveryInfo.phone,
+   664→                  ...(deliveryInfo.address.trim() ? { deliveryAddress: deliveryInfo.address.trim() } : {}),
+   665→                }
+   666→              : {}),
+   667→          },
+   668→        })
+   669→      } else {
+   670→        result = await apiFetch<{ order: Order }>(`/api/orders/${order.id}`, {
+   671→          method: 'PUT',
+   672→          body: { addItems: draftToPayload(draft) },
+   673→        })
+   674→      }
+   675→      setDraft([])
+   676→      setDraftCustomer(null)
+   677→      queryClient.setQueryData(['pos-order', result.order.id], { order: result.order })
+   678→      setActiveOrderId(result.order.id)
+   679→      await invalidateShared()
+   680→      toast.success(
+   681→        multiSeating && !order && seatingList
+   682→          ? t('pos.seatedToast', { n: seatingList.length })
+   683→          : t('pos.orderSentToast'),
+   684→      )
+   685→      return result.order
+   686→    } catch (err) {
+   687→      toast.error(err instanceof Error ? err.message : t('pos.sendFailedToast'))
+   688→      return null
+   689→    } finally {
+   690→      setSending(false)
+   691→    }
+   692→  }
+   693→
+   694→  const handlePay = async () => {
+   695→    if (sending) return
+   696→    let current: Order | null = order
+   697→    if (draft.length > 0) {
+   698→      current = await sendToKitchen()
+   699→      if (!current) return // sending failed → abort payment
+   700→    }
+   701→    if (!current) return
+   702→    setPayOrder(current)
+   703→    setPayOpen(true)
+   704→  }
+   705→
+   706→  // Print Check from the cart panel: flush the draft first (same pattern as pay),
+   707→  // then open the check modal with the fresh order state.
+   708→  const handlePrintCheck = async () => {
+   709→    if (sending) return
+   710→    let current: Order | null = order
+   711→    if (draft.length > 0) {
+   712→      current = await sendToKitchen()
+   713→      if (!current) return // sending failed → abort printing
+   714→    }
+   715→    if (!current) return
+   716→    setCheckOrder(current)
+   717→    setCheckOpen(true)
+   718→  }
+   719→
+   720→  const handlePaySuccess = async (updated: Order, closed: boolean) => {
+   721→    if (closed) {
+   722→      // Payment modal closes itself; show the receipt, then reset the screen.
+   723→      stashDraft() // normally empty — the draft was flushed by sendToKitchen
+   724→      setReceiptOrder(updated)
+   725→      setMode('tables')
+   726→      setSelectedTable(null)
+   727→      setActiveOrderId(null)
+   728→      setDraft([])
+   729→      setGuestsDraft(2)
+   730→      setPendingSeatTables(null)
+   731→      setSeatingTables(null)
+   732→      readyRef.current = null
+   733→      appliedNavRef.current = null
+   734→      replaceNav('pos') // paid check → floor entry, no extra history
+   735→      await invalidateShared()
+   736→    } else {
+   737→      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+   738→      // R13: keep the OPEN payment modal in sync — loyalty redemptions stay
+   739→      // in-modal (partial tender), so the order prop must refresh with the
+   740→      // new paid/remaining/points values.
+   741→      setPayOrder(updated)
+   742→      await Promise.all([
+   743→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   744→        queryClient.invalidateQueries({ queryKey: ['orders', 'deferred'] }),
+   745→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   746→      ])
+   747→    }
+   748→  }
+   749→
+   750→  // Transfer clicked on the order screen → go to the floor screen with the
+   751→  // order preselected (destination step). TableSelect reports completion.
+   752→  const startTransfer = () => {
+   753→    if (!order) return
+   754→    stashDraft() // never lose unsent items while detouring through the floor
+   755→    setTransferOrderId(order.id)
+   756→    setMode('tables')
+   757→    setSelectedTable(null)
+   758→    setActiveOrderId(null)
+   759→    setDraft([])
+   760→    setGuestsDraft(2)
+   761→    setPendingSeatTables(null)
+   762→    setSeatingTables(null)
+   763→    readyRef.current = null
+   764→    appliedNavRef.current = null // transfer destination step lives on the floor
+   765→    replaceNav('pos') // replace, never push — no history spam
+   766→  }
+   767→
+   768→  const handleTransferDone = () => {
+   769→    setTransferOrderId(null)
+   770→    resetToTables()
+   771→  }
+   772→
+   773→  // ── Deferred checks ─────────────────────────────────────────────
+   774→  // Chip clicked on the floor → settle the outstanding deferred check via
+   775→  // the payment modal (rendered in tables mode too; the modal hides its own
+   776→  // defer button for already-deferred orders).
+   777→  const handleSettleDeferred = (deferredOrder: Order) => {
+   778→    setPayOrder(deferredOrder)
+   779→    setPayOpen(true)
+   780→  }
+   781→
+   782→  // Defer completed inside the payment modal (modal closes itself + fires
+   783→  // the toast) → reset the order screen and refresh everything.
+   784→  const handleOrderDeferred = async (_deferredOrder: Order) => {
+   785→    resetToTables()
+   786→    await invalidateShared()
+   787→  }
+   788→
+   789→  const cancelMutation = useMutation({
+   790→    mutationFn: (id: number) =>
+   791→      apiFetch<{ order: Order }>(`/api/orders/${id}/cancel`, { method: 'POST' }),
+   792→    onSuccess: async () => {
+   793→      toast.success(t('pos.cancelToast'))
+   794→      await invalidateShared()
+   795→      resetToTables()
+   796→    },
+   797→    onError: (err: Error) => toast.error(err.message),
+   798→  })
+   799→
+   800→  const canCancel =
+   801→    !!order && !!user && (user.role === 'admin' || (order.userId != null && order.userId === user.id))
+   802→
+   803→  const preparingCount = order?.items.filter((i) => i.status === 'preparing').length ?? 0
+   804→  const readyCount = order?.items.filter((i) => i.status === 'ready').length ?? 0
+   805→
+   806→  // Merged-seating badge: extra tables joined to this order (live order field
+   807→  // wins once the order exists; draft mode falls back to the seating list).
+   808→  const mergedExtraCount = order
+   809→    ? (order.extraTableIds?.length ?? 0)
+   810→    : Math.max(0, (seatingTables?.length ?? 1) - 1)
+   811→
+   812→  // ── Round 7: popstate-driven restores (browser/OS back & forward) ──
+   813→
+   814→  /** Enter order mode for a live order — mirrors openTablelessOrder /
+   815→   *  applySelectTable semantics. Hash-driven, so it never pushes history. */
+   816→  const restoreLiveOrder = (restored: Order) => {
+   817→    const isDelivery = !restored.table && restored.orderType === 'delivery'
+   818→    setSelectedTable(
+   819→      restored.table
+   820→        ? { id: restored.table.id, name: restored.table.name }
+   821→        : isDelivery
+   822→          ? { id: null, name: `${t('pos.delivery')} · ${restored.deliveryPhone ?? ''}` }
+   823→          : { id: null, name: t('common.takeaway') },
+   824→    )
+   825→    setMode('order')
+   826→    setDraft([])
+   827→    setTransferOrderId(null)
+   828→    setGuestsDraft(clampGuests(restored.guests ?? 1))
+   829→    setSeatingTables(restored.table ? [{ id: restored.table.id, name: restored.table.name }] : null)
+   830→    applyKind(
+   831→      restored.table ? 'dinein' : isDelivery ? 'delivery' : 'takeaway',
+   832→      isDelivery ? { phone: restored.deliveryPhone ?? '', address: restored.deliveryAddress ?? '' } : null,
+   833→    )
+   834→    readyRef.current = null
+   835→    appliedNavRef.current = `order/${restored.id}`
+   836→    queryClient.setQueryData(['pos-order', restored.id], { order: restored })
+   837→    setActiveOrderId(restored.id)
+   838→    toast.success(t('pos.orderRestoredToast', { order: restored.id }))
+   839→  }
+   840→
+   841→  /** Claim the right to run a deep restore for `target`. Returns the epoch, or
+   842→   *  null when the identical restore is already in flight (popstate +
+   843→   *  hashchange double fire). A different target supersedes the old one. */
+   844→  const claimNavRestore = (target: string): number | null => {
+   845→    if (navInFlightRef.current === target) return null
+   846→    navInFlightRef.current = target
+   847→    navEpochRef.current += 1
+   848→    return navEpochRef.current
+   849→  }
+   850→
+   851→  /** Release the restore guards — only the owning epoch may clear them. */
+   852→  const releaseNavRestore = (epoch: number) => {
+   853→    if (epoch !== navEpochRef.current) return
+   854→    navInFlightRef.current = null
+   855→  }
+   856→
+   857→  /** True when the hash still points at `target` (mid-flight re-check). */
+   858→  const hashStill = (target: string) => {
+   859→    const now = currentNav()
+   860→    return now != null && now.view === 'pos' && now.sub === target
+   861→  }
+   862→
+   863→  /** Failed restore → toast + a safe floor entry. */
+   864→  const cannotReopen = () => {
+   865→    toast.error(t('pos.cannotReopenToast'))
+   866→    replaceNav('pos')
+   867→    resetToTables()
+   868→  }
+   869→
+   870→  /** Fetch an order imperatively (null on error). */
+   871→  const fetchOrderOrNull = async (id: number): Promise<Order | null> => {
+   872→    try {
+   873→      const data = await fetcher<{ order: Order }>(`/api/orders/${id}`)
+   874→      return data.order ?? null
+   875→    } catch {
+   876→      return null
+   877→    }
+   878→  }
+   879→
+   880→  /** Restore the live-order screen for '#/pos/order/{id}'. */
+   881→  const restoreOrderById = async (id: number, target: string) => {
+   882→    const epoch = claimNavRestore(target)
+   883→    if (epoch == null) return
+   884→    stashDraft() // leaving the current context — never lose unsent items
+   885→    try {
+   886→      const fetched = await fetchOrderOrNull(id)
+   887→      // The user navigated again mid-flight → abort silently.
+   888→      if (epoch !== navEpochRef.current || !hashStill(target)) return
+   889→      if (fetched && fetched.status === 'open') {
+   890→        restoreLiveOrder(fetched)
+   891→      } else {
+   892→        cannotReopen() // closed / cancelled / merged away / fetch error
+   893→      }
+   894→    } finally {
+   895→      releaseNavRestore(epoch)
+   896→    }
+   897→  }
+   898→
+   899→  /** Restore the screen for '#/pos/table/{id}': its live order when the table
+   900→   *  got occupied meanwhile (hash fixed to order/{id}), or the free-table
+   901→   *  draft screen — applySelectTable pops any stashed draft for it. */
+   902→  const restoreTableById = async (id: number, target: string) => {
+   903→    const epoch = claimNavRestore(target)
+   904→    if (epoch == null) return
+   905→    stashDraft()
+   906→    try {
+   907→      // Same data source as the floor screen (TableSelect's floorplans query).
+   908→      const data = await fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans')
+   909→      if (epoch !== navEpochRef.current || !hashStill(target)) return
+   910→      queryClient.setQueryData(['floorplans'], data)
+   911→      const table =
+   912→        data.floorPlans.flatMap((fp) => fp.tables).find((tb) => tb.id === id) ?? null
+   913→      if (!table) {
+   914→        cannotReopen()
+   915→        return
+   916→      }
+   917→      if (table.openOrderId != null) {
+   918→        // Occupied meanwhile → its live order screen; fix the hash to it.
+   919→        const orderTarget = `order/${table.openOrderId}`
+   920→        replaceNav('pos', orderTarget)
+   921→        const fetched = await fetchOrderOrNull(table.openOrderId)
+   922→        if (epoch !== navEpochRef.current || !hashStill(orderTarget)) return
+   923→        if (fetched && fetched.status === 'open') restoreLiveOrder(fetched)
+   924→        else cannotReopen()
+   925→        return
+   926→      }
+   927→      // Free table → draft mode (restores are push-suppressed inside).
+   928→      withNavSuppression(() => applySelectTable(table, 2))
+   929→    } catch {
+   930→      // Floorplans fetch failed — only bail to the floor when the hash still
+   931→      // points at this target (never clobber another view's hash).
+   932→      if (epoch === navEpochRef.current && hashStill(target)) cannotReopen()
+   933→    } finally {
+   934→      releaseNavRestore(epoch)
+   935→    }
+   936→  }
+   937→
+   938→  /** onNav handler — browser back/forward + hand-edited hashes. Idempotent:
+   939→   *  navigating to the state we are already in is a no-op (checked against
+   940→   *  both the rendered state and the synchronous appliedNavRef mirror). */
+   941→  const handleNavEvent = (nav: NavHash | null) => {
+   942→    if (nav == null || nav.view !== 'pos') return // another view owns the hash
+   943→    const sub = nav.sub
+   944→    if (sub == null) {
+   945→      // Floor — leave order mode exactly like the in-app back button
+   946→      // (stash + reset + replaceNav('#/pos'), itself idempotent here).
+   947→      if (mode === 'order' || appliedNavRef.current != null) resetToTables()
+   948→      return
+   949→    }
+   950→    if (sub.startsWith('order/')) {
+   951→      const id = Number.parseInt(sub.slice('order/'.length), 10)
+   952→      if (!Number.isInteger(id) || id <= 0) return
+   953→      if (appliedNavRef.current === sub) return // idempotent re-entry
+   954→      if (mode === 'order' && activeOrderId === id) return
+   955→      void restoreOrderById(id, sub)
+   956→      return
+   957→    }
+   958→    if (sub.startsWith('table/')) {
+   959→      const id = Number.parseInt(sub.slice('table/'.length), 10)
+   960→      if (!Number.isInteger(id) || id <= 0) return
+   961→      if (appliedNavRef.current === sub) return
+   962→      if (mode === 'order' && selectedTable?.id === id && activeOrderId == null) return
+   963→      void restoreTableById(id, sub)
+   964→      return
+   965→    }
+   966→    if (sub === 'takeaway') {
+   967→      if (appliedNavRef.current === sub) return
+   968→      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null && orderKindRef.current !== 'delivery') return
+   969→      const epoch = claimNavRestore(sub)
+   970→      if (epoch == null) return
+   971→      try {
+   972→        stashDraft()
+   973→        // startTakeaway semantics with pushes suppressed; pops the
+   974→        // 'takeaway' stash (toast when items come back).
+   975→        withNavSuppression(() => startTakeaway())
+   976→      } finally {
+   977→        releaseNavRestore(epoch)
+   978→      }
+   979→    }
+   980→    if (sub === 'delivery') {
+   981→      if (appliedNavRef.current === sub) return
+   982→      if (mode === 'order' && selectedTable?.id == null && activeOrderId == null && orderKindRef.current === 'delivery') return
+   983→      const epoch = claimNavRestore(sub)
+   984→      if (epoch == null) return
+   985→      try {
+   986→        stashDraft()
+   987→        // The delivery contact lives in state (view switches) or in
+   988→        // sessionStorage (full reload) — without it the screen cannot be
+   989→        // rebuilt, so fall back to the floor with the standard toast.
+   990→        const info = deliveryInfo ?? readDeliveryInfo()
+   991→        if (!info) {
+   992→          cannotReopen()
+   993→          return
+   994→        }
+   995→        withNavSuppression(() => startDelivery(info.phone, info.address))
+   996→      } finally {
+   997→        releaseNavRestore(epoch)
+   998→      }
+   999→    }
+  1000→  }
+  1001→
+  1002→  // Always dispatch nav events to the handler of the LATEST render (single
+  1003→  // subscription created below, no stale closures).
+  1004→  useEffect(() => {
+  1005→    navHandlerRef.current = handleNavEvent
+  1006→  })
+  1007→
+  1008→  // Single subscription for the component's lifetime (idempotent handler).
+  1009→  useEffect(() => {
+  1010→    const unsubscribe = onNav((nav) => navHandlerRef.current(nav))
+  1011→    return unsubscribe
+  1012→  }, [])
+  1013→
+  1014→  // Mount-time deep-link restore: refresh/bookmark on '#/pos/order/N',
+  1015→  // '#/pos/table/N' or '#/pos/takeaway' reopens that screen (pushes are
+  1016→  // suppressed — the hash already points here). Floor is the default state.
+  1017→  useEffect(() => {
+  1018→    const nav = currentNav()
+  1019→    if (nav && nav.view === 'pos' && nav.sub) navHandlerRef.current(nav)
+  1020→  }, [])
+  1021→
+  1022→  // Re-assert the deep hash when this view becomes active again: page.tsx
+  1023→  // pushes a shallow '#/pos' when returning from another view, and this
+  1024→  // replaces it with the real deep hash of the preserved order screen.
+  1025→  useEffect(() => {
+  1026→    const wasActive = prevActiveRef.current
+  1027→    prevActiveRef.current = active
+  1028→    // Fire only on the hidden → visible flip (wasActive false, now true)
+  1029→    // while an order screen is preserved.
+  1030→    if (wasActive || !active || mode !== 'order') return
+  1031→    const sub = activeOrderId
+  1032→      ? `order/${activeOrderId}`
+  1033→      : selectedTable?.id != null
+  1034→        ? `table/${selectedTable.id}`
+  1035→        : orderKindRef.current === 'delivery'
+  1036→          ? 'delivery'
+  1037→          : 'takeaway'
+  1038→    replaceNav('pos', sub)
+  1039→  }, [active, mode, activeOrderId, selectedTable?.id])
+  1040→
+  1041→  // ── Render ───────────────────────────────────────────────────────
+  1042→  if (mode === 'tables') {
+  1043→    return (
+  1044→      <>
+  1045→        <TableSelect
+  1046→          onSelectTable={selectTable}
+  1047→          onTakeaway={startTakeaway}
+  1048→          onDelivery={startDelivery}
+  1049→          onOpenTablelessOrder={openTablelessOrder}
+  1050→          transferOrderId={transferOrderId}
+  1051→          onTransferDone={handleTransferDone}
+  1052→          onSeatParty={handleSeatParty}
+  1053→          onSettleDeferred={handleSettleDeferred}
+  1054→          onMyShift={() => setMyShiftOpen(true)}
+  1055→        />
+  1056→        {/* R8: per-server shift closeout — sales, tips & payment mix today */}
+  1057→        <MyShiftSheet open={myShiftOpen} onOpenChange={setMyShiftOpen} />
+  1058→        {/* Guests quick dialog — shown BEFORE entering order mode on a free
+  1059→            table (or after a Seat Party selection). */}
+  1060→        <GuestsDialog
+  1061→          open={guestsDialogOpen}
+  1062→          value={guestsValue}
+  1063→          pending={updateGuests.isPending}
+  1064→          onValueChange={setGuestsValue}
+  1065→          onConfirm={confirmGuests}
+  1066→          onCancel={cancelGuestsDialog}
+  1067→        />
+  1068→        {/* Deferred-check settlement (chips on the floor) — same payment modal
+  1069→            as order mode; hides its defer button for already-deferred orders. */}
+  1070→        {payOrder && (
+  1071→          <PaymentModal
+  1072→            order={payOrder}
+  1073→            open={payOpen}
+  1074→            onOpenChange={(o) => {
+  1075→              setPayOpen(o)
+  1076→              if (!o) setPayOrder(null)
+  1077→            }}
+  1078→            onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+  1079→            onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
+  1080→          />
+  1081→        )}
+  1082→        {/* Receipt after a full payment — the screen resets to the floor while
+  1083→            the receipt stays on top (independent of the payment modal). */}
+  1084→        {receiptOrder && (
+  1085→          <ReceiptModal
+  1086→            order={receiptOrder}
+  1087→            open={!!receiptOrder}
+  1088→            onOpenChange={(o) => {
+  1089→              if (!o) setReceiptOrder(null)
+  1090→            }}
+  1091→            onClose={() => setReceiptOrder(null)}
+  1092→          />
+  1093→        )}
+  1094→      </>
+  1095→    )
+  1096→  }
+  1097→
+  1098→  return (
+  1099→    <div className="flex h-full min-h-[560px] flex-col">
+  1100→      {/* ── Top bar (Odoo order chrome) ── */}
+  1101→      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[#E2E2E0] bg-white px-3 py-2 shadow-sm sm:px-4">
+  1102→        <Button
+  1103→          variant="ghost"
+  1104→          className="h-11 rounded-xl px-3 text-[#714B67] hover:bg-[#714B67]/10"
+  1105→          onClick={resetToTables}
+  1106→          title={t('pos.backToTables')}
+  1107→        >
+  1108→          <ChevronLeft className="size-5 rtl:rotate-180" />
+  1109→          <span>{t('pos.title')}</span>
+  1110→        </Button>
+  1111→        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+  1112→          <span className="truncate text-xl font-bold">{selectedTable?.name ?? t('pos.order')}</span>
+  1113→          {mergedExtraCount > 0 && (
+  1114→            <Badge className="gap-1 border-violet-300 bg-violet-100 text-violet-800 hover:bg-violet-100">
+  1115→              <Combine className="size-3" aria-hidden />
+  1116→              {t('pos.mergedTablesBadge', { n: mergedExtraCount })}
+  1117→            </Badge>
+  1118→          )}
+  1119→          {order && (
+  1120→            <Badge className="bg-[#714B67] text-white hover:bg-[#714B67]">
+  1121→              {t('common.order')} #{order.id}
+  1122→            </Badge>
+  1123→          )}
+  1124→          {order && (
+  1125→            <span className="text-xs tabular-nums text-muted-foreground" data-tick={elapsedTick}>
+  1126→              {elapsedSince(order.createdAt)}
+  1127→            </span>
+  1128→          )}
+  1129→          {preparingCount > 0 && (
+  1130→            <Badge className="border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-100">
+  1131→              {t('pos.preparingCount', { n: preparingCount })}
+  1132→            </Badge>
+  1133→          )}
+  1134→          {readyCount > 0 && (
+  1135→            <Badge className="border-emerald-300 bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+  1136→              {t('pos.readyCount', { n: readyCount })}
+  1137→            </Badge>
+  1138→          )}
+  1139→        </div>
+  1140→        <div className="flex items-center gap-2">
+  1141→          {/* Guests: N — edit while drafting (sent with the order) or on the live order */}
+  1142→          <Button
+  1143→            variant="outline"
+  1144→            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+  1145→            onClick={openGuestsEdit}
+  1146→            title={t('pos.editGuests')}
+  1147→          >
+  1148→            <Users />
+  1149→            <span className="hidden sm:inline">{t('common.guests')}:</span>
+  1150→            <span className="font-semibold tabular-nums">{order ? order.guests : guestsDraft}</span>
+  1151→          </Button>
+  1152→          <Button
+  1153→            variant="outline"
+  1154→            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+  1155→            disabled={!order}
+  1156→            onClick={startTransfer}
+  1157→            title={order ? t('pos.transferHint') : t('pos.transferDisabledHint')}
+  1158→          >
+  1159→            <ArrowLeftRight />
+  1160→            <span className="hidden md:inline">{t('pos.transfer')}</span>
+  1161→          </Button>
+  1162→          {order && canCancel && (
+  1163→            <Button
+  1164→              variant="outline"
+  1165→              className="h-11 rounded-xl border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+  1166→              onClick={() => setCancelOpen(true)}
+  1167→            >
+  1168→              <Ban />
+  1169→              <span className="hidden md:inline">{t('common.cancel')}</span>
+  1170→            </Button>
+  1171→          )}
+  1172→        </div>
+  1173→      </header>
+  1174→
+  1175→      {/* ── Body: product grid + cart ── */}
+  1176→      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+  1177→        <ProductGrid products={products} onAdd={addProduct} className="min-h-0 flex-1" />
+  1178→        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t border-[#E2E2E0] bg-white md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
+  1179→          <CartPanel
+  1180→            order={order}
+  1181→            orderLoading={orderLoading}
+  1182→            draft={draft}
+  1183→            table={selectedTable ?? { id: null, name: t('pos.order') }}
+  1184→            onDraftChange={setDraft}
+  1185→            onSend={() => void sendToKitchen()}
+  1186→            onPay={() => void handlePay()}
+  1187→            onPrintCheck={() => void handlePrintCheck()}
+  1188→            onCancel={() => setCancelOpen(true)}
+  1189→            canCancel={canCancel}
+  1190→            sending={sending}
+  1191→            userRole={user?.role ?? ''}
+  1192→            draftCustomer={draftCustomer}
+  1193→            onDraftCustomerChange={setDraftCustomer}
+  1194→          />
+  1195→        </div>
+  1196→      </div>
+  1197→
+  1198→      {/* ── Guests edit dialog (order mode) ── */}
+  1199→      <GuestsDialog
+  1200→        open={guestsDialogOpen}
+  1201→        value={guestsValue}
+  1202→        pending={updateGuests.isPending}
+  1203→        onValueChange={setGuestsValue}
+  1204→        onConfirm={confirmGuests}
+  1205→        onCancel={cancelGuestsDialog}
+  1206→      />
+  1207→
+  1208→      {/* ── R8: item options (customize) sheet — keyed by product so every
+  1209→          open starts with a clean selection state ── */}
+  1210→      <ModifierSheet
+  1211→        key={sheetProduct?.id ?? 'closed'}
+  1212→        open={!!sheetProduct}
+  1213→        product={sheetProduct}
+  1214→        onOpenChange={(o) => {
+  1215→          if (!o) setSheetProduct(null)
+  1216→        }}
+  1217→        onConfirm={handleSheetConfirm}
+  1218→      />
+  1219→
+  1220→      {/* ── Cancel order confirmation ── */}
+  1221→      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+  1222→        <AlertDialogContent>
+  1223→          <AlertDialogHeader>
+  1224→            <AlertDialogTitle>{t('pos.cancelTitle')}</AlertDialogTitle>
+  1225→            <AlertDialogDescription>
+  1226→              {t('pos.cancelDesc', {
+  1227→                order: order?.id ?? 0,
+  1228→                table: selectedTable?.name ?? t('pos.order'),
+  1229→                total: formatCurrency(order?.totalAmount ?? 0),
+  1230→                items: order?.items.length ?? 0,
+  1231→              })}
+  1232→            </AlertDialogDescription>
+  1233→          </AlertDialogHeader>
+  1234→          <AlertDialogFooter>
+  1235→            <AlertDialogCancel disabled={cancelMutation.isPending}>
+  1236→              {t('pos.keepOrder')}
+  1237→            </AlertDialogCancel>
+  1238→            <AlertDialogAction
+  1239→              className="bg-destructive text-white hover:bg-destructive/90"
+  1240→              disabled={cancelMutation.isPending}
+  1241→              onClick={(e) => {
+  1242→                e.preventDefault()
+  1243→                if (order) cancelMutation.mutate(order.id)
+  1244→              }}
+  1245→            >
+  1246→              {cancelMutation.isPending && <Loader2 className="animate-spin" />}{' '}
+  1247→              {t('pos.cancelOrder')}
+  1248→            </AlertDialogAction>
+  1249→          </AlertDialogFooter>
+  1250→        </AlertDialogContent>
+  1251→      </AlertDialog>
+  1252→
+  1253→      {/* ── Split payment ── */}
+  1254→      {payOrder && (
+  1255→        <PaymentModal
+  1256→          order={payOrder}
+  1257→          open={payOpen}
+  1258→          onOpenChange={(o) => {
+  1259→            setPayOpen(o)
+  1260→            if (!o) setPayOrder(null)
+  1261→          }}
+  1262→          onSuccess={(updated, closed) => void handlePaySuccess(updated, closed)}
+  1263→          onDeferred={(deferredOrder) => void handleOrderDeferred(deferredOrder)}
+  1264→        />
+  1265→      )}
+  1266→
+  1267→      {/* ── Pre-payment guest check (from the cart panel) ── */}
+  1268→      {checkOrder && (
+  1269→        <CheckModal
+  1270→          key={checkOrder.id}
+  1271→          order={checkOrder}
+  1272→          open={checkOpen}
+  1273→          onOpenChange={(o) => {
+  1274→            setCheckOpen(o)
+  1275→            if (!o) setCheckOrder(null)
+  1276→          }}
+  1277→        />
+  1278→      )}
+  1279→
+  1280→      {/* ── Receipt — shown after an order is fully paid, independent of the payment modal ── */}
+  1281→      {receiptOrder && (
+  1282→        <ReceiptModal
+  1283→          order={receiptOrder}
+  1284→          open={!!receiptOrder}
+  1285→          onOpenChange={(o) => {
+  1286→            if (!o) setReceiptOrder(null)
+  1287→          }}
+  1288→          onClose={() => setReceiptOrder(null)}
+  1289→        />
+  1290→      )}
+  1291→    </div>
+  1292→  )
+  1293→}
+  1294→
+  1295→/** Quick guests picker — stepper + 1-8 chips (min MIN_GUESTS, max MAX_GUESTS). */
+  1296→function GuestsDialog({
+  1297→  open,
+  1298→  value,
+  1299→  pending,
+  1300→  onValueChange,
+  1301→  onConfirm,
+  1302→  onCancel,
+  1303→}: {
+  1304→  open: boolean
+  1305→  value: number
+  1306→  pending: boolean
+  1307→  onValueChange: (v: number) => void
+  1308→  onConfirm: () => void
+  1309→  onCancel: () => void
+  1310→}) {
+  1311→  const { t } = useI18n()
+  1312→
+  1313→  const step = (delta: number) => {
+  1314→    const next = Math.min(MAX_GUESTS, Math.max(MIN_GUESTS, Math.round(value + delta)))
+  1315→    onValueChange(next)
+  1316→  }
+  1317→
+  1318→  return (
+  1319→    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+  1320→      <DialogContent className="sm:max-w-sm">
+  1321→        <DialogHeader>
+  1322→          <DialogTitle className="flex items-center gap-2">
+  1323→            <Users className="size-5 text-[#714B67]" /> {t('pos.editGuests')}
+  1324→          </DialogTitle>
+  1325→          <DialogDescription>{t('pos.guestsDialogDesc')}</DialogDescription>
+  1326→        </DialogHeader>
+  1327→        <div className="space-y-4">
+  1328→          <div className="flex items-center justify-center gap-4">
+  1329→            <Button
+  1330→              variant="outline"
+  1331→              size="icon"
+  1332→              className="size-12 rounded-xl"
+  1333→              disabled={value <= MIN_GUESTS}
+  1334→              onClick={() => step(-1)}
+  1335→              aria-label={t('pos.fewerGuests')}
+  1336→            >
+  1337→              <Minus />
+  1338→            </Button>
+  1339→            <span className="w-16 text-center text-4xl font-bold tabular-nums">{value}</span>
+  1340→            <Button
+  1341→              variant="outline"
+  1342→              size="icon"
+  1343→              className="size-12 rounded-xl"
+  1344→              disabled={value >= MAX_GUESTS}
+  1345→              onClick={() => step(1)}
+  1346→              aria-label={t('pos.moreGuests')}
+  1347→            >
+  1348→              <Plus />
+  1349→            </Button>
+  1350→          </div>
+  1351→          <div className="grid grid-cols-4 gap-1.5">
+  1352→            {GUEST_QUICK_CHIPS.map((n) => (
+  1353→              <button
+  1354→                key={n}
+  1355→                type="button"
+  1356→                onClick={() => onValueChange(n)}
+  1357→                className={cn(
+  1358→                  'h-11 rounded-full border text-sm font-semibold tabular-nums transition-colors',
+  1359→                  value === n
+  1360→                    ? 'border-[#714B67] bg-[#714B67] text-white'
+  1361→                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+  1362→                )}
+  1363→              >
+  1364→                {n}
+  1365→              </button>
+  1366→            ))}
+  1367→          </div>
+  1368→        </div>
+  1369→        <DialogFooter>
+  1370→          <Button variant="outline" onClick={onCancel} disabled={pending}>
+  1371→            {t('common.cancel')}
+  1372→          </Button>
+  1373→          <Button
+  1374→            className="bg-[#714B67] text-white hover:bg-[#714B67]/90"
+  1375→            onClick={onConfirm}
+  1376→            disabled={pending}
+  1377→          >
+  1378→            {pending ? <Loader2 className="animate-spin" /> : <Check />} {t('common.confirm')}
+  1379→          </Button>
+  1380→        </DialogFooter>
+  1381→      </DialogContent>
+  1382→    </Dialog>
+  1383→  )
+  1384→}
+  1385→

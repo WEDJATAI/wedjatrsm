@@ -26,6 +26,8 @@ import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DesktopDownloadCard } from '@/components/admin/desktop-download-card'
+import { SyncCard } from '@/components/admin/sync-card'
 import {
   Card,
   CardContent,
@@ -111,6 +113,12 @@ export default function SettingsView() {
 
       {/* Card 3 — data & backups (one-click SQLite snapshot) */}
       <BackupCard />
+
+      {/* Card 5 — sync center (offline-first Windows deployment) */}
+      <SyncCard />
+
+      {/* Card 6 — download for Windows (offline-first desktop package) */}
+      <DesktopDownloadCard />
 
       {/* Card 4 — shifts */}
       <ShiftsCard />

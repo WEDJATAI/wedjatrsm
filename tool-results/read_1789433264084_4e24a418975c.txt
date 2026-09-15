@@ -1,0 +1,1135 @@
+     1→'use client'
+     2→
+     3→import { useMemo, useState } from 'react'
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+     5→import {
+     6→  Armchair,
+     7→  ArrowLeftRight,
+     8→  BadgeCheck,
+     9→  Bike,
+    10→  Brush,
+    11→  Check,
+    12→  ChevronLeft,
+    13→  ChevronRight,
+    14→  Clock,
+    15→  Combine,
+    16→  DoorOpen,
+    17→  Hourglass,
+    18→  Loader2,
+    19→  MapPin,
+    20→  PersonStanding,
+    21→  Plus,
+    22→  ShoppingBag,
+    23→  Users,
+    24→  Wallet,
+    25→  X,
+    26→} from 'lucide-react'
+    27→import { toast } from 'sonner'
+    28→
+    29→import {
+    30→  AlertDialog,
+    31→  AlertDialogAction,
+    32→  AlertDialogCancel,
+    33→  AlertDialogContent,
+    34→  AlertDialogDescription,
+    35→  AlertDialogFooter,
+    36→  AlertDialogHeader,
+    37→  AlertDialogTitle,
+    38→} from '@/components/ui/alert-dialog'
+    39→import { Button } from '@/components/ui/button'
+    40→import {
+    41→  Dialog,
+    42→  DialogContent,
+    43→  DialogDescription,
+    44→  DialogFooter,
+    45→  DialogHeader,
+    46→  DialogTitle,
+    47→} from '@/components/ui/dialog'
+    48→import { Input } from '@/components/ui/input'
+    49→import { Label } from '@/components/ui/label'
+    50→import { Skeleton } from '@/components/ui/skeleton'
+    51→import { apiFetch, fetcher } from '@/lib/api'
+    52→import { MAX_SEATING_TABLES } from '@/lib/constants'
+    53→import { elapsedSince, formatCurrency } from '@/lib/format'
+    54→import { useI18n } from '@/lib/i18n'
+    55→import { cn } from '@/lib/utils'
+    56→import type { FloorPlan, MovementCandidateDTO, Order, RestaurantTable } from '@/lib/types'
+    57→
+    58→import MovementQuickDialog from '@/components/vision/movement-quick-dialog'
+    59→
+    60→type TableSelectProps = {
+    61→  onSelectTable: (table: RestaurantTable) => void
+    62→  onTakeaway: () => void
+    63→  /** R11: start a table-less DELIVERY draft with the customer contact. */
+    64→  onDelivery: (phone: string, address: string) => void
+    65→  /** Open a table-less open order (takeaway OR delivery chip). */
+    66→  onOpenTablelessOrder: (order: Order) => void
+    67→  /** When set, start directly in transfer step 2 (destination selection) for this order. */
+    68→  transferOrderId?: number | null
+    69→  /** Called after a transfer completes (pos-view resets its order screen state). */
+    70→  onTransferDone?: () => void
+    71→  /** Seat Party tool result — the free tables selected for the party, in
+    72→   *  selection order (primary table first). TableSelect exits the tool itself. */
+    73→  onSeatParty: (tables: RestaurantTable[]) => void
+    74→  /** Deferred-check chip clicked — pos-view opens the payment modal to settle it. */
+    75→  onSettleDeferred: (order: Order) => void
+    76→  /** "My shift" closeout — pos-view opens the per-server shift sheet (R8). */
+    77→  onMyShift?: () => void
+    78→}
+    79→
+    80→type ToolKind = 'transfer' | 'merge' | 'seat'
+    81→type SourcePick = { orderId: number }
+    82→
+    83→type TableInteraction = 'normal' | 'eligible' | 'ineligible'
+    84→
+    85→/** Per-shape tile silhouette classes — Odoo 17-style tiles. The floor grid
+    86→ *  keeps its responsive layout (tiles fill the grid cell width); only the
+    87→ *  silhouette changes (square/round/rectangle/oval). The admin floor-plan
+    88→ *  editor mirrors these exact strings. */
+    89→const SHAPE_TILE_CLASSES: Record<string, string> = {
+    90→  square: 'aspect-square rounded-2xl',
+    91→  round: 'aspect-square rounded-full',
+    92→  rectangle: 'h-24 rounded-2xl',
+    93→  oval: 'h-24 rounded-full',
+    94→}
+    95→
+    96→function shapeClasses(shape: string): string {
+    97→  return SHAPE_TILE_CLASSES[shape] ?? SHAPE_TILE_CLASSES.square
+    98→}
+    99→
+   100→export default function TableSelect({
+   101→  onSelectTable,
+   102→  onTakeaway,
+   103→  onDelivery,
+   104→  onOpenTablelessOrder,
+   105→  transferOrderId,
+   106→  onTransferDone,
+   107→  onSeatParty,
+   108→  onSettleDeferred,
+   109→  onMyShift,
+   110→}: TableSelectProps) {
+   111→  const queryClient = useQueryClient()
+   112→  const { t } = useI18n()
+   113→
+   114→  const [floorIdx, setFloorIdx] = useState(0)
+   115→  // When pos-view passes transferOrderId (Transfer clicked on the order
+   116→  // screen), this component mounts fresh in transfer step 2 (destination
+   117→  // selection) — pos-view only sets it right before switching to tables view,
+   118→  // so mount-time initialization is sufficient.
+   119→  const [tool, setTool] = useState<ToolKind | null>(transferOrderId != null ? 'transfer' : null)
+   120→  const [source, setSource] = useState<SourcePick | null>(
+   121→    transferOrderId != null ? { orderId: transferOrderId } : null,
+   122→  )
+   123→  // Seat Party: the free tables tapped so far, in selection order (the first
+   124→  // one becomes the primary table of the merged seating).
+   125→  const [seatSelection, setSeatSelection] = useState<RestaurantTable[]>([])
+   126→  // Paid/deferred tile tap-to-clear confirmation dialog target.
+   127→  const [clearTarget, setClearTarget] = useState<RestaurantTable | null>(null)
+   128→  // R9: pending AI guest-move suggestion opened for quick review.
+   129→  const [aiMove, setAiMove] = useState<MovementCandidateDTO | null>(null)
+   130→
+   131→  // R11: new-delivery dialog — customer phone (required) + address.
+   132→  const [deliveryOpen, setDeliveryOpen] = useState(false)
+   133→  const [deliveryPhone, setDeliveryPhone] = useState('')
+   134→  const [deliveryAddress, setDeliveryAddress] = useState('')
+   135→
+   136→  const deliveryPhoneOk = deliveryPhone.trim().length >= 5 && deliveryPhone.trim().length <= 20
+   137→
+   138→  const { data: floorPlanData, isLoading } = useQuery({
+   139→    queryKey: ['floorplans'],
+   140→    queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
+   141→    refetchInterval: 3000, // LIVE table statuses
+   142→  })
+   143→
+   144→  const { data: openOrdersData } = useQuery({
+   145→    queryKey: ['orders', 'open'],
+   146→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+   147→    refetchInterval: 3000,
+   148→  })
+   149→
+   150→  // Outstanding deferred checks (client left, payment pending) — settle chips.
+   151→  const { data: deferredOrdersData } = useQuery({
+   152→    queryKey: ['orders', 'deferred'],
+   153→    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=deferred'),
+   154→    refetchInterval: 3000,
+   155→    enabled: !tool,
+   156→  })
+   157→
+   158→  // R9: pending AI guest-move suggestions (POS floor chips, amber). Hidden
+   159→  // during transfer/merge/seat tools to avoid conflicting interactions —
+   160→  // poll errors stay silent (the chips just disappear until data returns).
+   161→  const { data: aiMovementsData } = useQuery({
+   162→    queryKey: ['vision-movements', 'pending'],
+   163→    queryFn: () =>
+   164→      fetcher<{ movements: MovementCandidateDTO[] }>('/api/vision/movements?status=pending'),
+   165→    refetchInterval: 15000,
+   166→    enabled: !tool,
+   167→  })
+   168→  const aiMovements = aiMovementsData?.movements ?? []
+   169→
+   170→  const floorPlans = floorPlanData?.floorPlans ?? []
+   171→  const openOrders = openOrdersData?.orders ?? []
+   172→  const deferredOrders = deferredOrdersData?.orders ?? []
+   173→  const takeawayOrders = useMemo(
+   174→    () => openOrders.filter((o) => o.tableId === null && o.orderType !== 'delivery'),
+   175→    [openOrders],
+   176→  )
+   177→  // R11: open delivery orders get their own chips (contact + amount).
+   178→  const deliveryOrders = useMemo(
+   179→    () => openOrders.filter((o) => o.tableId === null && o.orderType === 'delivery'),
+   180→    [openOrders],
+   181→  )
+   182→
+   183→  const idx = floorPlans.length > 0 ? Math.min(floorIdx, floorPlans.length - 1) : 0
+   184→  const plan = floorPlans[idx] ?? null
+   185→
+   186→  const sourceOrder = source ? openOrders.find((o) => o.id === source.orderId) ?? null : null
+   187→  const sourceLabel = source ? sourceOrder?.table?.name ?? t('common.takeaway') : null
+   188→
+   189→  // ── Manual table turnover (two clicks): paid/deferred → bus → amber
+   190→  // 'dirty' (needs cleaning) → clean → free. Audit-logged server-side.
+   191→  const clearTableMutation = useMutation({
+   192→    mutationFn: (vars: { id: number; name: string; phase: 'bus' | 'clean' }) =>
+   193→      apiFetch<{ table: RestaurantTable }>(`/api/tables/${vars.id}/clear`, {
+   194→        method: 'POST',
+   195→        body: { action: vars.phase },
+   196→      }),
+   197→    onSuccess: async (_data, vars) => {
+   198→      toast.success(
+   199→        vars.phase === 'bus'
+   200→          ? t('pos.tableBussedToast', { table: vars.name })
+   201→          : t('pos.tableCleanedToast', { table: vars.name }),
+   202→      )
+   203→      setClearTarget(null)
+   204→      await Promise.all([
+   205→        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   206→        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   207→        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   208→      ])
+   209→    },
+   210→    onError: (err: Error) => toast.error(err.message),
+   211→  })
+   212→
+   213→  // ── Transfer & merge mutations ───────────────────────────────────
+   214→  const invalidateAfterMove = async (...orderIds: number[]) => {
+   215→    await Promise.all([
+   216→      queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+   217→      queryClient.invalidateQueries({ queryKey: ['orders'] }),
+   218→      queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+   219→      queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+   220→      ...orderIds.map((id) => queryClient.invalidateQueries({ queryKey: ['pos-order', id] })),
+   221→    ])
+   222→  }
+   223→
+   224→  const transferMutation = useMutation({
+   225→    mutationFn: (vars: { orderId: number; tableId: number; tableName: string }) =>
+   226→      apiFetch<{ order: Order }>(`/api/orders/${vars.orderId}/transfer`, {
+   227→        method: 'POST',
+   228→        body: { tableId: vars.tableId },
+   229→      }),
+   230→    onSuccess: async (_data, vars) => {
+   231→      toast.success(t('pos.transferToast', { order: vars.orderId, table: vars.tableName }))
+   232→      await invalidateAfterMove(vars.orderId)
+   233→      exitTool()
+   234→      onTransferDone?.()
+   235→    },
+   236→    onError: (err: Error) => toast.error(err.message),
+   237→  })
+   238→
+   239→  const mergeMutation = useMutation({
+   240→    mutationFn: (vars: { sourceId: number; targetId: number; targetLabel: string }) =>
+   241→      apiFetch<{ order: Order }>(`/api/orders/${vars.targetId}/merge`, {
+   242→        method: 'POST',
+   243→        body: { sourceOrderId: vars.sourceId },
+   244→      }),
+   245→    onSuccess: async (_data, vars) => {
+   246→      toast.success(t('pos.mergeToast', { table: vars.targetLabel }))
+   247→      await invalidateAfterMove(vars.sourceId, vars.targetId)
+   248→      exitTool()
+   249→    },
+   250→    onError: (err: Error) => toast.error(err.message),
+   251→  })
+   252→
+   253→  const busy = transferMutation.isPending || mergeMutation.isPending
+   254→
+   255→  // ── Tool mode helpers ────────────────────────────────────────────
+   256→  const exitTool = () => {
+   257→    setTool(null)
+   258→    setSource(null)
+   259→    setSeatSelection([])
+   260→  }
+   261→
+   262→  const startTransferTool = () => {
+   263→    setTool('transfer')
+   264→    setSource(null)
+   265→    setSeatSelection([])
+   266→  }
+   267→
+   268→  const startMergeTool = () => {
+   269→    setTool('merge')
+   270→    setSource(null)
+   271→    setSeatSelection([])
+   272→  }
+   273→
+   274→  const startSeatTool = () => {
+   275→    setTool('seat')
+   276→    setSource(null)
+   277→    setSeatSelection([])
+   278→  }
+   279→
+   280→  // Paid/deferred/dirty tables hold no open order — they await the manual
+   281→  // bussing/cleaning clicks (amber turnover flow).
+   282→  const isCleanupState = (t2: RestaurantTable) =>
+   283→    t2.status === 'paid' || t2.status === 'deferred' || t2.status === 'dirty'
+   284→
+   285→  const tableInteraction = (t2: RestaurantTable): TableInteraction => {
+   286→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   287→    if (tool === 'seat') {
+   288→      // Only free tables can host a new party.
+   289→      return t2.status === 'free' && t2.openOrderId == null ? 'normal' : 'ineligible'
+   290→    }
+   291→    if (tool === 'transfer') {
+   292→      if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   293→      // Destination: free/reserved tables with no open order (paid/deferred/
+   294→      // dirty tables await their turnover clicks, they are not destinations).
+   295→      return t2.openOrderId == null && t2.status !== 'occupied' && !isCleanupState(t2)
+   296→        ? 'eligible'
+   297→        : 'ineligible'
+   298→    }
+   299→    // Merge: source = any occupied table; target = another open order's table.
+   300→    if (source == null) return t2.openOrderId != null ? 'eligible' : 'ineligible'
+   301→    return t2.openOrderId != null && t2.openOrderId !== source.orderId ? 'eligible' : 'ineligible'
+   302→  }
+   303→
+   304→  const takeawayInteraction = (o: Order): TableInteraction => {
+   305→    if (!tool || busy) return busy ? 'ineligible' : 'normal'
+   306→    if (tool === 'seat') return 'ineligible'
+   307→    if (tool === 'transfer') {
+   308→      // Takeaway orders are valid transfer sources, never destinations.
+   309→      return source == null ? 'eligible' : 'ineligible'
+   310→    }
+   311→    if (source == null) return 'eligible'
+   312→    return o.id !== source.orderId ? 'eligible' : 'ineligible'
+   313→  }
+   314→
+   315→  const handleTableClick = (t2: RestaurantTable) => {
+   316→    if (busy) return
+   317→    if (tool === 'seat') {
+   318→      if (t2.status !== 'free' || t2.openOrderId != null) return
+   319→      setSeatSelection((prev) => {
+   320→        if (prev.some((s) => s.id === t2.id)) return prev.filter((s) => s.id !== t2.id)
+   321→        if (prev.length >= MAX_SEATING_TABLES) return prev // max 4 tables per seating
+   322→        return [...prev, t2]
+   323→      })
+   324→      return
+   325→    }
+   326→    if (tool === 'transfer') {
+   327→      if (source == null) {
+   328→        if (t2.openOrderId == null) return
+   329→        setSource({ orderId: t2.openOrderId })
+   330→        return
+   331→      }
+   332→      if (t2.openOrderId != null || t2.status === 'occupied' || isCleanupState(t2)) return
+   333→      transferMutation.mutate({ orderId: source.orderId, tableId: t2.id, tableName: t2.name })
+   334→      return
+   335→    }
+   336→    if (tool === 'merge') {
+   337→      if (source == null) {
+   338→        if (t2.openOrderId == null) return
+   339→        setSource({ orderId: t2.openOrderId })
+   340→        return
+   341→      }
+   342→      if (t2.openOrderId == null || t2.openOrderId === source.orderId) return
+   343→      mergeMutation.mutate({ sourceId: source.orderId, targetId: t2.openOrderId, targetLabel: t2.name })
+   344→      return
+   345→    }
+   346→    // Normal mode — paid/deferred tiles open the bussing dialog (→ amber
+   347→    // 'dirty'), dirty tiles the cleaning dialog (→ free).
+   348→    if (isCleanupState(t2) && t2.openOrderId == null) {
+   349→      setClearTarget(t2)
+   350→      return
+   351→    }
+   352→    onSelectTable(t2)
+   353→  }
+   354→
+   355→  /** Table-less chip click (takeaway OR delivery order) — opens the order,
+   356→   *  or acts as a transfer/merge source while those tools are active. */
+   357→  const handleTablelessClick = (o: Order) => {
+   358→    if (busy) return
+   359→    if (tool === 'seat') return
+   360→    if (tool === 'transfer') {
+   361→      if (source == null) setSource({ orderId: o.id })
+   362→      return
+   363→    }
+   364→    if (tool === 'merge') {
+   365→      if (source == null) {
+   366→        setSource({ orderId: o.id })
+   367→      } else if (o.id !== source.orderId) {
+   368→        mergeMutation.mutate({
+   369→          sourceId: source.orderId,
+   370→          targetId: o.id,
+   371→          targetLabel: o.orderType === 'delivery' ? t('pos.delivery') : t('common.takeaway'),
+   372→        })
+   373→      }
+   374→      return
+   375→    }
+   376→    onOpenTablelessOrder(o)
+   377→  }
+   378→
+   379→  /** R11: delivery dialog confirm — hand the contact to pos-view. */
+   380→  const confirmDelivery = () => {
+   381→    if (!deliveryPhoneOk) return
+   382→    const phone = deliveryPhone.trim()
+   383→    const address = deliveryAddress.trim().slice(0, 200)
+   384→    setDeliveryOpen(false)
+   385→    setDeliveryPhone('')
+   386→    setDeliveryAddress('')
+   387→    onDelivery(phone, address)
+   388→  }
+   389→
+   390→  // Seat Party: hand the selection (in order) to pos-view, then exit the tool.
+   391→  const continueSeat = () => {
+   392→    if (seatSelection.length === 0) return
+   393→    const selected = seatSelection
+   394→    exitTool()
+   395→    onSeatParty(selected)
+   396→  }
+   397→
+   398→  // ── Banner text (transfer/merge — seat has its own banner) ────────
+   399→  const bannerText = busy
+   400→    ? tool === 'transfer'
+   401→      ? t('pos.transferring')
+   402→      : t('pos.merging')
+   403→    : tool === 'transfer'
+   404→      ? source
+   405→        ? sourceLabel
+   406→          ? t('pos.transferDest', { order: source.orderId, label: sourceLabel })
+   407→          : t('pos.transferDestNoLabel', { order: source.orderId })
+   408→        : t('pos.transferPick')
+   409→      : source
+   410→        ? t('pos.mergeTarget', {
+   411→            source: sourceLabel ?? `#${source.orderId}`,
+   412→          })
+   413→        : t('pos.mergePick')
+   414→
+   415→  const tables = plan?.tables ?? []
+   416→
+   417→  // ── Hall stats (current floor) + Seat Party availability ─────────
+   418→  const hallFreeCount = tables.filter(
+   419→    (tb) => tb.status === 'free' && tb.openOrderId == null,
+   420→  ).length
+   421→  const hallOccupiedCount = tables.filter(
+   422→    (tb) => tb.status === 'occupied' || tb.openOrderId != null,
+   423→  ).length
+   424→  const hallSeats = tables.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   425→  const hallDirtyCount = tables.filter(
+   426→    (tb) => tb.status === 'dirty' && tb.openOrderId == null,
+   427→  ).length
+   428→  const hasFreeTable = hallFreeCount > 0
+   429→  const seatSeats = seatSelection.reduce((sum, tb) => sum + (tb.capacity ?? 0), 0)
+   430→
+   431→  return (
+   432→    <div className="rms-scroll h-full overflow-y-auto">
+   433→      <div className="mx-auto flex w-full max-w-6xl flex-col">
+   434→        {/* ── Control bar ── */}
+   435→        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E2E0] bg-white px-4 py-3">
+   436→          {/* Floor switcher */}
+   437→          <div className="flex items-center gap-2">
+   438→            <Button
+   439→              variant="outline"
+   440→              size="icon"
+   441→              className="h-11 w-11 rounded-xl"
+   442→              disabled={idx <= 0}
+   443→              onClick={() => setFloorIdx(idx - 1)}
+   444→              aria-label={t('pos.prevFloor')}
+   445→            >
+   446→              <ChevronLeft className="size-5 rtl:rotate-180" />
+   447→            </Button>
+   448→            <span className="min-w-[110px] text-center text-lg font-bold">
+   449→              {plan?.name ?? t('pos.floors')}
+   450→            </span>
+   451→            <Button
+   452→              variant="outline"
+   453→              size="icon"
+   454→              className="h-11 w-11 rounded-xl"
+   455→              disabled={idx >= floorPlans.length - 1}
+   456→              onClick={() => setFloorIdx(idx + 1)}
+   457→              aria-label={t('pos.nextFloor')}
+   458→            >
+   459→              <ChevronRight className="size-5 rtl:rotate-180" />
+   460→            </Button>
+   461→          </div>
+   462→
+   463→          {/* Actions */}
+   464→          <div className="flex flex-wrap items-center gap-2">
+   465→            <Button
+   466→              variant="outline"
+   467→              className="h-11 rounded-xl"
+   468→              disabled={openOrders.length === 0 || !!tool}
+   469→              onClick={startTransferTool}
+   470→            >
+   471→              <ArrowLeftRight className="text-[#714B67]" />
+   472→              <span className="hidden sm:inline">{t('pos.transfer')}</span>
+   473→            </Button>
+   474→            <Button
+   475→              variant="outline"
+   476→              className="h-11 rounded-xl"
+   477→              disabled={openOrders.length < 2 || !!tool}
+   478→              onClick={startMergeTool}
+   479→            >
+   480→              <Combine className="text-[#714B67]" />
+   481→              <span className="hidden sm:inline">{t('pos.merge')}</span>
+   482→            </Button>
+   483→            <Button
+   484→              variant="outline"
+   485→              className="h-11 rounded-xl border-violet-400 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   486→              disabled={!hasFreeTable || !!tool}
+   487→              onClick={startSeatTool}
+   488→              title={t('pos.seatParty')}
+   489→            >
+   490→              <Armchair className="text-violet-700" />
+   491→              <span className="hidden sm:inline">{t('pos.seatParty')}</span>
+   492→            </Button>
+   493→            <Button
+   494→              variant="outline"
+   495→              className="h-11 rounded-xl border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-700"
+   496→              disabled={!!tool}
+   497→              onClick={onMyShift}
+   498→              title={t('pos.myShift')}
+   499→            >
+   500→              <Wallet className="text-emerald-700" />
+   501→              <span className="hidden sm:inline">{t('pos.myShift')}</span>
+   502→            </Button>
+   503→            <Button
+   504→              className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+   505→              disabled={!!tool}
+   506→              onClick={onTakeaway}
+   507→            >
+   508→              <Plus /> {t('pos.newTakeaway')}
+   509→            </Button>
+   510→            {/* R11: table-less delivery order (phone + address dialog) */}
+   511→            <Button
+   512→              variant="outline"
+   513→              className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+   514→              disabled={!!tool}
+   515→              onClick={() => setDeliveryOpen(true)}
+   516→              title={t('pos.newDeliveryOrder')}
+   517→            >
+   518→              <Bike className="text-[#714B67]" />
+   519→              <span className="hidden sm:inline">{t('pos.delivery')}</span>
+   520→            </Button>
+   521→          </div>
+   522→        </div>
+   523→
+   524→        {/* ── Seat Party banner (violet) ── */}
+   525→        {tool === 'seat' ? (
+   526→          <div
+   527→            className="flex flex-wrap items-center gap-2 bg-violet-600 px-4 py-3 text-white sm:gap-3"
+   528→            role="status"
+   529→          >
+   530→            <Armchair className="size-5 shrink-0" aria-hidden />
+   531→            <div className="min-w-0 flex-1">
+   532→              <p className="text-sm font-semibold">{t('pos.seatPick')}</p>
+   533→              <p className="text-xs font-medium tabular-nums text-white/80">
+   534→                {t('pos.seatTables', { n: seatSelection.length, seats: seatSeats })}
+   535→              </p>
+   536→            </div>
+   537→            <Button
+   538→              className="h-11 shrink-0 rounded-xl bg-white px-4 text-violet-700 hover:bg-violet-50 hover:text-violet-700"
+   539→              disabled={seatSelection.length === 0}
+   540→              onClick={continueSeat}
+   541→              title={seatSelection.length === 0 ? t('pos.seatNeedOne') : t('pos.seatContinue')}
+   542→            >
+   543→              {t('pos.seatContinue')}
+   544→            </Button>
+   545→            <Button
+   546→              variant="ghost"
+   547→              size="icon"
+   548→              className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   549→              onClick={exitTool}
+   550→              aria-label={t('pos.seatCancel')}
+   551→              title={t('common.cancel')}
+   552→            >
+   553→              <X className="size-5" />
+   554→            </Button>
+   555→          </div>
+   556→        ) : (
+   557→          /* ── Transfer/merge banner ── */
+   558→          tool && (
+   559→            <div
+   560→              className="flex items-center gap-3 bg-[#714B67] px-4 py-3 text-white"
+   561→              role="status"
+   562→            >
+   563→              {busy ? (
+   564→                <Loader2 className="size-5 shrink-0 animate-spin" aria-hidden />
+   565→              ) : tool === 'transfer' ? (
+   566→                <ArrowLeftRight className="size-5 shrink-0" aria-hidden />
+   567→              ) : (
+   568→                <Combine className="size-5 shrink-0" aria-hidden />
+   569→              )}
+   570→              <p className="min-w-0 flex-1 text-sm font-semibold">{bannerText}</p>
+   571→              <Button
+   572→                variant="ghost"
+   573→                size="icon"
+   574→                className="size-11 shrink-0 rounded-full text-white hover:bg-white/20 hover:text-white"
+   575→                onClick={exitTool}
+   576→                disabled={busy}
+   577→                aria-label={t('pos.cancelTool')}
+   578→                title={t('common.cancel')}
+   579→              >
+   580→                <X className="size-5" />
+   581→              </Button>
+   582→            </div>
+   583→          )
+   584→        )}
+   585→
+   586→        {/* ── Hall panel: tables grid + takeaway + deferred checks ── */}
+   587→        <div className="p-4 sm:p-6">
+   588→          <div className="relative rounded-2xl border border-[#E2E2E0] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] p-4 sm:p-6">
+   589→            {/* Hall stats bar — current floor */}
+   590→            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-stone-500">
+   591→              <span className="tabular-nums">{t('admin.hallStatsTables', { n: tables.length })}</span>
+   592→              <span className="tabular-nums font-semibold text-emerald-700">
+   593→                {t('admin.hallStatsFree', { n: hallFreeCount })}
+   594→              </span>
+   595→              <span className="tabular-nums font-semibold text-amber-700">
+   596→                {t('admin.hallStatsOccupied', { n: hallOccupiedCount })}
+   597→              </span>
+   598→              {hallDirtyCount > 0 && (
+   599→                <span className="tabular-nums font-semibold text-amber-600">
+   600→                  {t('admin.hallStatsDirty', { n: hallDirtyCount })}
+   601→                </span>
+   602→              )}
+   603→              <span className="flex items-center gap-1 tabular-nums">
+   604→                <Users className="size-3.5" aria-hidden />
+   605→                {hallSeats} {t('common.seats')}
+   606→              </span>
+   607→            </div>
+   608→
+   609→            {isLoading ? (
+   610→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   611→                {Array.from({ length: 8 }, (_, i) => (
+   612→                  <Skeleton key={i} className="aspect-square rounded-2xl" />
+   613→                ))}
+   614→              </div>
+   615→            ) : floorPlans.length === 0 ? (
+   616→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   617→                <MapPin className="size-8 opacity-40" />
+   618→                <p className="text-sm">{t('pos.noTables')}</p>
+   619→              </div>
+   620→            ) : tables.length === 0 ? (
+   621→              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+   622→                <MapPin className="size-8 opacity-40" />
+   623→                <p className="text-sm">{t('pos.noTablesFloor')}</p>
+   624→              </div>
+   625→            ) : (
+   626→              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+   627→                {tables.map((t2) => {
+   628→                  const aiMovement = tool
+   629→                    ? null
+   630→                    : (aiMovements.find((m) => m.fromTableId === t2.id) ?? null)
+   631→                  return (
+   632→                    <TableTile
+   633→                      key={t2.id}
+   634→                      table={t2}
+   635→                      interaction={tableInteraction(t2)}
+   636→                      selected={tool === 'seat' && seatSelection.some((s) => s.id === t2.id)}
+   637→                      onClick={() => handleTableClick(t2)}
+   638→                      movement={aiMovement}
+   639→                      onMovementClick={() => setAiMove(aiMovement)}
+   640→                    />
+   641→                  )
+   642→                })}
+   643→              </div>
+   644→            )}
+   645→
+   646→            {(takeawayOrders.length > 0 || deferredOrders.length > 0 || deliveryOrders.length > 0) && (
+   647→              <div className="mt-6 space-y-6 pb-2">
+   648→                {/* ── Open takeaway orders ── */}
+   649→                {takeawayOrders.length > 0 && (
+   650→                  <section>
+   651→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-stone-500">
+   652→                      <ShoppingBag className="size-4" /> {t('pos.openTakeaways')}
+   653→                    </h3>
+   654→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   655→                      {takeawayOrders.map((o) => {
+   656→                        const interaction = takeawayInteraction(o)
+   657→                        return (
+   658→                          <button
+   659→                            key={o.id}
+   660→                            type="button"
+   661→                            disabled={interaction === 'ineligible'}
+   662→                            onClick={() => handleTablelessClick(o)}
+   663→                            className={cn(
+   664→                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#E2E2E0] bg-white px-4 shadow-sm transition active:scale-95',
+   665→                              interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   666→                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   667→                            )}
+   668→                          >
+   669→                            <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
+   670→                            <span className="text-sm font-semibold">#{o.id}</span>
+   671→                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+   672→                              {formatCurrency(o.remainingAmount)}
+   673→                            </span>
+   674→                            <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
+   675→                          </button>
+   676→                        )
+   677→                      })}
+   678→                    </div>
+   679→                  </section>
+   680→                )}
+   681→
+   682→                {/* ── R11: open delivery orders (phone chips) ── */}
+   683→                {deliveryOrders.length > 0 && (
+   684→                  <section>
+   685→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#714B67]">
+   686→                      <Bike className="size-4" aria-hidden /> {t('pos.openDeliveries')}
+   687→                    </h3>
+   688→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   689→                      {deliveryOrders.map((o) => {
+   690→                        const interaction = takeawayInteraction(o)
+   691→                        return (
+   692→                          <button
+   693→                            key={o.id}
+   694→                            type="button"
+   695→                            disabled={interaction === 'ineligible'}
+   696→                            onClick={() => handleTablelessClick(o)}
+   697→                            title={o.deliveryAddress || o.deliveryPhone || undefined}
+   698→                            className={cn(
+   699→                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#714B67]/30 bg-[#714B67]/[0.06] px-4 shadow-sm transition active:scale-95',
+   700→                              interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   701→                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   702→                            )}
+   703→                          >
+   704→                            <Bike className="size-4 text-[#714B67]" aria-hidden />
+   705→                            <span className="text-sm font-semibold">#{o.id}</span>
+   706→                            <span className="max-w-[130px] truncate text-sm font-semibold text-[#714B67]">
+   707→                              {o.deliveryPhone ?? ''}
+   708→                            </span>
+   709→                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+   710→                              {formatCurrency(o.remainingAmount)}
+   711→                            </span>
+   712→                            <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
+   713→                          </button>
+   714→                        )
+   715→                      })}
+   716→                    </div>
+   717→                  </section>
+   718→                )}
+   719→
+   720→                {/* ── Deferred checks (pay later, settle via chip) ── */}
+   721→                {deferredOrders.length > 0 && (
+   722→                  <section>
+   723→                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-violet-700">
+   724→                      <Hourglass className="size-4" aria-hidden /> {t('pos.deferredChecks')}
+   725→                    </h3>
+   726→                    <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
+   727→                      {deferredOrders.map((o) => (
+   728→                        <button
+   729→                          key={o.id}
+   730→                          type="button"
+   731→                          disabled={!!tool}
+   732→                          onClick={() => onSettleDeferred(o)}
+   733→                          title={t('pos.deferredSettleHint')}
+   734→                          className="flex h-11 shrink-0 items-center gap-2 rounded-full border border-violet-300 bg-violet-50 px-4 text-violet-900 shadow-sm transition hover:ring-2 hover:ring-violet-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+   735→                        >
+   736→                          <Hourglass className="size-4 text-violet-500" aria-hidden />
+   737→                          <span className="text-sm font-semibold">#{o.id}</span>
+   738→                          <span className="max-w-[110px] truncate text-sm">{o.clientName}</span>
+   739→                          {o.table?.name && (
+   740→                            <span className="text-xs text-violet-700/70">{o.table.name}</span>
+   741→                          )}
+   742→                          <span className="text-sm font-bold tabular-nums text-violet-700">
+   743→                            {formatCurrency(o.remainingAmount)}
+   744→                          </span>
+   745→                          <span className="rounded-full border border-violet-300 bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-600">
+   746→                            {t('pos.deferredChip')}
+   747→                          </span>
+   748→                        </button>
+   749→                      ))}
+   750→                    </div>
+   751→                  </section>
+   752→                )}
+   753→              </div>
+   754→            )}
+   755→
+   756→            {/* Entrance marker — centered on the panel's bottom border */}
+   757→            <div className="absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 shadow-sm">
+   758→              <DoorOpen className="size-3.5 text-stone-400" aria-hidden />
+   759→              <span className="whitespace-nowrap text-[11px] font-medium text-stone-400">
+   760→                {t('admin.hallEntrance')}
+   761→              </span>
+   762→            </div>
+   763→          </div>
+   764→        </div>
+   765→      </div>
+   766→
+   767→      {/* ── Manual turnover dialogs: bussing (paid/deferred → amber) &
+   768→          cleaning (dirty → free) — two separate confirmations ── */}
+   769→      <AlertDialog
+   770→        open={clearTarget != null}
+   771→        onOpenChange={(o) => {
+   772→          if (!o && !clearTableMutation.isPending) setClearTarget(null)
+   773→        }}
+   774→      >
+   775→        <AlertDialogContent>
+   776→          <AlertDialogHeader>
+   777→            <AlertDialogTitle>
+   778→              {clearTarget?.status === 'dirty'
+   779→                ? t('pos.cleanTableTitle', { table: clearTarget?.name ?? '' })
+   780→                : t('pos.busTableTitle', { table: clearTarget?.name ?? '' })}
+   781→            </AlertDialogTitle>
+   782→            <AlertDialogDescription>
+   783→              {clearTarget?.status === 'dirty'
+   784→                ? t('pos.cleanTableDesc')
+   785→                : clearTarget?.status === 'paid'
+   786→                  ? t('pos.busTablePaidDesc')
+   787→                  : t('pos.clearTableDeferredDesc', {
+   788→                      client: clearTarget?.deferredClientName ?? '—',
+   789→                    })}
+   790→            </AlertDialogDescription>
+   791→          </AlertDialogHeader>
+   792→          <AlertDialogFooter>
+   793→            <AlertDialogCancel disabled={clearTableMutation.isPending}>
+   794→              {t('common.cancel')}
+   795→            </AlertDialogCancel>
+   796→            <AlertDialogAction
+   797→              className={cn(
+   798→                clearTarget?.status === 'dirty'
+   799→                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+   800→                  : 'bg-amber-600 text-white hover:bg-amber-700',
+   801→              )}
+   802→              disabled={clearTableMutation.isPending}
+   803→              onClick={(e) => {
+   804→                e.preventDefault()
+   805→                if (clearTarget) {
+   806→                  clearTableMutation.mutate({
+   807→                    id: clearTarget.id,
+   808→                    name: clearTarget.name,
+   809→                    phase: clearTarget.status === 'dirty' ? 'clean' : 'bus',
+   810→                  })
+   811→                }
+   812→              }}
+   813→            >
+   814→              {clearTableMutation.isPending && <Loader2 className="size-4 animate-spin" />}{' '}
+   815→              {clearTarget?.status === 'dirty' ? t('pos.markCleanedFree') : t('pos.sendToCleaning')}
+   816→            </AlertDialogAction>
+   817→          </AlertDialogFooter>
+   818→        </AlertDialogContent>
+   819→      </AlertDialog>
+   820→
+   821→      {/* ── R11: new delivery order dialog — phone required, address optional ── */}
+   822→      <Dialog open={deliveryOpen} onOpenChange={setDeliveryOpen}>
+   823→        <DialogContent className="sm:max-w-sm">
+   824→          <DialogHeader>
+   825→            <DialogTitle className="flex items-center gap-2">
+   826→              <Bike className="size-5 text-[#714B67]" /> {t('pos.newDeliveryOrder')}
+   827→            </DialogTitle>
+   828→            <DialogDescription>{t('pos.deliveryAddressPh')}</DialogDescription>
+   829→          </DialogHeader>
+   830→          <div className="space-y-4">
+   831→            <div className="grid gap-2">
+   832→              <Label htmlFor="delivery-phone">
+   833→                {t('pos.deliveryPhone')} *
+   834→              </Label>
+   835→              <Input
+   836→                id="delivery-phone"
+   837→                type="tel"
+   838→                inputMode="tel"
+   839→                value={deliveryPhone}
+   840→                onChange={(e) => setDeliveryPhone(e.target.value)}
+   841→                placeholder={t('pos.deliveryPhonePh')}
+   842→                maxLength={20}
+   843→                autoFocus
+   844→                aria-invalid={!deliveryPhoneOk || undefined}
+   845→                onKeyDown={(e) => {
+   846→                  if (e.key === 'Enter') {
+   847→                    e.preventDefault()
+   848→                    confirmDelivery()
+   849→                  }
+   850→                }}
+   851→              />
+   852→              {deliveryPhone.length > 0 && !deliveryPhoneOk && (
+   853→                <p className="text-xs font-medium text-destructive" role="alert">
+   854→                  {t('pos.deliveryPhoneInvalid')}
+   855→                </p>
+   856→              )}
+   857→            </div>
+   858→            <div className="grid gap-2">
+   859→              <Label htmlFor="delivery-address">{t('pos.deliveryAddress')}</Label>
+   860→              <Input
+   861→                id="delivery-address"
+   862→                value={deliveryAddress}
+   863→                onChange={(e) => setDeliveryAddress(e.target.value)}
+   864→                placeholder={t('pos.deliveryAddressPh')}
+   865→                maxLength={200}
+   866→              />
+   867→            </div>
+   868→          </div>
+   869→          <DialogFooter>
+   870→            <Button variant="outline" className="h-11" onClick={() => setDeliveryOpen(false)}>
+   871→              {t('common.cancel')}
+   872→            </Button>
+   873→            <Button
+   874→              className="h-11 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+   875→              disabled={!deliveryPhoneOk}
+   876→              onClick={confirmDelivery}
+   877→            >
+   878→              <Bike className="size-4" /> {t('pos.deliveryStart')}
+   879→            </Button>
+   880→          </DialogFooter>
+   881→        </DialogContent>
+   882→      </Dialog>
+   883→
+   884→      {/* ── R9: pending AI guest-move quick review dialog (floor chips) ── */}
+   885→      <MovementQuickDialog
+   886→        movement={aiMove}
+   887→        open={aiMove != null}
+   888→        onOpenChange={(o) => {
+   889→          if (!o) setAiMove(null)
+   890→        }}
+   891→        onDone={() => setAiMove(null)}
+   892→      />
+   893→    </div>
+   894→  )
+   895→}
+   896→
+   897→function TableTile({
+   898→  table,
+   899→  interaction,
+   900→  selected,
+   901→  onClick,
+   902→  movement,
+   903→  onMovementClick,
+   904→}: {
+   905→  table: RestaurantTable
+   906→  interaction: TableInteraction
+   907→  /** Seat Party: this free table is part of the current selection. */
+   908→  selected?: boolean
+   909→  onClick: () => void
+   910→  /** R9: pending AI guest-move suggestion originating at this table. */
+   911→  movement?: MovementCandidateDTO | null
+   912→  onMovementClick?: () => void
+   913→}) {
+   914→  const { t } = useI18n()
+   915→  const occupied = table.status === 'occupied' || table.openOrderId != null
+   916→  const reserved = table.status === 'reserved' && table.openOrderId == null
+   917→  // Round5/6: bill settled (awaiting bussing) / deferred check (client left)
+   918→  // / dirty = bussed, amber, awaiting the cleaning click.
+   919→  const paid = table.status === 'paid' && table.openOrderId == null
+   920→  const deferred = table.status === 'deferred' && table.openOrderId == null
+   921→  const dirty = table.status === 'dirty' && table.openOrderId == null
+   922→  // Round/oval silhouettes get extra horizontal padding so the centered
+   923→  // content stays inside the circle (overflow-hidden + truncation clip it).
+   924→  const isRound = table.shape === 'round' || table.shape === 'oval'
+   925→  // Corner badges: on circles the top corner is clipped by the silhouette,
+   926→  // so they sit at the top-center edge instead.
+   927→  const cornerBadgePos = isRound ? 'left-1/2 top-1 -translate-x-1/2' : 'end-1 top-1'
+   928→
+   929→  // Odoo duration "heat": occupied tables tint by how long guests are seated.
+   930→  const mins =
+   931→    occupied && table.openOrderSince
+   932→      ? Math.max(0, (Date.now() - new Date(table.openOrderSince).getTime()) / 60000)
+   933→      : 0
+   934→
+   935→  const heat = occupied
+   936→    ? mins < 15
+   937→      ? {
+   938→          tile: 'border-emerald-200 bg-emerald-50',
+   939→          text: 'text-emerald-900',
+   940→          amount: 'text-emerald-700',
+   941→          meta: 'text-emerald-600',
+   942→        }
+   943→      : mins < 45
+   944→        ? {
+   945→            tile: 'border-amber-200 bg-amber-50',
+   946→            text: 'text-amber-900',
+   947→            amount: 'text-amber-700',
+   948→            meta: 'text-amber-600',
+   949→          }
+   950→        : mins < 90
+   951→          ? {
+   952→              tile: 'border-orange-300 bg-orange-100',
+   953→              text: 'text-orange-900',
+   954→              amount: 'text-orange-700',
+   955→              meta: 'text-orange-600',
+   956→            }
+   957→          : {
+   958→              tile: 'border-rose-300 bg-rose-100',
+   959→              text: 'text-rose-900',
+   960→              amount: 'text-rose-700',
+   961→              meta: 'text-rose-600',
+   962→            }
+   963→    : null
+   964→
+   965→  return (
+   966→    <button
+   967→      type="button"
+   968→      disabled={interaction === 'ineligible'}
+   969→      onClick={onClick}
+   970→      className={cn(
+   971→        'relative flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden border p-3 text-center shadow-sm transition hover:shadow-md active:scale-[0.97]',
+   972→        shapeClasses(table.shape),
+   973→        isRound && 'px-4',
+   974→        occupied && heat
+   975→          ? cn(heat.tile, heat.text)
+   976→          : paid
+   977→            ? 'border-emerald-600 bg-emerald-600 text-white'
+   978→            : deferred
+   979→              ? 'border-violet-400 bg-violet-100 text-violet-900 ring-1 ring-violet-400'
+   980→              : dirty
+   981→                ? 'border-amber-500 bg-amber-200 text-amber-900 ring-2 ring-amber-400'
+   982→                : reserved
+   983→                  ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
+   984→                  : 'border-[#E2E2E0] bg-white text-stone-500',
+   985→        interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
+   986→        interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+   987→        selected && 'ring-2 ring-violet-600 ring-offset-1',
+   988→      )}
+   989→    >
+   990→      {/* FREE — clean white tile with capacity */}
+   991→      {!occupied && !reserved && !paid && !deferred && !dirty && (
+   992→        <>
+   993→          <p className="max-w-full truncate text-base font-bold leading-tight text-stone-500">
+   994→            {table.name}
+   995→          </p>
+   996→          <p className="flex items-center gap-1 text-xs text-stone-400">
+   997→            <Users className="size-3.5" aria-hidden />
+   998→            {table.capacity} {t('common.seats')}
+   999→          </p>
+  1000→        </>
+  1001→      )}
+  1002→
+  1003→      {/* OCCUPIED — duration "heat" tint, amount + guests + elapsed */}
+  1004→      {occupied && (
+  1005→        <>
+  1006→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+  1007→          <p className={cn('text-lg font-extrabold tabular-nums leading-none', heat?.amount)}>
+  1008→            {formatCurrency(table.openOrderTotal ?? 0)}
+  1009→          </p>
+  1010→          <p className={cn('flex items-center justify-center gap-1.5 text-[11px]', heat?.meta)}>
+  1011→            <Users className="size-3.5" aria-hidden />
+  1012→            {table.openOrderGuests ?? '—'}
+  1013→            <span aria-hidden>·</span>
+  1014→            <Clock className="size-3" aria-hidden />
+  1015→            {table.openOrderSince ? elapsedSince(table.openOrderSince) : t('pos.open')}
+  1016→          </p>
+  1017→        </>
+  1018→      )}
+  1019→
+  1020→      {/* RESERVED — amber outline ring + badge */}
+  1021→      {reserved && (
+  1022→        <>
+  1023→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+  1024→          <p className="flex items-center gap-1 text-xs text-amber-600">
+  1025→            <Users className="size-3.5" aria-hidden />
+  1026→            {table.capacity} {t('common.seats')}
+  1027→          </p>
+  1028→          <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-600">
+  1029→            <Clock className="size-3" aria-hidden />
+  1030→            {t('status.table.reserved')}
+  1031→          </span>
+  1032→        </>
+  1033→      )}
+  1034→
+  1035→      {/* PAID — solid emerald, tap to bus (→ amber cleaning) */}
+  1036→      {paid && (
+  1037→        <>
+  1038→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+  1039→          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white ring-1 ring-white/30">
+  1040→            <BadgeCheck className="size-3.5" aria-hidden />
+  1041→            {t('pos.tablePaidBadge')}
+  1042→          </span>
+  1043→          <p className="max-w-full truncate text-[10px] leading-tight text-white/80">
+  1044→            {t('pos.paidHint')}
+  1045→          </p>
+  1046→        </>
+  1047→      )}
+  1048→
+  1049→      {/* DEFERRED — violet, client name, tap to bus (→ amber cleaning) */}
+  1050→      {deferred && (
+  1051→        <>
+  1052→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+  1053→          <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+  1054→            <Hourglass className="size-3" aria-hidden />
+  1055→            {t('pos.tableDeferredBadge')}
+  1056→          </span>
+  1057→          <p className="max-w-full truncate text-xs font-semibold leading-tight">
+  1058→            {table.deferredClientName ?? '—'}
+  1059→          </p>
+  1060→          <p className="max-w-full truncate text-[10px] leading-tight text-violet-700/80">
+  1061→            {t('pos.deferredHint', { client: table.deferredClientName ?? '—' })}
+  1062→          </p>
+  1063→        </>
+  1064→      )}
+  1065→
+  1066→      {/* DIRTY — strong amber, bussed & awaiting the cleaning click */}
+  1067→      {dirty && (
+  1068→        <>
+  1069→          <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
+  1070→          <span className="inline-flex items-center gap-1 rounded-full border border-amber-600/40 bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+  1071→            <Brush className="size-3" aria-hidden />
+  1072→            {t('pos.tableDirtyBadge')}
+  1073→          </span>
+  1074→          <p className="max-w-full truncate text-[10px] font-semibold leading-tight text-amber-800/90">
+  1075→            {t('pos.dirtyHint')}
+  1076→          </p>
+  1077→        </>
+  1078→      )}
+  1079→
+  1080→      {/* MERGED — multi-table seating link badge (occupied tiles) */}
+  1081→      {occupied && table.openOrderMerged && (
+  1082→        <span
+  1083→          className={cn(
+  1084→            'absolute inline-flex items-center gap-0.5 rounded-full bg-black/10 px-1.5 py-0.5 text-[9px] font-bold uppercase',
+  1085→            cornerBadgePos,
+  1086→          )}
+  1087→        >
+  1088→          <Combine className="size-2.5" aria-hidden />
+  1089→          {t('pos.mergedBadge')}
+  1090→        </span>
+  1091→      )}
+  1092→
+  1093→      {/* SEAT PARTY — selection check */}
+  1094→      {selected && (
+  1095→        <span
+  1096→          className={cn(
+  1097→            'absolute flex size-5 items-center justify-center rounded-full bg-violet-600 text-white shadow-sm',
+  1098→            cornerBadgePos,
+  1099→          )}
+  1100→        >
+  1101→          <Check className="size-3.5" aria-hidden />
+  1102→        </span>
+  1103→      )}
+  1104→
+  1105→      {/* R9 — pending AI guest-move chip (source table) → quick review.
+  1106→          Sits at the bottom corner so the MERGED top badge stays clear. */}
+  1107→      {movement && (
+  1108→        <span
+  1109→          role="button"
+  1110→          tabIndex={0}
+  1111→          aria-label={t('vision.chipMoveAria', { table: table.name })}
+  1112→          onClick={(e) => {
+  1113→            e.stopPropagation()
+  1114→            onMovementClick?.()
+  1115→          }}
+  1116→          onKeyDown={(e) => {
+  1117→            if (e.key === 'Enter' || e.key === ' ') {
+  1118→              e.preventDefault()
+  1119→              e.stopPropagation()
+  1120→              onMovementClick?.()
+  1121→            }
+  1122→          }}
+  1123→          className={cn(
+  1124→            'absolute z-10 inline-flex cursor-pointer items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800 shadow-sm',
+  1125→            isRound ? 'left-1/2 bottom-1 -translate-x-1/2' : 'start-1 bottom-1',
+  1126→          )}
+  1127→        >
+  1128→          <PersonStanding className="size-2.5" aria-hidden />
+  1129→          {t('vision.chipMove')}
+  1130→        </span>
+  1131→      )}
+  1132→    </button>
+  1133→  )
+  1134→}
+  1135→
