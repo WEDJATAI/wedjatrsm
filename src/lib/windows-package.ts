@@ -13,6 +13,7 @@
  * install.bat (Bun or npm) — node_modules is never shipped.
  */
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -328,8 +329,13 @@ export async function buildWindowsPackage(
     pkg.scripts.start = 'next start -p 3000'
     await writeFile(path.join(tmp, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
 
-    // ── 3. fresh .env — schema-relative URL, never the dev machine's path ──
-    await writeFile(path.join(tmp, '.env'), 'DATABASE_URL=file:../db/custom.db\n')
+    // ── 3. fresh .env — schema-relative URL, never the dev machine's path.
+    // R16: every package gets its own crypto-random JWT secret so sessions
+    // on a customer's PC can never be forged with a known/shared secret. ──
+    await writeFile(
+      path.join(tmp, '.env'),
+      `DATABASE_URL=file:../db/custom.db\nJWT_SECRET=${randomBytes(48).toString('hex')}\n`,
+    )
 
     // ── 4. database ──
     await mkdir(path.join(tmp, 'db'))

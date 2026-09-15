@@ -910,7 +910,7 @@ export default function ProductsView() {
                               'inline-flex h-9 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors',
                               p.soldOut === true
                                 ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                                : 'border-[#E2E2E0] bg-white text-stone-500 hover:border-rose-300 hover:text-rose-600',
+                                : 'border-border bg-white text-stone-500 hover:border-rose-300 hover:text-rose-600',
                             )}
                           >
                             {p.soldOut === true ? t('pos.86') : t('pos.markSoldOut')}

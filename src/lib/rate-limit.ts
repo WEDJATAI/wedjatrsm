@@ -47,6 +47,23 @@ export function resetRateLimit(key: string): void {
   buckets.delete(key)
 }
 
+/**
+ * R16: check whether `key` is currently blocked WITHOUT recording a hit.
+ * Used for failure-counted buckets (e.g. per-IP login budget) where only
+ * failed attempts should consume the allowance.
+ */
+export function peekRateLimit(key: string, max: number, windowMs: number): RateLimitResult {
+  const now = Date.now()
+  const bucket = buckets.get(key)
+  if (!bucket) return { ok: true, retryAfterSec: 0, remaining: max }
+  const hits = bucket.hits.filter((t) => now - t < windowMs)
+  if (hits.length >= max) {
+    const retryAfterSec = Math.ceil((windowMs - (now - hits[0])) / 1000)
+    return { ok: false, retryAfterSec: Math.max(1, retryAfterSec), remaining: 0 }
+  }
+  return { ok: true, retryAfterSec: 0, remaining: max - hits.length }
+}
+
 /** Client IP best-effort (behind the platform gateway). */
 export function clientIp(req: { headers: { get(name: string): string | null } }): string {
   const fwd = req.headers.get('x-forwarded-for')

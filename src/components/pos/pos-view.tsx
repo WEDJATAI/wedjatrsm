@@ -1052,6 +1052,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           onSeatParty={handleSeatParty}
           onSettleDeferred={handleSettleDeferred}
           onMyShift={() => setMyShiftOpen(true)}
+          active={active}
         />
         {/* R8: per-server shift closeout — sales, tips & payment mix today */}
         <MyShiftSheet open={myShiftOpen} onOpenChange={setMyShiftOpen} />
@@ -1098,10 +1099,10 @@ export default function PosView({ active = true }: { active?: boolean }) {
   return (
     <div className="flex h-full min-h-[560px] flex-col">
       {/* ── Top bar (Odoo order chrome) ── */}
-      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[#E2E2E0] bg-white px-3 py-2 shadow-sm sm:px-4">
+      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-white px-3 py-2 shadow-sm sm:px-4">
         <Button
           variant="ghost"
-          className="h-11 rounded-xl px-3 text-[#714B67] hover:bg-[#714B67]/10"
+          className="h-11 rounded-xl px-3 text-primary hover:bg-primary/10"
           onClick={resetToTables}
           title={t('pos.backToTables')}
         >
@@ -1117,7 +1118,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
             </Badge>
           )}
           {order && (
-            <Badge className="bg-[#714B67] text-white hover:bg-[#714B67]">
+            <Badge className="bg-primary text-white hover:bg-primary">
               {t('common.order')} #{order.id}
             </Badge>
           )}
@@ -1141,7 +1142,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           {/* Guests: N — edit while drafting (sent with the order) or on the live order */}
           <Button
             variant="outline"
-            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+            className="h-11 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
             onClick={openGuestsEdit}
             title={t('pos.editGuests')}
           >
@@ -1151,7 +1152,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           </Button>
           <Button
             variant="outline"
-            className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+            className="h-11 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
             disabled={!order}
             onClick={startTransfer}
             title={order ? t('pos.transferHint') : t('pos.transferDisabledHint')}
@@ -1175,7 +1176,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
       {/* ── Body: product grid + cart ── */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <ProductGrid products={products} onAdd={addProduct} className="min-h-0 flex-1" />
-        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t border-[#E2E2E0] bg-white md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
+        <div className="flex max-h-[60vh] w-full shrink-0 flex-col border-t border-border bg-white md:max-h-none md:w-[380px] md:border-l md:border-t-0 lg:w-[420px]">
           <CartPanel
             order={order}
             orderLoading={orderLoading}
@@ -1320,7 +1321,7 @@ function GuestsDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Users className="size-5 text-[#714B67]" /> {t('pos.editGuests')}
+            <Users className="size-5 text-primary" /> {t('pos.editGuests')}
           </DialogTitle>
           <DialogDescription>{t('pos.guestsDialogDesc')}</DialogDescription>
         </DialogHeader>
@@ -1357,8 +1358,8 @@ function GuestsDialog({
                 className={cn(
                   'h-11 rounded-full border text-sm font-semibold tabular-nums transition-colors',
                   value === n
-                    ? 'border-[#714B67] bg-[#714B67] text-white'
-                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+                    ? 'border-primary bg-primary text-white'
+                    : 'border-border bg-white text-stone-600 hover:border-primary/40',
                 )}
               >
                 {n}
@@ -1371,7 +1372,7 @@ function GuestsDialog({
             {t('common.cancel')}
           </Button>
           <Button
-            className="bg-[#714B67] text-white hover:bg-[#714B67]/90"
+            className="bg-primary text-white hover:bg-primary/90"
             onClick={onConfirm}
             disabled={pending}
           >

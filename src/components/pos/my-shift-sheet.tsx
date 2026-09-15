@@ -54,7 +54,7 @@ export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) 
   // Surface fetch errors as a toast; the sheet itself stays mounted.
   useEffect(() => {
     if (isError) {
-      toast.error(error instanceof Error ? error.message : 'Request failed')
+      toast.error(error instanceof Error ? error.message : t('common.requestFailed'))
     }
   }, [isError, error])
 
@@ -99,7 +99,7 @@ export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) 
               <Skeleton className="h-28 rounded-xl" />
             </div>
           ) : !report ? null : empty ? (
-            <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-[#E2E2E0]">
+            <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border">
               <p className="px-6 text-center text-sm text-muted-foreground">
                 {t('shift.noSales')}
               </p>
@@ -134,7 +134,7 @@ export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) 
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     {t('shift.byMethod')}
                   </p>
-                  <div className="overflow-hidden rounded-xl border border-[#E2E2E0]">
+                  <div className="overflow-hidden rounded-xl border border-border">
                     <Table>
                       <TableHeader>
                         <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -196,7 +196,7 @@ function StatCell({
   return (
     <div
       className={cn(
-        'flex flex-col justify-center gap-0.5 rounded-xl border border-[#E2E2E0] bg-white p-3',
+        'flex flex-col justify-center gap-0.5 rounded-xl border border-border bg-white p-3',
         className,
       )}
     >

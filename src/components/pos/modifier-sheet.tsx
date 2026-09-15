@@ -147,11 +147,11 @@ export default function ModifierSheet({
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <SlidersHorizontal className="size-5 text-[#714B67]" />
+            <SlidersHorizontal className="size-5 text-primary" />
             <span className="truncate">{label}</span>
           </DialogTitle>
           <DialogDescription>
-            <span className="font-semibold tabular-nums text-[#714B67]">
+            <span className="font-semibold tabular-nums text-primary">
               {formatCurrency(product?.price ?? 0)}
             </span>
             {showEnglishHint && product && (
@@ -232,8 +232,8 @@ export default function ModifierSheet({
                           className={cn(
                             'flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-start text-sm shadow-sm transition active:scale-[0.98]',
                             active
-                              ? 'border-[#714B67] bg-[#714B67]/10 font-semibold text-[#714B67]'
-                              : 'border-[#E2E2E0] bg-white text-stone-700 hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04]',
+                              ? 'border-primary bg-primary/10 font-semibold text-primary'
+                              : 'border-border bg-white text-stone-700 hover:border-primary/50 hover:bg-primary/[0.04]',
                           )}
                         >
                           <span className="flex min-w-0 items-center gap-2">
@@ -241,8 +241,8 @@ export default function ModifierSheet({
                               className={cn(
                                 'flex size-5 shrink-0 items-center justify-center rounded-full border',
                                 active
-                                  ? 'border-[#714B67] bg-[#714B67] text-white'
-                                  : 'border-[#E2E2E0] bg-white',
+                                  ? 'border-primary bg-primary text-white'
+                                  : 'border-border bg-white',
                               )}
                               aria-hidden
                             >
@@ -291,12 +291,12 @@ export default function ModifierSheet({
               placeholder={t('pos.modCommentPh')}
               maxLength={MAX_COMMENT}
               rows={2}
-              className="min-h-11 resize-none rounded-xl border-[#E2E2E0] bg-white text-base"
+              className="min-h-11 resize-none rounded-xl border-border bg-white text-base"
             />
           </div>
 
           {/* ── Quantity + live line total ── */}
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-muted/40 p-3">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/40 p-3">
             <span className="text-sm font-medium">{t('pos.modQty')}</span>
             <div className="flex items-center gap-2" role="group" aria-label={t('pos.modQty')}>
               <Button
@@ -325,7 +325,7 @@ export default function ModifierSheet({
             </div>
             <span className="text-end">
               <span className="block text-[11px] text-muted-foreground">{t('pos.modItemTotal')}</span>
-              <span className="text-base font-bold tabular-nums text-[#714B67]">
+              <span className="text-base font-bold tabular-nums text-primary">
                 {formatCurrency(lineTotal)}
               </span>
             </span>
@@ -343,7 +343,7 @@ export default function ModifierSheet({
             {t('common.cancel')}
           </Button>
           <Button
-            className="h-11 rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+            className="h-11 rounded-xl bg-primary text-base font-semibold text-white hover:bg-primary/90"
             disabled={missingMinimum > 0}
             onClick={confirm}
           >

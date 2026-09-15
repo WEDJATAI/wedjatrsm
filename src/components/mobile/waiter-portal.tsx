@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Armchair,
+  WifiOff,
   BadgeCheck,
   Ban,
   Bike,
@@ -196,14 +197,23 @@ export default function WaiterPortal({
   }, [])
 
   // ── Queries ──────────────────────────────────────────────────────
-  const { data: floorPlanData, isLoading: floorLoading } = useQuery({
+  const {
+    data: floorPlanData,
+    isLoading: floorLoading,
+    isError: floorError,
+    refetch: refetchFloor,
+  } = useQuery({
     queryKey: ['floorplans'],
     queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
     refetchInterval: 3000, // LIVE table statuses (same as the desktop floor)
     enabled: active && mode === 'floor',
   })
 
-  const { data: openOrdersData, refetch: refetchOpenOrders } = useQuery({
+  const {
+    data: openOrdersData,
+    isError: openOrdersError,
+    refetch: refetchOpenOrders,
+  } = useQuery({
     queryKey: ['orders', 'open'],
     queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
     refetchInterval: 30000,
@@ -727,7 +737,8 @@ export default function WaiterPortal({
       <>
         <MyOrdersScreen
           orders={myOrders}
-          loading={openOrdersData == null}
+          loading={openOrdersData == null && !openOrdersError}
+          error={openOrdersError}
           onRefresh={() => void refetchOpenOrders()}
           onAddItems={(o) => {
             openOrder(o)
@@ -748,11 +759,11 @@ export default function WaiterPortal({
       <>
       <div className="flex h-full min-h-0 flex-col" data-tick={elapsedTick}>
         {/* ── Builder header ── */}
-        <header className="sticky top-0 z-10 shrink-0 border-b border-[#E2E2E0] bg-card px-3 py-2 shadow-sm">
+        <header className="sticky top-0 z-10 shrink-0 border-b border-border bg-card px-3 py-2 shadow-sm">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
-              className="h-11 shrink-0 rounded-xl px-2 text-[#714B67] hover:bg-[#714B67]/10"
+              className="h-11 shrink-0 rounded-xl px-2 text-primary hover:bg-primary/10"
               onClick={backToFloor}
               aria-label={t('m.backToTables')}
             >
@@ -777,7 +788,7 @@ export default function WaiterPortal({
             <Button
               variant="outline"
               size="icon"
-              className="size-11 shrink-0 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+              className="size-11 shrink-0 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
               onClick={openGuestsEdit}
               aria-label={t('pos.editGuests')}
             >
@@ -819,17 +830,17 @@ export default function WaiterPortal({
         />
 
         {/* ── Sticky cart bar (sits right above the bottom tab bar) ── */}
-        <div className="shrink-0 border-t border-[#E2E2E0] bg-card/95 px-3 py-2.5 backdrop-blur">
+        <div className="shrink-0 border-t border-border bg-card/95 px-3 py-2.5 backdrop-blur">
           <button
             type="button"
             onClick={() => setCartOpen(true)}
-            className="flex h-12 w-full items-center gap-3 rounded-2xl bg-[#714B67] px-4 text-white shadow-md transition active:scale-[0.98]"
+            className="flex h-12 w-full items-center gap-3 rounded-2xl bg-primary px-4 text-white shadow-md transition active:scale-[0.98]"
             aria-label={t('m.viewCart')}
           >
             <span className="relative shrink-0">
               <ShoppingBag className="size-5" aria-hidden />
               {draftCount > 0 && (
-                <span className="absolute -end-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-white text-[10px] font-bold tabular-nums text-[#714B67]">
+                <span className="absolute -end-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-white text-[10px] font-bold tabular-nums text-primary">
                   {draft.length}
                 </span>
               )}
@@ -848,7 +859,7 @@ export default function WaiterPortal({
           <SheetContent side="bottom" className="flex max-h-[88dvh] flex-col rounded-t-3xl px-0">
             <SheetHeader className="px-4 pb-2">
               <SheetTitle className="flex items-center gap-2 text-base">
-                <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
+                <ShoppingBag className="size-4 text-primary" aria-hidden />
                 {selectedTable?.name ?? t('pos.order')}
                 {order && <span className="tabular-nums text-muted-foreground">#{order.id}</span>}
               </SheetTitle>
@@ -876,7 +887,7 @@ export default function WaiterPortal({
                 </>
               )}
             </div>
-            <div className="shrink-0 space-y-2 border-t border-[#E2E2E0] bg-card px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+            <div className="shrink-0 space-y-2 border-t border-border bg-card px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
               <div className="space-y-0.5 text-xs text-muted-foreground">
                 <p className="flex justify-between tabular-nums">
                   <span>{t('money.subtotal')}</span>
@@ -892,13 +903,13 @@ export default function WaiterPortal({
                 </p>
                 <p className="flex justify-between text-sm font-bold text-foreground">
                   <span>{t('m.runningTotal')}</span>
-                  <span className="tabular-nums text-[#714B67]">{formatCurrency(cartTotals.total)}</span>
+                  <span className="tabular-nums text-primary">{formatCurrency(cartTotals.total)}</span>
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   variant="outline"
-                  className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                  className="h-11 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
                   disabled={!order}
                   onClick={() => order && void handleBill(order)}
                 >
@@ -914,7 +925,7 @@ export default function WaiterPortal({
                 </Button>
               </div>
               <Button
-                className="h-12 w-full rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+                className="h-12 w-full rounded-xl bg-primary text-base font-semibold text-white hover:bg-primary/90"
                 disabled={draft.length === 0 || sending}
                 onClick={() => void sendToKitchen()}
               >
@@ -948,6 +959,8 @@ export default function WaiterPortal({
         <FloorScreen
           floorPlans={floorPlanData?.floorPlans ?? []}
           loading={floorLoading}
+          error={floorError}
+          onRetry={() => void refetchFloor()}
           onSelectTable={selectTable}
           onTakeaway={startTakeaway}
           onDelivery={() => setDeliveryOpen(true)}
@@ -971,7 +984,7 @@ export default function WaiterPortal({
                     setPickerOrders(null)
                     openOrder(o)
                   }}
-                  className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-[#E2E2E0] bg-white px-3 py-2 text-start text-sm shadow-sm transition hover:border-[#714B67]/50 active:scale-[0.98]"
+                  className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-border bg-white px-3 py-2 text-start text-sm shadow-sm transition hover:border-primary/50 active:scale-[0.98]"
                 >
                   <span className="min-w-0">
                     <span className="block font-semibold tabular-nums">#{o.id}</span>
@@ -980,7 +993,7 @@ export default function WaiterPortal({
                       {elapsedSince(o.createdAt)}
                     </span>
                   </span>
-                  <span className="shrink-0 font-bold tabular-nums text-[#714B67]">
+                  <span className="shrink-0 font-bold tabular-nums text-primary">
                     {formatCurrency(o.remainingAmount)}
                   </span>
                 </button>
@@ -994,7 +1007,7 @@ export default function WaiterPortal({
           <DialogContent className="sm:max-w-sm">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <Bike className="size-5 text-[#714B67]" /> {t('pos.newDeliveryOrder')}
+                <Bike className="size-5 text-primary" /> {t('pos.newDeliveryOrder')}
               </DialogTitle>
               <DialogDescription>{t('pos.deliveryAddressPh')}</DialogDescription>
             </DialogHeader>
@@ -1034,7 +1047,7 @@ export default function WaiterPortal({
                 {t('common.cancel')}
               </Button>
               <Button
-                className="h-11 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+                className="h-11 bg-primary text-white hover:bg-primary/90"
                 disabled={deliveryPhone.trim().length < 5 || deliveryPhone.trim().length > 20}
                 onClick={confirmDelivery}
               >
@@ -1103,12 +1116,16 @@ export default function WaiterPortal({
 function FloorScreen({
   floorPlans,
   loading,
+  error,
+  onRetry,
   onSelectTable,
   onTakeaway,
   onDelivery,
 }: {
   floorPlans: FloorPlan[]
   loading: boolean
+  error?: boolean
+  onRetry?: () => void
   onSelectTable: (table: RestaurantTable) => void
   onTakeaway: () => void
   onDelivery: () => void
@@ -1136,13 +1153,13 @@ function FloorScreen({
             onClick={() => setFloorIdx(i)}
             className={cn(
               'h-11 shrink-0 rounded-full border px-4 text-sm font-semibold shadow-sm transition active:scale-95',
-              i === idx ? 'border-[#714B67] bg-[#714B67] text-white' : 'border-[#E2E2E0] bg-white text-stone-600',
+              i === idx ? 'border-primary bg-primary text-white' : 'border-border bg-white text-stone-600',
             )}
           >
             {fp.name}
           </button>
         ))}
-        <span className="mx-1 h-6 w-px shrink-0 bg-[#E2E2E0]" aria-hidden />
+        <span className="mx-1 h-6 w-px shrink-0 bg-border" aria-hidden />
         <button
           type="button"
           onClick={onTakeaway}
@@ -1153,7 +1170,7 @@ function FloorScreen({
         <button
           type="button"
           onClick={onDelivery}
-          className="flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-[#714B67]/40 bg-[#714B67]/[0.06] px-4 text-sm font-semibold text-[#714B67] shadow-sm transition active:scale-95"
+          className="flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-primary/40 bg-primary/[0.06] px-4 text-sm font-semibold text-primary shadow-sm transition active:scale-95"
         >
           <Bike className="size-4" aria-hidden /> {t('m.newDelivery')}
         </button>
@@ -1174,6 +1191,15 @@ function FloorScreen({
           {Array.from({ length: 6 }, (_, i) => (
             <Skeleton key={i} className="h-28 rounded-2xl" />
           ))}
+        </div>
+      ) : error ? (
+        // R16: real error state (was: fell through to the empty state)
+        <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-destructive/40 px-6 py-8 text-center">
+          <WifiOff className="size-8 text-destructive" aria-hidden />
+          <p className="text-sm font-medium text-destructive">{t('pos.floorLoadError')}</p>
+          <Button variant="outline" className="h-11 rounded-xl" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
         </div>
       ) : floorPlans.length === 0 ? (
         <EmptyState icon={Armchair} title={t('pos.noTables')} />
@@ -1221,7 +1247,7 @@ function FloorTableTile({ table, onClick }: { table: RestaurantTable; onClick: (
                 ? 'border-amber-500 bg-amber-200 text-amber-900 ring-2 ring-amber-400'
                 : reserved
                   ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
-                  : 'border-[#E2E2E0] bg-white text-stone-500',
+                  : 'border-border bg-white text-stone-500',
       )}
     >
       <p className="max-w-full truncate text-base font-bold leading-tight">{table.name}</p>
@@ -1315,7 +1341,7 @@ function BuilderProducts({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Category chips (horizontal scroll) */}
-      <div className="rms-scroll flex shrink-0 items-center gap-2 overflow-x-auto border-b border-[#E2E2E0] bg-card px-3 py-2" role="tablist">
+      <div className="rms-scroll flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-card px-3 py-2" role="tablist">
         <button
           type="button"
           role="tab"
@@ -1323,7 +1349,7 @@ function BuilderProducts({
           onClick={() => setCategory('all')}
           className={cn(
             'h-9 shrink-0 rounded-full border px-3.5 text-sm font-semibold transition active:scale-95',
-            category === 'all' ? 'border-[#714B67] bg-[#714B67] text-white' : 'border-[#E2E2E0] bg-white text-stone-600',
+            category === 'all' ? 'border-primary bg-primary text-white' : 'border-border bg-white text-stone-600',
           )}
         >
           {t('m.allCategories')}
@@ -1337,7 +1363,7 @@ function BuilderProducts({
             onClick={() => setCategory(c.id)}
             className={cn(
               'h-9 shrink-0 rounded-full border px-3.5 text-sm font-semibold transition active:scale-95',
-              category === c.id ? 'border-[#714B67] bg-[#714B67] text-white' : 'border-[#E2E2E0] bg-white text-stone-600',
+              category === c.id ? 'border-primary bg-primary text-white' : 'border-border bg-white text-stone-600',
             )}
           >
             {c.name}
@@ -1368,8 +1394,8 @@ function BuilderProducts({
                   className={cn(
                     'flex h-[88px] flex-col justify-between rounded-2xl border p-3 text-start shadow-sm transition hover:shadow-md active:scale-[0.97]',
                     soldOut
-                      ? 'cursor-not-allowed border-[#E2E2E0] bg-muted/60 text-muted-foreground'
-                      : 'border-[#E2E2E0] bg-white text-stone-700',
+                      ? 'cursor-not-allowed border-border bg-muted/60 text-muted-foreground'
+                      : 'border-border bg-white text-stone-700',
                   )}
                 >
                   <span className="line-clamp-2 min-w-0 text-sm font-semibold leading-snug">
@@ -1379,7 +1405,7 @@ function BuilderProducts({
                     <span
                       className={cn(
                         'text-sm font-bold tabular-nums',
-                        soldOut ? 'text-muted-foreground' : 'text-[#714B67]',
+                        soldOut ? 'text-muted-foreground' : 'text-primary',
                       )}
                     >
                       {formatCurrency(p.price)}
@@ -1427,7 +1453,7 @@ function SentLine({ item }: { item: Order['items'][number] }) {
           {mods.length > 0 && (
             <p className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-muted-foreground">
               {mods.map((m, i) => (
-                <span key={`${m.id}-${i}`} className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4">
+                <span key={`${m.id}-${i}`} className="rounded border border-border bg-muted/50 px-1 py-0 leading-4">
                   {localizedName(m.name, m.nameAr, lang)}
                 </span>
               ))}
@@ -1465,7 +1491,7 @@ function DraftLine({
           {mods.length > 0 && (
             <p className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-muted-foreground">
               {mods.map((m, i) => (
-                <span key={`${m.id}-${i}`} className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4">
+                <span key={`${m.id}-${i}`} className="rounded border border-border bg-muted/50 px-1 py-0 leading-4">
                   {localizedName(m.name, m.nameAr, lang)}
                 </span>
               ))}
@@ -1476,7 +1502,7 @@ function DraftLine({
               “{line.notes}”
             </p>
           )}
-          <p className="mt-0.5 text-xs font-semibold tabular-nums text-[#714B67]">
+          <p className="mt-0.5 text-xs font-semibold tabular-nums text-primary">
             {formatCurrency(lineUnitPrice(line))}
           </p>
         </div>
@@ -1516,6 +1542,7 @@ function DraftLine({
 function MyOrdersScreen({
   orders,
   loading,
+  error,
   onRefresh,
   onAddItems,
   onBill,
@@ -1525,6 +1552,7 @@ function MyOrdersScreen({
 }: {
   orders: Order[]
   loading: boolean
+  error?: boolean
   onRefresh: () => void
   onAddItems: (order: Order) => void
   onBill: (order: Order) => void
@@ -1541,7 +1569,7 @@ function MyOrdersScreen({
         <Button
           variant="outline"
           size="icon"
-          className="size-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+          className="size-11 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
           onClick={onRefresh}
           aria-label={t('m.refresh')}
         >
@@ -1555,28 +1583,37 @@ function MyOrdersScreen({
             <Skeleton key={i} className="h-32 w-full rounded-2xl" />
           ))}
         </div>
+      ) : error ? (
+        // R16: real error state (was: fell through to the empty state)
+        <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-destructive/40 px-6 py-8 text-center">
+          <WifiOff className="size-8 text-destructive" aria-hidden />
+          <p className="text-sm font-medium text-destructive">{t('m.myOrdersError')}</p>
+          <Button variant="outline" className="h-11 rounded-xl" onClick={onRefresh}>
+            {t('common.retry')}
+          </Button>
+        </div>
       ) : orders.length === 0 ? (
         <EmptyState icon={ClipboardList} title={t('m.myOrdersEmpty')} hint={t('m.myOrdersEmptyHint')} />
       ) : (
         <ul className="space-y-3">
           {orders.map((o) => (
-            <li key={o.id} className="rounded-2xl border border-[#E2E2E0] bg-white p-4 shadow-sm">
+            <li key={o.id} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="flex items-center gap-1.5 text-sm font-bold">
                     {o.table ? (
                       <>
-                        <Armchair className="size-4 shrink-0 text-[#714B67]" aria-hidden />
+                        <Armchair className="size-4 shrink-0 text-primary" aria-hidden />
                         <span className="truncate">{o.table.name}</span>
                       </>
                     ) : o.orderType === 'delivery' ? (
                       <>
-                        <Bike className="size-4 shrink-0 text-[#714B67]" aria-hidden />
+                        <Bike className="size-4 shrink-0 text-primary" aria-hidden />
                         <span className="truncate">{o.deliveryPhone ?? t('m.newDelivery')}</span>
                       </>
                     ) : (
                       <>
-                        <ShoppingBag className="size-4 shrink-0 text-[#714B67]" aria-hidden />
+                        <ShoppingBag className="size-4 shrink-0 text-primary" aria-hidden />
                         <span className="truncate">{t('common.takeaway')}</span>
                       </>
                     )}
@@ -1588,7 +1625,7 @@ function MyOrdersScreen({
                     <span className="tabular-nums">· {t('m.guestsCount', { n: o.guests })}</span>
                   </p>
                 </div>
-                <span className="shrink-0 text-base font-extrabold tabular-nums text-[#714B67]">
+                <span className="shrink-0 text-base font-extrabold tabular-nums text-primary">
                   {formatCurrency(o.remainingAmount)}
                 </span>
               </div>
@@ -1596,7 +1633,7 @@ function MyOrdersScreen({
               <div className="mt-3 grid grid-cols-4 gap-1.5">
                 <Button
                   variant="outline"
-                  className="h-11 flex-col gap-0 rounded-xl border-[#714B67]/40 px-1 text-[10px] font-semibold text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                  className="h-11 flex-col gap-0 rounded-xl border-primary/40 px-1 text-[10px] font-semibold text-primary hover:bg-primary/10 hover:text-primary"
                   onClick={() => onAddItems(o)}
                 >
                   <Plus className="size-4" aria-hidden /> {t('m.addItems')}
@@ -1663,7 +1700,7 @@ function GuestsDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Users className="size-5 text-[#714B67]" /> {t('m.seatGuests')}
+            <Users className="size-5 text-primary" /> {t('m.seatGuests')}
           </DialogTitle>
           <DialogDescription>{t('m.seatGuestsDesc')}</DialogDescription>
         </DialogHeader>
@@ -1700,8 +1737,8 @@ function GuestsDialog({
                 className={cn(
                   'h-11 rounded-full border text-sm font-semibold tabular-nums transition-colors',
                   value === n
-                    ? 'border-[#714B67] bg-[#714B67] text-white'
-                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+                    ? 'border-primary bg-primary text-white'
+                    : 'border-border bg-white text-stone-600 hover:border-primary/40',
                 )}
               >
                 {n}
@@ -1713,7 +1750,7 @@ function GuestsDialog({
           <Button variant="outline" onClick={onCancel} disabled={pending}>
             {t('common.cancel')}
           </Button>
-          <Button className="bg-[#714B67] text-white hover:bg-[#714B67]/90" onClick={onConfirm} disabled={pending}>
+          <Button className="bg-primary text-white hover:bg-primary/90" onClick={onConfirm} disabled={pending}>
             {pending ? <Loader2 className="animate-spin" /> : <Check />} {t('common.confirm')}
           </Button>
         </DialogFooter>
@@ -1733,7 +1770,7 @@ function EmptyState({
   hint?: string
 }) {
   return (
-    <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#E2E2E0] px-6 py-8 text-center text-muted-foreground">
+    <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border px-6 py-8 text-center text-muted-foreground">
       <Icon className="size-8 opacity-40" aria-hidden />
       <p className="text-sm font-medium">{title}</p>
       {hint && <p className="text-xs">{hint}</p>}

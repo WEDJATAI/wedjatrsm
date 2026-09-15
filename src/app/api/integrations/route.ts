@@ -37,6 +37,13 @@ function newWebhookKey(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** R16: mask a key for list responses — full value only at (re)generation time. */
+function maskKey(key: string | null): string | null {
+  if (!key) return null
+  if (key.length <= 8) return '••••'
+  return `${key.slice(0, 4)}••••${key.slice(-4)}`
+}
+
 async function readSetting(key: string): Promise<string | null> {
   const row = await db.appSetting.findUnique({ where: { key } })
   return row?.value ?? null
@@ -48,7 +55,7 @@ async function upsertSetting(key: string, value: string): Promise<void> {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'settings', 'customers'])
+    const sessionUser = await requireAuth(req, ['admin', 'settings', 'customers'])
 
     const [loyalty, webhookKeyRaw, etaReg, etaAddress] = await Promise.all([
       getLoyaltySettings(),
@@ -76,7 +83,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       loyalty,
       deliveryWebhook: {
-        key: webhookKeyRaw, // null = not generated yet
+        // R16: full key only for admins (they configure aggregators);
+        // semi-privileged roles (settings/customers permissions) get the
+        // masked form. Regeneration (PUT) reveals the fresh value once.
+        key: sessionUser.role === 'admin' ? webhookKeyRaw : maskKey(webhookKeyRaw),
+        keyGenerated: webhookKeyRaw != null,
         recentOrders: recentExternal.map((o) => ({
           ...o,
           totalAmount: Math.round(o.totalAmount * 100) / 100,
@@ -162,9 +173,11 @@ export async function PUT(req: NextRequest) {
     }
 
     // ── webhook key (re)generation ──
+    let freshWebhookKey: string | null = null
     if (body?.regenerateWebhookKey === true) {
       const key = newWebhookKey()
       await upsertSetting(DELIVERY_WEBHOOK_KEY_SETTING, key)
+      freshWebhookKey = key // shown exactly once, in this response
       changed.push('deliveryWebhookKey regenerated')
     }
 
@@ -178,7 +191,8 @@ export async function PUT(req: NextRequest) {
       details: `Updated: ${changed.join(', ')}`,
     })
 
-    // return the fresh state (same shape as GET)
+    // return the fresh state (same shape as GET). The webhook key is masked
+    // UNLESS it was just regenerated — the one moment the full value is shown.
     const [loyalty, webhookKeyRaw, etaReg, etaAddress] = await Promise.all([
       getLoyaltySettings(),
       readSetting(DELIVERY_WEBHOOK_KEY_SETTING),
@@ -187,7 +201,11 @@ export async function PUT(req: NextRequest) {
     ])
     return NextResponse.json({
       loyalty,
-      deliveryWebhook: { key: webhookKeyRaw, recentOrders: [] },
+      deliveryWebhook: {
+        key: freshWebhookKey ?? maskKey(webhookKeyRaw),
+        keyGenerated: webhookKeyRaw != null,
+        recentOrders: [],
+      },
       eta: { registrationNumber: etaReg ?? '', address: etaAddress ?? '' },
     })
   } catch (err) {

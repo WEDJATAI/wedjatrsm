@@ -119,7 +119,7 @@ const ADMIN_VIEWS = [
 
 /** Soft role tints for the light mobile top bar. */
 const ROLE_BADGE_CLASS: Record<string, string> = {
-  admin: 'border-primary/40 bg-primary/10 text-[#714B67]',
+  admin: 'border-primary/40 bg-primary/10 text-primary',
   waiter: 'border-emerald-300 bg-emerald-50 text-emerald-700',
   kitchen: 'border-rose-300 bg-rose-50 text-rose-700',
   custom: 'border-amber-300 bg-amber-50 text-amber-700',
@@ -312,19 +312,19 @@ export default function MobileShell({
                 }}
                 className={cn(
                   'relative flex min-h-[60px] min-w-16 flex-1 flex-col items-center justify-center gap-0.5 px-2 py-2 text-[11px] font-medium transition-colors',
-                  active ? 'text-[#714B67]' : 'text-muted-foreground hover:text-foreground',
+                  active ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
                 <span className="relative">
                   <Icon className="size-5" aria-hidden />
                   {tab.kind === 'waiter-tab' && (tab.badge ?? 0) > 0 && (
-                    <span className="absolute -end-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-[#714B67] px-1 text-[9px] font-bold tabular-nums text-white">
+                    <span className="absolute -end-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold tabular-nums text-white">
                       {tab.badge}
                     </span>
                   )}
                 </span>
                 <span className="max-w-full truncate">{tab.label}</span>
-                {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-[#714B67]" aria-hidden />}
+                {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-primary" aria-hidden />}
               </button>
             )
           })}
@@ -433,7 +433,7 @@ function MoreRow({
               aria-current={active ? 'page' : undefined}
               className={cn(
                 'flex min-h-11 w-full items-center gap-2.5 rounded-xl px-3 text-start text-sm font-medium transition active:scale-[0.98]',
-                active ? 'bg-[#714B67]/10 text-[#714B67]' : 'text-stone-700 hover:bg-muted/60',
+                active ? 'bg-primary/10 text-primary' : 'text-stone-700 hover:bg-muted/60',
               )}
             >
               <Icon className="size-4 shrink-0" aria-hidden />
@@ -467,8 +467,8 @@ function MoreCell({
       className={cn(
         'flex min-h-[60px] w-full flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2 text-center text-xs font-medium transition active:scale-[0.97]',
         active
-          ? 'border-[#714B67] bg-[#714B67]/10 text-[#714B67]'
-          : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+          ? 'border-primary bg-primary/10 text-primary'
+          : 'border-border bg-white text-stone-600 hover:border-primary/40',
       )}
     >
       <Icon className="size-5 shrink-0" aria-hidden />

@@ -61,6 +61,8 @@ export const r15MobileDict: DictPair = {
     // ── Waiter portal — my orders ──
     'm.myOrdersTitle': 'My open orders',
     'm.myOrdersEmpty': 'No open orders yet',
+    // R16: real error state for the My Orders tab
+    'm.myOrdersError': 'Could not load your orders — check the connection and retry.',
     'm.myOrdersEmptyHint': 'Start one from the Tables tab — or pick up a takeaway.',
     'm.addItems': 'Add items',
     'm.refresh': 'Refresh',
@@ -121,6 +123,7 @@ export const r15MobileDict: DictPair = {
     // ── Waiter portal — my orders ──
     'm.myOrdersTitle': 'طلباتي المفتوحة',
     'm.myOrdersEmpty': 'لا توجد طلبات مفتوحة بعد',
+    'm.myOrdersError': 'تعذر تحميل طلباتك — تحقق من الاتصال وأعد المحاولة.',
     'm.myOrdersEmptyHint': 'ابدأ طلبًا من تبويب الطاولات — أو افتح طلبًا سفسريًا.',
     'm.addItems': 'إضافة أصناف',
     'm.refresh': 'تحديث',

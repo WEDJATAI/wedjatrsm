@@ -377,7 +377,7 @@ export default function ReservationsView() {
                 'h-11 rounded-full border px-4 text-sm font-medium transition-colors',
                 active
                   ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-[#E2E2E0] bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground',
+                  : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground',
               )}
             >
               {t(FILTER_KEYS[f])}
@@ -755,7 +755,7 @@ function SeatTableChip({
           ? 'border-violet-600 bg-violet-600 text-white'
           : fits
             ? 'border-violet-300 bg-violet-50 text-violet-800 hover:border-violet-500 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300'
-            : 'border-[#E2E2E0] bg-card text-muted-foreground hover:border-violet-400/50',
+            : 'border-border bg-card text-muted-foreground hover:border-violet-400/50',
       )}
     >
       <Armchair className="size-4" aria-hidden />

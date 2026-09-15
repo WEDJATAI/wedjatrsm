@@ -140,7 +140,7 @@ export default function IntegrationsView() {
         body: JSON.stringify({
           provider: 'generic',
           externalId: `rsm-test-${new Date().toISOString().slice(0, 10)}`,
-          customerName: 'Webhook Test',
+          customerName: t('integrations.delivery.testCustomer'),
           customerPhone: '01000000000',
           address: 'Test order from the Integrations screen',
           items: [{ name: 'Koshari', quantity: 1 }],
@@ -190,7 +190,7 @@ export default function IntegrationsView() {
       await navigator.clipboard.writeText(text)
       toast.success(t('integrations.delivery.copied'))
     } catch {
-      toast.error('Clipboard unavailable')
+      toast.error(t('integrations.delivery.clipboardFail'))
     }
   }
 
@@ -207,7 +207,7 @@ export default function IntegrationsView() {
     <section className="flex-1 space-y-4 p-4 sm:p-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded-xl bg-[#714B67] text-white shadow">
+        <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-white shadow">
           <Plug className="size-6" aria-hidden />
         </div>
         <div>
@@ -280,7 +280,7 @@ export default function IntegrationsView() {
                 ) : (
                   <Button
                     type="button"
-                    className="h-11 w-full rounded-xl bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+                    className="h-11 w-full rounded-xl bg-primary font-semibold text-white hover:bg-primary/90"
                     disabled={saveMutation.isPending}
                     onClick={regenerateKey}
                   >
@@ -305,7 +305,7 @@ export default function IntegrationsView() {
                 </Button>
                 <Button
                   type="button"
-                  className="h-11 rounded-xl bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+                  className="h-11 rounded-xl bg-primary font-semibold text-white hover:bg-primary/90"
                   disabled={testing}
                   onClick={() => void sendTestOrder()}
                 >
@@ -320,7 +320,7 @@ export default function IntegrationsView() {
             </p>
 
             {/* request format */}
-            <details className="rounded-lg border border-[#E2E2E0] bg-muted/30 p-3">
+            <details className="rounded-lg border border-border bg-muted/30 p-3">
               <summary className="cursor-pointer text-sm font-semibold">
                 {t('integrations.delivery.docsTitle')}
               </summary>
@@ -352,7 +352,7 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
                   {data.deliveryWebhook.recentOrders.map((o) => (
                     <li
                       key={o.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#E2E2E0] bg-white px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-white px-3 py-2 text-sm"
                     >
                       <span className="min-w-0 truncate">
                         <span className="font-semibold">#{o.id}</span> · {o.clientName ?? '—'}
@@ -372,7 +372,7 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
           {/* ── Card 2: loyalty rules ── */}
           <Card className="space-y-4 p-4 sm:p-6">
             <div className="flex items-start gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#714B67]/15 text-[#714B67]">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
                 <Sparkles className="size-5" aria-hidden />
               </div>
               <div className="min-w-0">
@@ -382,7 +382,7 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
-              <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white px-3">
+              <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-white px-3">
                 <span className="text-sm font-medium">{t('integrations.loyalty.enabled')}</span>
                 <Switch
                   checked={loyaltyEnabled ?? true}
@@ -420,13 +420,13 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
               </div>
             </div>
 
-            <p className="rounded-lg bg-[#714B67]/[0.06] px-3 py-2 text-sm text-[#714B67]">
+            <p className="rounded-lg bg-primary/[0.06] px-3 py-2 text-sm text-primary">
               {t('integrations.loyalty.preview', loyaltyPreview)}
             </p>
 
             <Button
               type="button"
-              className="h-11 rounded-xl bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+              className="h-11 rounded-xl bg-primary font-semibold text-white hover:bg-primary/90"
               disabled={saveMutation.isPending || loyaltyEnabled === null}
               onClick={saveLoyalty}
             >
@@ -481,7 +481,7 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
               {t('customers.save')}
             </Button>
 
-            <div className="grid gap-3 rounded-xl border border-[#E2E2E0] bg-muted/30 p-3 sm:grid-cols-[1fr_1fr_auto]">
+            <div className="grid gap-3 rounded-xl border border-border bg-muted/30 p-3 sm:grid-cols-[1fr_1fr_auto]">
               <div className="space-y-1.5">
                 <Label htmlFor="eta-from">{t('integrations.eta.from')}</Label>
                 <Input
@@ -505,7 +505,7 @@ x-rsm-key: <${t('integrations.delivery.keyLabel')}>
               <div className="flex items-end">
                 <Button
                   type="button"
-                  className="h-11 rounded-xl bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+                  className="h-11 rounded-xl bg-primary font-semibold text-white hover:bg-primary/90"
                   disabled={exportMutation.isPending}
                   onClick={() => exportMutation.mutate()}
                 >

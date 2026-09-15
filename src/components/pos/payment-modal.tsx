@@ -475,7 +475,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
           </DialogHeader>
 
           {/* Summary */}
-          <div className="grid grid-cols-3 gap-2 rounded-xl border border-[#E2E2E0] bg-white p-3 text-center shadow-sm">
+          <div className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-white p-3 text-center shadow-sm">
             <div>
               <p className="text-xs text-muted-foreground">{t('money.total')}</p>
               <p className="text-sm font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</p>
@@ -498,12 +498,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
               tender immediately (a payment row appears in the summary); the
               modal stays open for the remainder. */}
           {order.customer != null && (
-            <div className="flex items-center gap-2 rounded-xl border border-[#714B67]/25 bg-[#714B67]/[0.05] px-3 py-2.5">
-              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#714B67]/15 text-base" aria-hidden>
+            <div className="flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.05] px-3 py-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-base" aria-hidden>
                 ⭐
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-[#714B67]">
+                <p className="truncate text-sm font-semibold text-primary">
                   {order.customer.name}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -537,7 +537,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                       Number(redeemInput) > Math.floor(customerPoints)
                     }
                     onClick={() => void handleRedeem(Number(redeemInput))}
-                    className="h-10 rounded-lg bg-[#714B67] px-3 text-xs font-semibold text-white hover:bg-[#714B67]/90"
+                    className="h-10 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-primary/90"
                   >
                     {redeeming ? <Loader2 className="size-4 animate-spin" /> : t('pos.redeemPoints')}
                   </Button>
@@ -548,7 +548,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                     disabled={redeeming}
                     title={t('pos.redeemAll')}
                     onClick={() => void handleRedeem(Math.floor(customerPoints))}
-                    className="h-10 rounded-lg border-[#714B67]/40 px-3 text-xs font-semibold text-[#714B67] hover:bg-[#714B67]/10"
+                    className="h-10 rounded-lg border-primary/40 px-3 text-xs font-semibold text-primary hover:bg-primary/10"
                   >
                     {t('pos.redeemAll')}
                   </Button>
@@ -560,7 +560,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
           {/* Method tiles — apply to the active row below */}
           <div className="space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('pos.methodAppliesTo')} <span className="text-[#714B67]">{activeRowLabel}</span>
+              {t('pos.methodAppliesTo')} <span className="text-primary">{activeRowLabel}</span>
             </p>
             <div className="grid grid-cols-3 gap-2">
               {PAYMENT_METHODS.map((m) => {
@@ -576,8 +576,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                     className={cn(
                       'flex h-16 flex-col items-center justify-center gap-1 rounded-xl border-2 text-sm font-semibold transition active:scale-95',
                       active
-                        ? 'border-[#714B67] bg-[#714B67]/10 text-[#714B67]'
-                        : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border bg-white text-stone-600 hover:border-primary/40',
                     )}
                   >
                     <Icon className="size-6" aria-hidden />
@@ -627,7 +627,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
             {/* ── Equal Split ── */}
             <TabsContent value="equal" className="space-y-3 pt-3">
-              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-white p-2.5">
                 <Users className="size-4 text-muted-foreground" />
                 <span className="flex-1 text-sm font-medium">{t('pos.splitBetween')}</span>
                 <Input
@@ -666,7 +666,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
             {/* ── By Items ── */}
             <TabsContent value="items" className="space-y-3 pt-3">
-              <div className="flex items-center gap-3 rounded-xl border border-[#E2E2E0] bg-white p-2.5">
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-white p-2.5">
                 <Users className="size-4 text-muted-foreground" />
                 <span className="flex-1 text-sm font-medium">{t('pos.assignItemsTo')}</span>
                 <Input
@@ -690,7 +690,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   return (
                     <div
                       key={line.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E2E2E0] bg-white p-2.5"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-white p-2.5"
                     >
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{line.label}</p>
@@ -707,8 +707,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                             className={cn(
                               'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
                               p === active
-                                ? 'border-[#714B67] bg-[#714B67] text-white'
-                                : 'border-border bg-muted/50 text-muted-foreground hover:border-[#714B67]/40',
+                                ? 'border-primary bg-primary text-white'
+                                : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/40',
                             )}
                             aria-pressed={p === active}
                           >
@@ -773,7 +773,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
           {/* R8: Tip — gratuity ON TOP of the bill, attached to the ACTIVE
               payment row (switch rows above to tip a different payer). */}
-          <div className="space-y-2 rounded-xl border border-[#E2E2E0] bg-white p-3">
+          <div className="space-y-2 rounded-xl border border-border bg-white p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
                 <HandCoins className="size-4 shrink-0 text-emerald-600" aria-hidden />
@@ -803,7 +803,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                       'flex h-12 flex-col items-center justify-center rounded-lg border-2 px-1 text-xs font-semibold leading-tight transition active:scale-95',
                       active
                         ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
-                        : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-emerald-600/40',
+                        : 'border-border bg-white text-stone-600 hover:border-emerald-600/40',
                     )}
                   >
                     <span>{pct === 0 ? t('pos.noTip') : `${pct}%`}</span>
@@ -823,7 +823,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   'flex h-12 items-center justify-center rounded-lg border-2 px-1 text-xs font-semibold transition active:scale-95',
                   activeSel === 'custom'
                     ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
-                    : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-emerald-600/40',
+                    : 'border-border bg-white text-stone-600 hover:border-emerald-600/40',
                 )}
               >
                 {t('pos.tipCustom')}
@@ -852,7 +852,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
           </div>
 
           {/* Live total + submit */}
-          <div className="space-y-2 border-t border-[#E2E2E0] pt-3">
+          <div className="space-y-2 border-t border-border pt-3">
             {tipsTotal > 0 && (
               <div className="flex items-center justify-between gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                 <span className="flex min-w-0 items-center gap-1.5 font-medium">
@@ -892,7 +892,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
             <div className="flex gap-2">
               <Button
                                variant="outline"
-                className="h-12 rounded-xl border-[#E2E2E0]"
+                className="h-12 rounded-xl border-border"
                 onClick={() => setCheckOpen(true)}
                 title={t('pos.printCheckPaymentHint')}
               >
@@ -1010,7 +1010,7 @@ function PayerNav({
 }) {
   const { t } = useI18n()
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#E2E2E0] bg-muted/40 p-2">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/40 p-2">
       <Button
         variant="outline"
         size="icon"
@@ -1023,7 +1023,7 @@ function PayerNav({
         {isRTL ? <ChevronRight className="size-5" /> : <ChevronLeft className="size-5" />}
       </Button>
       <div className="min-w-0 flex-1 text-center">
-        <p className="text-sm font-bold tabular-nums text-[#714B67]">
+        <p className="text-sm font-bold tabular-nums text-primary">
           {t('pos.payerOf', { n: activeIdx + 1, m: count })}
         </p>
         <div className="mt-1 flex flex-wrap justify-center gap-1">
@@ -1037,8 +1037,8 @@ function PayerNav({
               className={cn(
                 'h-10 min-w-10 rounded-full border px-2 text-xs font-bold tabular-nums transition-colors',
                 activeIdx === i
-                  ? 'border-[#714B67] bg-[#714B67] text-white'
-                  : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40',
+                  ? 'border-primary bg-primary text-white'
+                  : 'border-border bg-white text-stone-600 hover:border-primary/40',
               )}
             >
               {i + 1}
@@ -1047,7 +1047,7 @@ function PayerNav({
         </div>
       </div>
       <Button
-        className="h-11 shrink-0 rounded-xl bg-[#714B67] px-5 font-semibold text-white hover:bg-[#714B67]/90"
+        className="h-11 shrink-0 rounded-xl bg-primary px-5 font-semibold text-white hover:bg-primary/90"
         disabled={activeIdx >= count - 1}
         onClick={() => onSelect(Math.min(count - 1, activeIdx + 1))}
       >
@@ -1095,19 +1095,19 @@ function PayRow({
       className={cn(
         'cursor-pointer rounded-xl border p-2.5 transition-colors',
         active
-          ? 'border-[#714B67] bg-[#714B67]/[0.06] shadow-sm ring-1 ring-[#714B67]'
-          : 'border-[#E2E2E0] bg-white',
+          ? 'border-primary bg-primary/[0.06] shadow-sm ring-1 ring-primary'
+          : 'border-border bg-white',
       )}
       onClick={() => onActivate?.()}
       title={onActivate ? t('pos.selectRowHint') : undefined}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
-          <span className={cn('text-sm', active ? 'font-bold text-[#714B67]' : 'font-medium')}>{label}</span>
+          <span className={cn('text-sm', active ? 'font-bold text-primary' : 'font-medium')}>{label}</span>
           <span
             className={cn(
               'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
-              active ? 'bg-[#714B67] text-white' : 'bg-[#714B67]/10 text-[#714B67]',
+              active ? 'bg-primary text-white' : 'bg-primary/10 text-primary',
             )}
           >
             <Icon className="size-3" aria-hidden /> {t(meta.labelKey)}

@@ -50,6 +50,17 @@ function serializeUser(user: UserRowWithRole) {
   }
 }
 
+/** R16 hardening: quick-login PINs are login credentials — cleartext values
+ *  are only returned to full admins. Non-admin holders of the 'users'
+ *  permission (e.g. an HR-style custom role) see null (they can still SET a
+ *  new PIN via create/edit — the value they typed is what staff will use). */
+function pinForSession(
+  pin: string | null,
+  sessionRole: string,
+): string | null {
+  return sessionRole === 'admin' ? pin : null
+}
+
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
   try {
     const parsed: unknown = await req.json()
@@ -103,12 +114,17 @@ async function resolveRoleId(role: string, body: Record<string, unknown>): Promi
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req, ['admin', 'users'])
+    const session = await requireAuth(req, ['admin', 'users'])
     const users = await db.user.findMany({
       orderBy: { createdAt: 'asc' },
       select: USER_SAFE_SELECT,
     })
-    return NextResponse.json({ users: users.map(serializeUser) })
+    return NextResponse.json({
+      users: users.map((u) => {
+        const s = serializeUser(u)
+        return { ...s, pin: pinForSession(s.pin, session.role) }
+      }),
+    })
   } catch (err) {
     return errorResponse(err)
   }
@@ -147,6 +163,8 @@ export async function POST(req: NextRequest) {
         select: USER_SAFE_SELECT,
       })
       const serialized = serializeUser(user)
+      // the actor just supplied this PIN — safe to echo back to them once
+      serialized.pin = pinForSession(serialized.pin, session.role) ?? pin ?? null
 
       await logAudit({
         user: session,

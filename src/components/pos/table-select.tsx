@@ -22,6 +22,7 @@ import {
   ShoppingBag,
   Users,
   Wallet,
+  WifiOff,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -75,6 +76,10 @@ type TableSelectProps = {
   onSettleDeferred: (order: Order) => void
   /** "My shift" closeout — pos-view opens the per-server shift sheet (R8). */
   onMyShift?: () => void
+  /** R16: false while the POS view is mounted-hidden (user in another
+   *  top-level view) — pauses the live 3s polls so hidden terminals stop
+   *  hammering the API (~2 req/s each). Mirrors the mobile portal. */
+  active?: boolean
 }
 
 type ToolKind = 'transfer' | 'merge' | 'seat'
@@ -107,6 +112,7 @@ export default function TableSelect({
   onSeatParty,
   onSettleDeferred,
   onMyShift,
+  active = true,
 }: TableSelectProps) {
   const queryClient = useQueryClient()
   const { t } = useI18n()
@@ -135,23 +141,24 @@ export default function TableSelect({
 
   const deliveryPhoneOk = deliveryPhone.trim().length >= 5 && deliveryPhone.trim().length <= 20
 
-  const { data: floorPlanData, isLoading } = useQuery({
+  const { data: floorPlanData, isLoading, isError: floorsError, refetch: refetchFloors } = useQuery({
     queryKey: ['floorplans'],
     queryFn: () => fetcher<{ floorPlans: FloorPlan[] }>('/api/floorplans'),
-    refetchInterval: 3000, // LIVE table statuses
+    // LIVE table statuses — paused while the POS is mounted-hidden (R16)
+    refetchInterval: active ? 3000 : false,
   })
 
   const { data: openOrdersData } = useQuery({
     queryKey: ['orders', 'open'],
     queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
-    refetchInterval: 3000,
+    refetchInterval: active ? 3000 : false,
   })
 
   // Outstanding deferred checks (client left, payment pending) — settle chips.
   const { data: deferredOrdersData } = useQuery({
     queryKey: ['orders', 'deferred'],
     queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=deferred'),
-    refetchInterval: 3000,
+    refetchInterval: active ? 3000 : false,
     enabled: !tool,
   })
 
@@ -162,7 +169,7 @@ export default function TableSelect({
     queryKey: ['vision-movements', 'pending'],
     queryFn: () =>
       fetcher<{ movements: MovementCandidateDTO[] }>('/api/vision/movements?status=pending'),
-    refetchInterval: 15000,
+    refetchInterval: active ? 15000 : false,
     enabled: !tool,
   })
   const aiMovements = aiMovementsData?.movements ?? []
@@ -432,7 +439,7 @@ export default function TableSelect({
     <div className="rms-scroll h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-6xl flex-col">
         {/* ── Control bar ── */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E2E0] bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-white px-4 py-3">
           {/* Floor switcher */}
           <div className="flex items-center gap-2">
             <Button
@@ -468,7 +475,7 @@ export default function TableSelect({
               disabled={openOrders.length === 0 || !!tool}
               onClick={startTransferTool}
             >
-              <ArrowLeftRight className="text-[#714B67]" />
+              <ArrowLeftRight className="text-primary" />
               <span className="hidden sm:inline">{t('pos.transfer')}</span>
             </Button>
             <Button
@@ -477,7 +484,7 @@ export default function TableSelect({
               disabled={openOrders.length < 2 || !!tool}
               onClick={startMergeTool}
             >
-              <Combine className="text-[#714B67]" />
+              <Combine className="text-primary" />
               <span className="hidden sm:inline">{t('pos.merge')}</span>
             </Button>
             <Button
@@ -501,7 +508,7 @@ export default function TableSelect({
               <span className="hidden sm:inline">{t('pos.myShift')}</span>
             </Button>
             <Button
-              className="h-11 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+              className="h-11 rounded-xl bg-primary text-white hover:bg-primary/90"
               disabled={!!tool}
               onClick={onTakeaway}
             >
@@ -510,12 +517,12 @@ export default function TableSelect({
             {/* R11: table-less delivery order (phone + address dialog) */}
             <Button
               variant="outline"
-              className="h-11 rounded-xl border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+              className="h-11 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
               disabled={!!tool}
               onClick={() => setDeliveryOpen(true)}
               title={t('pos.newDeliveryOrder')}
             >
-              <Bike className="text-[#714B67]" />
+              <Bike className="text-primary" />
               <span className="hidden sm:inline">{t('pos.delivery')}</span>
             </Button>
           </div>
@@ -557,7 +564,7 @@ export default function TableSelect({
           /* ── Transfer/merge banner ── */
           tool && (
             <div
-              className="flex items-center gap-3 bg-[#714B67] px-4 py-3 text-white"
+              className="flex items-center gap-3 bg-primary px-4 py-3 text-white"
               role="status"
             >
               {busy ? (
@@ -585,7 +592,7 @@ export default function TableSelect({
 
         {/* ── Hall panel: tables grid + takeaway + deferred checks ── */}
         <div className="p-4 sm:p-6">
-          <div className="relative rounded-2xl border border-[#E2E2E0] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] p-4 sm:p-6">
+          <div className="relative rounded-2xl border border-border bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] p-4 sm:p-6">
             {/* Hall stats bar — current floor */}
             <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-stone-500">
               <span className="tabular-nums">{t('admin.hallStatsTables', { n: tables.length })}</span>
@@ -612,13 +619,29 @@ export default function TableSelect({
                   <Skeleton key={i} className="aspect-square rounded-2xl" />
                 ))}
               </div>
+            ) : floorsError ? (
+              // R16: a failed floor fetch used to fall through to the
+              // "no tables yet" empty state, coaching the waiter to the
+              // wrong fix. Real error card with a Retry, matching admin views.
+              <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-destructive/40 text-center">
+                <WifiOff className="size-8 text-destructive" aria-hidden />
+                <p className="text-sm font-medium text-destructive">{t('pos.floorLoadError')}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-xl"
+                  onClick={() => void refetchFloors()}
+                >
+                  {t('common.retry')}
+                </Button>
+              </div>
             ) : floorPlans.length === 0 ? (
-              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground">
                 <MapPin className="size-8 opacity-40" />
                 <p className="text-sm">{t('pos.noTables')}</p>
               </div>
             ) : tables.length === 0 ? (
-              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#E2E2E0] text-muted-foreground">
+              <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground">
                 <MapPin className="size-8 opacity-40" />
                 <p className="text-sm">{t('pos.noTablesFloor')}</p>
               </div>
@@ -661,14 +684,14 @@ export default function TableSelect({
                             disabled={interaction === 'ineligible'}
                             onClick={() => handleTablelessClick(o)}
                             className={cn(
-                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#E2E2E0] bg-white px-4 shadow-sm transition active:scale-95',
+                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-border bg-white px-4 shadow-sm transition active:scale-95',
                               interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
-                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+                              interaction === 'eligible' && 'ring-2 ring-primary ring-offset-1',
                             )}
                           >
-                            <ShoppingBag className="size-4 text-[#714B67]" aria-hidden />
+                            <ShoppingBag className="size-4 text-primary" aria-hidden />
                             <span className="text-sm font-semibold">#{o.id}</span>
-                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+                            <span className="text-sm font-bold tabular-nums text-primary">
                               {formatCurrency(o.remainingAmount)}
                             </span>
                             <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
@@ -682,7 +705,7 @@ export default function TableSelect({
                 {/* ── R11: open delivery orders (phone chips) ── */}
                 {deliveryOrders.length > 0 && (
                   <section>
-                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#714B67]">
+                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-primary">
                       <Bike className="size-4" aria-hidden /> {t('pos.openDeliveries')}
                     </h3>
                     <div className="rms-scroll flex gap-2 overflow-x-auto pb-2">
@@ -696,17 +719,17 @@ export default function TableSelect({
                             onClick={() => handleTablelessClick(o)}
                             title={o.deliveryAddress || o.deliveryPhone || undefined}
                             className={cn(
-                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#714B67]/30 bg-[#714B67]/[0.06] px-4 shadow-sm transition active:scale-95',
+                              'flex h-11 shrink-0 items-center gap-2 rounded-full border border-primary/30 bg-primary/[0.06] px-4 shadow-sm transition active:scale-95',
                               interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
-                              interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+                              interaction === 'eligible' && 'ring-2 ring-primary ring-offset-1',
                             )}
                           >
-                            <Bike className="size-4 text-[#714B67]" aria-hidden />
+                            <Bike className="size-4 text-primary" aria-hidden />
                             <span className="text-sm font-semibold">#{o.id}</span>
-                            <span className="max-w-[130px] truncate text-sm font-semibold text-[#714B67]">
+                            <span className="max-w-[130px] truncate text-sm font-semibold text-primary">
                               {o.deliveryPhone ?? ''}
                             </span>
-                            <span className="text-sm font-bold tabular-nums text-[#714B67]">
+                            <span className="text-sm font-bold tabular-nums text-primary">
                               {formatCurrency(o.remainingAmount)}
                             </span>
                             <span className="text-xs text-stone-500">{elapsedSince(o.createdAt)}</span>
@@ -754,7 +777,7 @@ export default function TableSelect({
             )}
 
             {/* Entrance marker — centered on the panel's bottom border */}
-            <div className="absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 shadow-sm">
+            <div className="absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-white px-3 py-1 shadow-sm">
               <DoorOpen className="size-3.5 text-stone-400" aria-hidden />
               <span className="whitespace-nowrap text-[11px] font-medium text-stone-400">
                 {t('admin.hallEntrance')}
@@ -823,7 +846,7 @@ export default function TableSelect({
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Bike className="size-5 text-[#714B67]" /> {t('pos.newDeliveryOrder')}
+              <Bike className="size-5 text-primary" /> {t('pos.newDeliveryOrder')}
             </DialogTitle>
             <DialogDescription>{t('pos.deliveryAddressPh')}</DialogDescription>
           </DialogHeader>
@@ -871,7 +894,7 @@ export default function TableSelect({
               {t('common.cancel')}
             </Button>
             <Button
-              className="h-11 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+              className="h-11 bg-primary text-white hover:bg-primary/90"
               disabled={!deliveryPhoneOk}
               onClick={confirmDelivery}
             >
@@ -981,9 +1004,9 @@ function TableTile({
                 ? 'border-amber-500 bg-amber-200 text-amber-900 ring-2 ring-amber-400'
                 : reserved
                   ? 'border-amber-300 bg-amber-50/70 text-amber-900 ring-1 ring-amber-400'
-                  : 'border-[#E2E2E0] bg-white text-stone-500',
+                  : 'border-border bg-white text-stone-500',
         interaction === 'ineligible' && 'cursor-not-allowed opacity-40',
-        interaction === 'eligible' && 'ring-2 ring-[#714B67] ring-offset-1',
+        interaction === 'eligible' && 'ring-2 ring-primary ring-offset-1',
         selected && 'ring-2 ring-violet-600 ring-offset-1',
       )}
     >

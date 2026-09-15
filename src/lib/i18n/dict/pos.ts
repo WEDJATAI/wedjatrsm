@@ -22,6 +22,8 @@ export const posDict: DictPair = {
     'pos.openTakeaways': 'Open takeaway orders',
     'pos.open': 'open',
     'pos.noTables': 'No tables yet — add some in Admin → Floor Plans.',
+    // R16: real error state on the POS floor (used to show the empty state)
+    'pos.floorLoadError': 'Could not load the floor — check the connection and retry.',
     'pos.noTablesFloor': 'No tables on this floor yet — add some in Admin → Floor Plans.',
 
     // transfer / merge floor tools
@@ -336,6 +338,7 @@ export const posDict: DictPair = {
     'pos.openTakeaways': 'الطلبات السفرية المفتوحة',
     'pos.open': 'مفتوح',
     'pos.noTables': 'لا توجد طاولات بعد — أضفها من الإدارة ← مخططات الصالة.',
+    'pos.floorLoadError': 'تعذر تحميل الصالة — تحقق من الاتصال وأعد المحاولة.',
     'pos.noTablesFloor': 'لا توجد طاولات في هذه الصالة بعد — أضفها من الإدارة ← مخططات الصالة.',
 
     // transfer / merge floor tools

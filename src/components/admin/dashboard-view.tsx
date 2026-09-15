@@ -272,12 +272,12 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
               <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={weekData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap="28%">
-                    <CartesianGrid stroke="#e2e2e0" strokeDasharray="3 3" vertical={false} />
+                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                     <XAxis
                       dataKey="date"
                       tickFormatter={dayShort}
                       tick={{ fontSize: 11, fill: '#6b6b6b' }}
-                      axisLine={{ stroke: '#e2e2e0' }}
+                      axisLine={{ stroke: 'var(--border)' }}
                       tickLine={false}
                       tickMargin={8}
                     />
@@ -292,7 +292,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                       cursor={{ fill: 'rgba(113, 75, 103, 0.06)' }}
                       contentStyle={{
                         backgroundColor: '#ffffff',
-                        border: '1px solid #e2e2e0',
+                        border: '1px solid var(--border)',
                         borderRadius: 8,
                         fontSize: 12,
                         boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
@@ -302,7 +302,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
                       labelFormatter={(label) => dayLabel(String(label))}
                       formatter={(value) => [formatCurrency(Number(value)), t('admin.revenue')] as [string, string]}
                     />
-                    <Bar dataKey="revenue" fill="#714B67" radius={[6, 6, 0, 0]} maxBarSize={44} />
+                    <Bar dataKey="revenue" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={44} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { COURSES, DELETE_PIN_KEY } from '@/lib/constants'
+import { checkRateLimit, peekRateLimit } from '@/lib/rate-limit'
 import {
   checkStockAvailability,
   getOrderOr404,
@@ -13,6 +14,27 @@ import {
   serializeOrder,
   validateOrderItems,
 } from '@/lib/orders'
+
+/**
+ * R16 hardening: the shared 6-digit manager PIN used for item removal and
+ * discounts is enumerable without a per-user attempt budget. 5 failed
+ * verifications per staff member per 5 minutes; correct PINs never count.
+ */
+function guardManagerPinBudget(userId: number) {
+  const key = `mgrpin:${userId}`
+  const peek = peekRateLimit(key, 5, 5 * 60 * 1000)
+  if (!peek.ok) {
+    throw new ApiError(
+      `Too many wrong PIN attempts — try again in ${peek.retryAfterSec}s`,
+      429,
+    )
+  }
+  return key
+}
+
+function recordManagerPinFailure(key: string) {
+  checkRateLimit(key, 5, 5 * 60 * 1000)
+}
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -108,8 +130,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         if (typeof body?.removePin !== 'string' || !/^\d{6}$/.test(body.removePin)) {
           throw new ApiError('A valid 6-digit PIN is required to remove items', 403)
         }
+        const pinBudgetKey = guardManagerPinBudget(user.userId)
         const pinRow = await db.appSetting.findUnique({ where: { key: DELETE_PIN_KEY } })
         if (!pinRow || pinRow.value !== body.removePin) {
+          recordManagerPinFailure(pinBudgetKey)
           throw new ApiError('Wrong PIN — item removal denied', 403)
         }
         // snapshot the doomed lines first so the audit row can name them
@@ -192,8 +216,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         if (!/^\d{6}$/.test(pin)) {
           throw new ApiError('Manager PIN required', 403)
         }
+        const pinBudgetKey = guardManagerPinBudget(user.userId)
         const pinRow = await db.appSetting.findUnique({ where: { key: DELETE_PIN_KEY } })
         if (!pinRow || pinRow.value !== pin) {
+          recordManagerPinFailure(pinBudgetKey)
           throw new ApiError('Invalid manager PIN', 403)
         }
       }

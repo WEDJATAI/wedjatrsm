@@ -328,7 +328,7 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
       {/* R13 a11y: keyboard users can jump past the navbar to the content */}
       <a
         href="#rms-main"
-        className="sr-only z-[100] rounded-lg bg-[#714B67] px-4 py-2.5 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+        className="sr-only z-[100] rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
       >
         {t('a11y.skipToContent')}
       </a>

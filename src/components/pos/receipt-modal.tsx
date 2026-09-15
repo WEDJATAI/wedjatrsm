@@ -324,7 +324,7 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
             <Printer /> {t('common.print')}
           </Button>
           <Button
-            className="h-11 flex-1 rounded-xl bg-[#714B67] text-white hover:bg-[#714B67]/90"
+            className="h-11 flex-1 rounded-xl bg-primary text-white hover:bg-primary/90"
             onClick={onClose}
           >
             <Check /> {t('common.done')}

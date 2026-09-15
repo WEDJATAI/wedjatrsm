@@ -203,7 +203,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t('pos.searchDishes')}
-          className="h-11 rounded-xl border-[#E2E2E0] bg-white ps-9 text-base"
+          className="h-11 rounded-xl border-border bg-white ps-9 text-base"
           inputMode="search"
         />
       </div>
@@ -218,8 +218,8 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
           className={cn(
             'h-11 rounded-full px-4 text-sm font-semibold transition-colors',
             favOnly
-              ? 'border-[#714B67] bg-[#714B67] text-white hover:bg-[#714B67]/90 hover:text-white'
-              : 'border-[#E2E2E0] bg-white text-stone-600 hover:border-[#714B67]/40 hover:bg-[#714B67]/[0.06] hover:text-[#714B67]',
+              ? 'border-primary bg-primary text-white hover:bg-primary/90 hover:text-white'
+              : 'border-border bg-white text-stone-600 hover:border-primary/40 hover:bg-primary/[0.06] hover:text-primary',
           )}
         >
           <Star className={cn('size-4', favOnly && 'fill-amber-400 text-amber-400')} aria-hidden />
@@ -237,10 +237,10 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
               setFavOnly(false)
             }}
           >
-            <TabsList className="h-auto w-full max-w-full gap-1 overflow-x-auto rms-scroll flex-nowrap rounded-full border border-[#E2E2E0] bg-white p-1.5">
+            <TabsList className="h-auto w-full max-w-full gap-1 overflow-x-auto rms-scroll flex-nowrap rounded-full border border-border bg-white p-1.5">
               <TabsTrigger
                 value="all"
-                className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
+                className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-primary data-[state=active]:text-white data-[state=active]:shadow-none"
               >
                 {t('pos.all')}
               </TabsTrigger>
@@ -248,7 +248,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
                 <TabsTrigger
                   key={c.id}
                   value={String(c.id)}
-                  className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-[#714B67] data-[state=active]:text-white data-[state=active]:shadow-none"
+                  className="h-11 rounded-full px-4 text-sm data-[state=active]:bg-primary data-[state=active]:text-white data-[state=active]:shadow-none"
                 >
                   {localizedName(c.name, c.nameAr, lang)}
                 </TabsTrigger>
@@ -341,8 +341,8 @@ function ProductTile({
         aria-disabled={soldOut}
         onClick={() => onAdd(product)}
         className={cn(
-          'h-auto min-h-[96px] w-full flex-col items-start justify-between gap-1.5 rounded-xl border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition active:scale-95',
-          'hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] hover:shadow',
+          'h-auto min-h-[96px] w-full flex-col items-start justify-between gap-1.5 rounded-xl border-border bg-white p-3 text-start shadow-sm transition active:scale-95',
+          'hover:border-primary/50 hover:bg-primary/[0.04] hover:shadow',
           soldOut && 'pointer-events-none cursor-not-allowed opacity-50',
         )}
         {...rest}
@@ -399,7 +399,7 @@ function ProductTile({
         )}
 
         <span className="flex w-full items-center justify-between gap-1">
-          <span className="text-sm font-semibold tabular-nums text-[#714B67]">
+          <span className="text-sm font-semibold tabular-nums text-primary">
             {formatCurrency(product.price)}
           </span>
           <span className="flex min-w-0 items-center gap-1">
@@ -411,7 +411,7 @@ function ProductTile({
             {hasOptions && (
               <Badge
                 variant="outline"
-                className="gap-1 border-[#714B67]/40 px-1.5 text-[10px] text-[#714B67]"
+                className="gap-1 border-primary/40 px-1.5 text-[10px] text-primary"
                 title={t('pos.options')}
               >
                 <SlidersHorizontal className="size-3" aria-hidden />
@@ -453,7 +453,7 @@ function ProductTile({
           'absolute end-0.5 top-0.5 z-10 grid size-11 place-items-center rounded-full transition-colors',
           favorite
             ? 'text-amber-500 hover:bg-amber-100'
-            : 'text-stone-300 hover:bg-[#714B67]/10 hover:text-amber-400',
+            : 'text-stone-300 hover:bg-primary/10 hover:text-amber-400',
         )}
       >
         <Star className={cn('size-5', favorite && 'fill-amber-400 text-amber-500')} aria-hidden />

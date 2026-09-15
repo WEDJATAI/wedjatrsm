@@ -189,6 +189,13 @@ export async function PUT(
       select: USER_SAFE_SELECT,
     })
     const serialized = serializeUser(user)
+    // R16: PIN visibility rule (same as GET) — cleartext only for admins.
+    // Exception: when the actor just SET a new PIN, echo the value they
+    // typed back to them once (they need it to tell the staff member).
+    if (session.role !== 'admin') {
+      serialized.pin =
+        typeof data.pin === 'string' ? data.pin : data.pin === null ? null : serialized.pin
+    }
 
     // Audit — the actor's session + the TARGET user's name/email in the
     // details (never the password hash; 'password' only as a key name).

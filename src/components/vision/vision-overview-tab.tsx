@@ -505,7 +505,7 @@ function VisionTableTile({
       : state === 'empty' && mismatch === 'left_check_open'
         ? 'border-violet-300 bg-violet-50 text-violet-900 ring-1 ring-violet-400'
         : state === 'empty'
-          ? 'border-[#E2E2E0] bg-white text-stone-500'
+          ? 'border-border bg-white text-stone-500'
           : 'border-dashed border-stone-300 bg-stone-100 text-stone-400'
 
   return (

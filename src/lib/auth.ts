@@ -1,15 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { SignJWT, jwtVerify } from 'jose'
 import bcrypt from 'bcryptjs'
+import { appendFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import { BUILTIN_ROLE_PERMISSIONS } from '@/lib/constants'
 
 export const SESSION_COOKIE = 'rms_session'
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 
+/**
+ * R16 security hardening: the historic hardcoded dev fallback ('rms-dev-secret-…')
+ * was effectively a committed authentication bypass — anyone could forge session
+ * tokens with it. Now, when JWT_SECRET is absent, a crypto-random per-installation
+ * secret is generated, cached for the process lifetime, and persisted to .env so
+ * future boots (and packaged Windows installs) keep stable sessions.
+ */
+let cachedSecret: Uint8Array | null = null
 function getSecret(): Uint8Array {
-  const secret = process.env.JWT_SECRET ?? 'rms-dev-secret-change-me'
-  return new TextEncoder().encode(secret)
+  if (cachedSecret) return cachedSecret
+  const fromEnv = process.env.JWT_SECRET
+  if (fromEnv && fromEnv.trim().length >= 16) {
+    cachedSecret = new TextEncoder().encode(fromEnv)
+    return cachedSecret
+  }
+  const randomSecret = randomBytes(48).toString('hex')
+  let persisted = false
+  try {
+    appendFileSync('.env', `\n# R16: generated session signing secret\nJWT_SECRET=${randomSecret}\n`)
+    persisted = true
+  } catch {
+    // read-only filesystem → in-memory only for this boot
+  }
+  process.env.JWT_SECRET = randomSecret
+  console.warn(
+    `[auth] JWT_SECRET was not configured — generated a per-installation secret` +
+      (persisted ? ' and persisted it to .env' : ' (in-memory only; set JWT_SECRET for stable sessions across restarts)'),
+  )
+  cachedSecret = new TextEncoder().encode(randomSecret)
+  return cachedSecret
 }
 
 export type SessionPayload = {
@@ -220,7 +249,8 @@ export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: err.message }, { status: err.status })
   }
-  const message = err instanceof Error ? err.message : 'Internal server error'
+  // R16 hardening: 500s used to echo raw error messages (Prisma/filesystem
+  // internals) to clients. The details stay in the server log only.
   console.error('[api-error]', err)
-  return NextResponse.json({ error: message }, { status: 500 })
+  return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
 }

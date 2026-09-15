@@ -67,7 +67,9 @@ function parseName(value: unknown): string {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req)
+    // R16: role structures are only needed by user/role management — no
+    // reason for waiter/kitchen sessions to enumerate them.
+    await requireAuth(req, ['admin', 'roles', 'users'])
     const roles = await db.customRole.findMany({
       orderBy: { id: 'asc' },
       include: { _count: { select: { users: true } } },

@@ -107,7 +107,7 @@ function tableSurfaceClasses(
   }
   if (table.status === 'reserved')
     return { surface: 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400', amount: null }
-  if (table.status === 'free') return { surface: 'bg-white border-[#E2E2E0] shadow-sm', amount: null }
+  if (table.status === 'free') return { surface: 'bg-white border-border shadow-sm', amount: null }
   if (table.status === 'paid')
     return { surface: 'bg-emerald-600 border-emerald-600 text-white shadow-sm', amount: null }
   if (table.status === 'deferred')
@@ -784,7 +784,7 @@ export default function FloorPlansView() {
                 </div>
 
                 {/* Entrance marker — sits on the bottom border, mostly outside the canvas */}
-                <div className="pointer-events-none absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[#E2E2E0] bg-white px-3 py-1 text-[11px] font-medium text-stone-500 shadow-sm">
+                <div className="pointer-events-none absolute -bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-white px-3 py-1 text-[11px] font-medium text-stone-500 shadow-sm">
                   <DoorOpen className="size-3.5 shrink-0" aria-hidden />
                   {t('admin.hallEntrance')}
                 </div>

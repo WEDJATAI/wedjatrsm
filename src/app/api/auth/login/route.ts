@@ -8,7 +8,7 @@ import {
   setSessionCookie,
   verifyPassword,
 } from '@/lib/auth'
-import { checkRateLimit, clientIp, resetRateLimit } from '@/lib/rate-limit'
+import { checkRateLimit, clientIp, peekRateLimit, resetRateLimit } from '@/lib/rate-limit'
 
 type LoginUser = {
   id: number
@@ -47,8 +47,24 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Hardening: rate-limit attempts per IP + identifier (10 failures / 5 min)
-    const rlKey = `login:${clientIp(req)}:${(pin || email).slice(0, 60)}`
+    // ── Hardening (R16): two independent buckets ──
+    // 1) per IP + identifier (10 attempts / 5 min, reset on success) — the
+    //    classic per-account brute-force guard.
+    // 2) per-IP FAILURE budget (30 failures / 5 min) that does NOT key on the
+    //    identifier: PIN quick-login sprays a different PIN on every request,
+    //    which used to give each guess a fresh bucket. Now the IP itself is
+    //    throttled after 30 failed logins of any kind (a full restaurant team
+    //    logging in never hits this — only failures count).
+    const ip = clientIp(req)
+    const ipFailKey = `login-ipfail:${ip}`
+    const ipFail = peekRateLimit(ipFailKey, 30, 5 * 60 * 1000)
+    if (!ipFail.ok) {
+      return NextResponse.json(
+        { error: `Too many failed attempts from this network — try again in ${ipFail.retryAfterSec}s` },
+        { status: 429 },
+      )
+    }
+    const rlKey = `login:${ip}:${(pin || email).slice(0, 60)}`
     const rl = checkRateLimit(rlKey, 10, 5 * 60 * 1000)
     if (!rl.ok) {
       return NextResponse.json(
@@ -80,6 +96,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
+      // record the failure against the per-IP budget (identifier bucket
+      // already counted the attempt above)
+      checkRateLimit(ipFailKey, 30, 5 * 60 * 1000)
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 

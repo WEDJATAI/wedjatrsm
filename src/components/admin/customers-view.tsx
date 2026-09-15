@@ -145,7 +145,7 @@ export default function CustomersView() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-[#714B67] text-white shadow">
+          <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-white shadow">
             <UserRound className="size-6" aria-hidden />
           </div>
           <div>
@@ -157,7 +157,7 @@ export default function CustomersView() {
         </div>
         <Button
           onClick={openCreate}
-          className="h-11 rounded-xl bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+          className="h-11 rounded-xl bg-primary font-semibold text-white hover:bg-primary/90"
         >
           <UserRoundPlus className="size-4" aria-hidden />
           {t('customers.new')}
@@ -176,7 +176,7 @@ export default function CustomersView() {
             inputMode="search"
           />
         </div>
-        <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#E2E2E0] bg-white px-3 text-sm font-medium">
+        <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-border bg-white px-3 text-sm font-medium">
           <Switch checked={showAll} onCheckedChange={setShowAll} aria-label={t('customers.activeOnly')} />
           {t('customers.activeOnly')}
         </label>
@@ -236,11 +236,11 @@ export default function CustomersView() {
                   </p>
                   <p className="text-sm font-bold tabular-nums">{c.visits}</p>
                 </div>
-                <div className="rounded-lg bg-[#714B67]/[0.08] px-1.5 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-[#714B67]/80">
+                <div className="rounded-lg bg-primary/[0.08] px-1.5 py-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-primary/80">
                     {t('customers.points')}
                   </p>
-                  <p className="flex items-center justify-center gap-1 text-sm font-bold tabular-nums text-[#714B67]">
+                  <p className="flex items-center justify-center gap-1 text-sm font-bold tabular-nums text-primary">
                     <Sparkles className="size-3" aria-hidden />
                     {c.points}
                   </p>
@@ -309,8 +309,8 @@ export default function CustomersView() {
 
             {/* manual points adjustment (edit only) */}
             {editing && (
-              <div className="space-y-2 rounded-xl border border-[#714B67]/25 bg-[#714B67]/[0.04] p-3">
-                <p className="flex items-center gap-1.5 text-sm font-semibold text-[#714B67]">
+              <div className="space-y-2 rounded-xl border border-primary/25 bg-primary/[0.04] p-3">
+                <p className="flex items-center gap-1.5 text-sm font-semibold text-primary">
                   <Sparkles className="size-4" aria-hidden />
                   {t('customers.adjustPoints')}
                 </p>
@@ -345,7 +345,7 @@ export default function CustomersView() {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {t('customers.points')}: {editing.points} →{' '}
-                  <span className="font-semibold tabular-nums text-[#714B67]">
+                  <span className="font-semibold tabular-nums text-primary">
                     {pointsDelta.trim() ? (editing.points + Number(pointsDelta)).toFixed(0) : editing.points}
                   </span>
                 </p>
@@ -366,7 +366,7 @@ export default function CustomersView() {
             )}
             <Button
               type="button"
-              className="h-11 bg-[#714B67] font-semibold text-white hover:bg-[#714B67]/90"
+              className="h-11 bg-primary font-semibold text-white hover:bg-primary/90"
               disabled={saveMutation.isPending || !canSave}
               onClick={() => saveMutation.mutate()}
             >
@@ -381,7 +381,7 @@ export default function CustomersView() {
         <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <UserRound className="size-5 text-[#714B67]" aria-hidden />
+              <UserRound className="size-5 text-primary" aria-hidden />
               {detailQuery.data?.customer.name ?? '…'}
             </DialogTitle>
             <DialogDescription>
@@ -411,7 +411,7 @@ export default function CustomersView() {
                     {(detailQuery.data?.customer.orders ?? []).map((order: Order) => (
                       <li
                         key={order.id}
-                        className="flex items-center justify-between gap-2 rounded-lg border border-[#E2E2E0] bg-white px-3 py-2 text-sm"
+                        className="flex items-center justify-between gap-2 rounded-lg border border-border bg-white px-3 py-2 text-sm"
                       >
                         <span className="font-medium">
                           #{order.id} · {new Date(order.createdAt).toLocaleDateString()}
@@ -447,7 +447,7 @@ export default function CustomersView() {
                     {(detailQuery.data?.customer.reservations ?? []).map((res: Reservation) => (
                       <li
                         key={res.id}
-                        className="flex items-center justify-between gap-2 rounded-lg border border-[#E2E2E0] bg-white px-3 py-2 text-sm"
+                        className="flex items-center justify-between gap-2 rounded-lg border border-border bg-white px-3 py-2 text-sm"
                       >
                         <span className="font-medium">
                           {new Date(res.reservedAt).toLocaleString()}

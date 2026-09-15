@@ -387,7 +387,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ReceiptText className="size-5 text-[#714B67]" /> {t('pos.printCheck')} —{' '}
+            <ReceiptText className="size-5 text-primary" /> {t('pos.printCheck')} —{' '}
             {t('common.order')} #{order.id}
           </DialogTitle>
           <DialogDescription>{t('pos.checkDesc')}</DialogDescription>
@@ -439,7 +439,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
             </div>
 
             {mode === 'split' && (
-              <div className="space-y-3 rounded-xl border border-[#E2E2E0] bg-white p-3">
+              <div className="space-y-3 rounded-xl border border-border bg-white p-3">
                 <div className="flex flex-wrap gap-2">
                   {hasRows && (
                     <SplitPill active={splitKind === 'rows'} onClick={() => setSplitKind('rows')}>
@@ -469,7 +469,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                             </span>
                           )}
                         </span>
-                        <span className="shrink-0 font-semibold tabular-nums text-[#714B67]">
+                        <span className="shrink-0 font-semibold tabular-nums text-primary">
                           {formatCurrency(r.amount)}
                         </span>
                       </div>
@@ -526,8 +526,8 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
                             className={cn(
                               'flex h-11 w-full items-center justify-between gap-2 rounded-lg border px-3 text-start text-sm transition-colors',
                               active
-                                ? 'border-[#714B67] bg-[#714B67]/10 font-semibold text-[#714B67]'
-                                : 'border-[#E2E2E0] bg-white text-muted-foreground',
+                                ? 'border-primary bg-primary/10 font-semibold text-primary'
+                                : 'border-border bg-white text-muted-foreground',
                             )}
                           >
                             <span className="min-w-0 truncate">
@@ -662,7 +662,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
             <Check /> {t('common.done')}
           </Button>
           <Button
-            className="h-12 flex-[2] rounded-xl bg-[#714B67] text-base text-white hover:bg-[#714B67]/90"
+            className="h-12 flex-[2] rounded-xl bg-primary text-base text-white hover:bg-primary/90"
             onClick={handlePrint}
           >
             <Printer /> {t('common.print')} {titleLabel}
@@ -688,7 +688,7 @@ function SplitPill({
       onClick={onClick}
       className={cn(
         'h-11 rounded-full px-4 text-sm font-semibold transition-colors disabled:opacity-50',
-        active ? 'bg-[#714B67] text-white' : 'bg-white text-[#714B67] border border-[#714B67]/40 hover:bg-[#714B67]/10',
+        active ? 'bg-primary text-white' : 'bg-white text-primary border border-primary/40 hover:bg-primary/10',
       )}
     >
       {children}

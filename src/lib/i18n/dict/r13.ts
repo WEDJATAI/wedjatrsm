@@ -119,6 +119,9 @@ export const r13Dict: DictPair = {
     'integrations.delivery.testDup': 'Test order already exists (replayed idempotently)',
     'integrations.delivery.testFail': 'Test failed: {error}',
     'integrations.delivery.copied': 'Copied to clipboard',
+    // R16: literal-string cleanup
+    'integrations.delivery.clipboardFail': 'Clipboard unavailable',
+    'integrations.delivery.testCustomer': 'Webhook Test',
     'integrations.delivery.docsTitle': 'Request format',
     'integrations.delivery.keyWarning': 'Keep this key private — it authorizes order creation. Regenerating revokes the old key immediately.',
     'integrations.loyalty.title': 'Loyalty rules',
@@ -264,6 +267,8 @@ export const r13Dict: DictPair = {
     'integrations.delivery.testDup': 'الطلب التجريبي موجود مسبقًا (استُقبل دون تكرار)',
     'integrations.delivery.testFail': 'فشل الاختبار: {error}',
     'integrations.delivery.copied': 'تم النسخ',
+    'integrations.delivery.clipboardFail': 'الحافظة غير متاحة',
+    'integrations.delivery.testCustomer': 'اختبار Webhook',
     'integrations.delivery.docsTitle': 'صيغة الطلب',
     'integrations.delivery.keyWarning': 'احتفظ بهذا المفتاح سريًا — فهو يخوّل إنشاء الطلبات. إعادة الإنشاء تلغي المفتاح القديم فورًا.',
     'integrations.loyalty.title': 'قواعد الولاء',

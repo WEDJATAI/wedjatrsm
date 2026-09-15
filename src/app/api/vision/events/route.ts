@@ -3,6 +3,7 @@
 // valid ingest key (Authorization: Bearer <key> or x-vision-key: <key>).
 
 import { NextRequest, NextResponse } from 'next/server'
+import { timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { checkRateLimit, clientIp } from '@/lib/rate-limit'
@@ -52,7 +53,16 @@ export async function POST(req: NextRequest) {
         ? authHeader.slice(7).trim()
         : null
       const headerKey = req.headers.get('x-vision-key')
-      if (bearerKey === key || headerKey === key) {
+      // R16: constant-time comparison (timingSafeEqual) — a plain === on the
+      // ingest key leaks an early-exit timing signal, unlike the sync import
+      // route which already did this correctly.
+      const safeEqual = (a: string, b: string): boolean => {
+        const ab = Buffer.from(a, 'utf8')
+        const bb = Buffer.from(b, 'utf8')
+        return ab.length === bb.length && timingSafeEqual(ab, bb)
+      }
+      const presented = bearerKey ?? headerKey
+      if (presented != null && safeEqual(presented, key)) {
         keyUsed = true
       } else {
         throw new ApiError('Unauthorized vision client', 401)

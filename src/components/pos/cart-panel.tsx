@@ -483,7 +483,7 @@ export default function CartPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E2E2E0] px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <p className="truncate text-base font-bold">{table.name}</p>
           {(order?.user?.name || userRole) && (
@@ -507,7 +507,7 @@ export default function CartPanel({
                 <button
                   type="button"
                   title={t('pos.attachCustomer')}
-                  className="inline-flex h-9 max-w-[160px] items-center gap-1.5 rounded-full border border-[#714B67]/40 bg-[#714B67]/[0.07] px-2.5 text-xs font-semibold text-[#714B67] transition-colors hover:bg-[#714B67]/15"
+                  className="inline-flex h-9 max-w-[160px] items-center gap-1.5 rounded-full border border-primary/40 bg-primary/[0.07] px-2.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/15"
                 >
                   <span aria-hidden>⭐</span>
                   <span className="truncate">
@@ -524,7 +524,7 @@ export default function CartPanel({
                   size="sm"
                   title={t('pos.attachCustomer')}
                   aria-label={t('pos.attachCustomer')}
-                  className="h-9 gap-1 rounded-full border-[#714B67]/40 px-2.5 text-xs text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                  className="h-9 gap-1 rounded-full border-primary/40 px-2.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
                 >
                   <UserPlus2 className="size-3.5" aria-hidden />
                   <span className="hidden lg:inline">{t('pos.attachCustomer')}</span>
@@ -533,9 +533,9 @@ export default function CartPanel({
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-3">
               {activeCustomer != null && (
-                <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#714B67]/25 bg-[#714B67]/[0.05] p-2.5">
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.05] p-2.5">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-[#714B67]">
+                    <p className="truncate text-sm font-semibold text-primary">
                       {activeCustomer.name}
                     </p>
                     <p className="text-xs text-muted-foreground">
@@ -588,7 +588,7 @@ export default function CartPanel({
                     </Button>
                     <Button
                       type="button"
-                      className="h-10 flex-1 bg-[#714B67] text-white hover:bg-[#714B67]/90"
+                      className="h-10 flex-1 bg-primary text-white hover:bg-primary/90"
                       disabled={createCustomer.isPending || newCustomerName.trim().length < 2}
                       onClick={() => createCustomer.mutate()}
                     >
@@ -630,7 +630,7 @@ export default function CartPanel({
                               setCustomerOpen(false)
                             }
                           }}
-                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-[#714B67]/[0.07]"
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-primary/[0.07]"
                         >
                           <span className="min-w-0">
                             <span className="block truncate text-sm font-medium">{c.name}</span>
@@ -640,7 +640,7 @@ export default function CartPanel({
                           </span>
                           <Badge
                             variant="outline"
-                            className="shrink-0 border-[#714B67]/40 text-[#714B67]"
+                            className="shrink-0 border-primary/40 text-primary"
                           >
                             {t('pos.pointsBalance', { n: c.points })}
                           </Badge>
@@ -662,7 +662,7 @@ export default function CartPanel({
           </Popover>
 
           {order ? (
-            <Badge className="shrink-0 bg-[#714B67] text-white hover:bg-[#714B67]">
+            <Badge className="shrink-0 bg-primary text-white hover:bg-primary">
               {t('common.order')} #{order.id}
             </Badge>
           ) : (
@@ -700,7 +700,7 @@ export default function CartPanel({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1 px-2 text-xs border-[#714B67]/40 text-[#714B67] hover:bg-[#714B67]/10 hover:text-[#714B67]"
+                        className="h-8 gap-1 px-2 text-xs border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
                         title={t('pos.transferItems')}
                         onClick={enterMoveMode}
                       >
@@ -768,7 +768,7 @@ export default function CartPanel({
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 space-y-1.5 border-t border-[#E2E2E0] p-4">
+      <div className="shrink-0 space-y-1.5 border-t border-border p-4">
         <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
         <div className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-1 text-muted-foreground">
@@ -790,7 +790,7 @@ export default function CartPanel({
         </div>
         <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
         <SummaryRow label={t('money.serviceTax')} value={formatCurrency(totals.serviceTax)} />
-        <div className="flex items-center justify-between border-t border-[#E2E2E0] pt-2">
+        <div className="flex items-center justify-between border-t border-border pt-2">
           <span className="text-sm font-semibold">{t('money.total')}</span>
           <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
         </div>
@@ -814,14 +814,14 @@ export default function CartPanel({
           <div className="flex gap-2 pt-1">
             <Button
               variant="outline"
-              className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+              className="h-14 flex-1 rounded-xl border-border text-sm"
               onClick={exitMoveMode}
               disabled={transferItems.isPending}
             >
               {t('common.cancel')}
             </Button>
             <Button
-              className="h-14 flex-[1.6] rounded-xl bg-[#714B67] text-base font-semibold text-white hover:bg-[#714B67]/90"
+              className="h-14 flex-[1.6] rounded-xl bg-primary text-base font-semibold text-white hover:bg-primary/90"
               disabled={moveCount === 0 || transferItems.isPending}
               onClick={() => setMoveDialogOpen(true)}
             >
@@ -852,7 +852,7 @@ export default function CartPanel({
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                className="h-14 flex-1 rounded-xl border-[#E2E2E0] text-sm"
+                className="h-14 flex-1 rounded-xl border-border text-sm"
                 disabled={!order || sending || !onPrintCheck}
                 title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
                 onClick={onPrintCheck}
@@ -880,7 +880,7 @@ export default function CartPanel({
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ArrowLeftRight className="size-5 text-[#714B67]" /> {t('pos.moveItemsTitle')}
+              <ArrowLeftRight className="size-5 text-primary" /> {t('pos.moveItemsTitle')}
             </DialogTitle>
             <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
           </DialogHeader>
@@ -901,7 +901,7 @@ export default function CartPanel({
                   type="button"
                   disabled={transferItems.isPending}
                   onClick={() => pickMoveTarget(o)}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#E2E2E0] bg-white p-3 text-start shadow-sm transition hover:border-[#714B67]/50 hover:bg-[#714B67]/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-white p-3 text-start shadow-sm transition hover:border-primary/50 hover:bg-primary/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">
@@ -914,7 +914,7 @@ export default function CartPanel({
                       </span>
                     </p>
                   </div>
-                  <span className="shrink-0 text-sm font-bold tabular-nums text-[#714B67]">
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-primary">
                     {formatCurrency(o.totalAmount)}
                   </span>
                 </button>
@@ -953,7 +953,7 @@ export default function CartPanel({
                   {editing.modifiers.map((m, i) => (
                     <span
                       key={`${m.id}-${i}`}
-                      className="rounded-full border border-[#714B67]/40 bg-[#714B67]/[0.06] px-2 py-0.5 text-xs text-[#714B67]"
+                      className="rounded-full border border-primary/40 bg-primary/[0.06] px-2 py-0.5 text-xs text-primary"
                     >
                       {localizedName(m.name, m.nameAr, lang)}
                       {m.priceDelta !== 0 && (
@@ -1294,7 +1294,7 @@ function SentItemRow({
       className={cn(
         'border-b border-border/60 last:border-b-0',
         moveMode && 'cursor-pointer rounded-lg transition-colors',
-        moveMode && moveSelected && 'bg-[#714B67]/10',
+        moveMode && moveSelected && 'bg-primary/10',
       )}
     >
       <div className="flex items-start gap-2 py-2.5">
@@ -1303,8 +1303,8 @@ function SentItemRow({
             className={cn(
               'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
               moveSelected
-                ? 'border-[#714B67] bg-[#714B67] text-white'
-                : 'border-[#E2E2E0] bg-white',
+                ? 'border-primary bg-primary text-white'
+                : 'border-border bg-white',
             )}
             aria-hidden
           >
@@ -1334,7 +1334,7 @@ function SentItemRow({
               {mods.map((m, i) => (
                 <span
                   key={`${m.id}-${i}`}
-                  className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4"
+                  className="rounded border border-border bg-muted/50 px-1 py-0 leading-4"
                 >
                   {localizedName(m.name, m.nameAr, lang)}
                   {m.priceDelta !== 0 && (
@@ -1424,7 +1424,7 @@ function SentItemRow({
           aria-label={t('pos.moveQtyLabel')}
           title={t('pos.moveQtyLabel')}
           onClick={(e) => e.stopPropagation()}
-          className="mb-2 ms-7 flex items-center gap-2 rounded-b-lg bg-[#714B67]/[0.06] px-2 py-1.5"
+          className="mb-2 ms-7 flex items-center gap-2 rounded-b-lg bg-primary/[0.06] px-2 py-1.5"
         >
           <Button
             variant="outline"
@@ -1512,7 +1512,7 @@ function DraftRow({
             {item.modifiers.map((m, i) => (
               <span
                 key={`${m.id}-${i}`}
-                className="rounded border border-[#E2E2E0] bg-muted/50 px-1 py-0 leading-4"
+                className="rounded border border-border bg-muted/50 px-1 py-0 leading-4"
               >
                 {localizedName(m.name, m.nameAr, lang)}
                 {m.priceDelta !== 0 && (

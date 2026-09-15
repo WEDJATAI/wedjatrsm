@@ -86,11 +86,11 @@ export default function GuidedTour({ user }: { user: SessionUser }) {
       }}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-[#E2E2E0] bg-white p-6 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-border bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#714B67] text-white shadow">
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-white shadow">
             <Compass className="size-6" aria-hidden />
           </div>
           <button
@@ -109,7 +109,7 @@ export default function GuidedTour({ user }: { user: SessionUser }) {
         </p>
 
         <div className="mt-4 min-h-[120px] rounded-xl bg-stone-50 p-4">
-          <p className="text-sm font-semibold text-[#714B67]">{t(`tour.s${stepIndex}.title`)}</p>
+          <p className="text-sm font-semibold text-primary">{t(`tour.s${stepIndex}.title`)}</p>
           <p className="mt-1.5 text-sm leading-relaxed text-stone-600">
             {t(`tour.s${stepIndex}.body`)}
           </p>
@@ -122,7 +122,7 @@ export default function GuidedTour({ user }: { user: SessionUser }) {
               key={s}
               className={cn(
                 'h-1.5 rounded-full transition-all',
-                s === stepIndex ? 'w-5 bg-[#714B67]' : s < stepIndex ? 'w-1.5 bg-[#714B67]/50' : 'w-1.5 bg-stone-200',
+                s === stepIndex ? 'w-5 bg-primary' : s < stepIndex ? 'w-1.5 bg-primary/50' : 'w-1.5 bg-stone-200',
               )}
             />
           ))}
@@ -142,7 +142,7 @@ export default function GuidedTour({ user }: { user: SessionUser }) {
               type="button"
               variant="outline"
               onClick={() => setStep(stepIndex - 1)}
-              className="h-11 border-[#E2E2E0] px-5"
+              className="h-11 border-border px-5"
             >
               {t('tour.back')}
             </Button>
@@ -150,7 +150,7 @@ export default function GuidedTour({ user }: { user: SessionUser }) {
           <Button
             type="button"
             onClick={() => (stepIndex < STEPS.length ? setStep(stepIndex + 1) : close(true))}
-            className="h-11 flex-1 bg-[#714B67] px-5 font-semibold text-white hover:bg-[#714B67]/90"
+            className="h-11 flex-1 bg-primary px-5 font-semibold text-white hover:bg-primary/90"
           >
             {stepIndex < STEPS.length ? t('tour.next') : t('tour.done')}
           </Button>
