@@ -60,3 +60,7 @@ server.log
 # (backups/, VACUUM INTO engine) and in git history pre-R16.
 /db/*.db*
 /backups/
+
+# R16: git bundles are offline artifacts — never tracked (a committed bundle
+# snowballs: each regeneration would contain the previous one)
+*.bundle
