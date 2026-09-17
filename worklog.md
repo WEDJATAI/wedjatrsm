@@ -1525,3 +1525,41 @@ Stage Summary:
 - Deviations from the contract letter (documented): list endpoints wrap as {promotions} per the 17-a/17-b convention; toPromotionDTO emits local "YYYY-MM-DD" date keys instead of full ISO (date-input + timezone-proof, consumed by the form and liveness check); recompute applies promos only to OPEN orders (paid/cancelled/deferred keep settled totals); "type radio" rendered as an aria-pressed segmented pair (same semantics, touch-friendlier).
 - Scope decisions honored: mobile waiter-portal cart (separate component, not CartPanel) intentionally left without the preview — server still applies the discount on send; no payment/tax/loyalty logic touched.
 - Demo dataset: 3 promos covering active order-scope percent / scheduled wrap-window / inactive category fixed, so every badge, chip and toggle in the admin UI is demonstrable; 25 promotion.* audit rows tell the full story.
+
+---
+Task ID: 17-e
+Agent: main (Z.ai Code) — COO / CTO / Project Manager / Restaurant-system architect
+Task: Round 17 — Refunds implemented properly (the R12 "refund" only ever existed as a broken untracked draft) + R9 AI briefing/copilot restored + scaffold purge
+
+Work Log:
+- REFUNDS, honest finding first: git history proved the R12 refund screenshots came from an untracked draft referencing Order.refundAmount which NEVER existed in any committed schema — the feature was never actually shipped. Same for the forecast draft (ForecastReport/ForecastDay types never in types.ts at HEAD).
+- Implemented refunds the Foodics way with ZERO schema change: a refund = negative Payment row (reference `refund: <reason>`). Honest by construction: serializeOrder paidAmount nets it automatically; Z-report paymentsByMethod nets cash/card for the DAY the money left the drawer; the R15 sync engine ships payment rows one-way (refund rows sync as-is).
+- src/app/api/orders/[id]/refund/route.ts: admin-only POST; order must be 'paid' (409 otherwise); capacity = Σpositive payments − Σ|negative payments| (400 with exact message when exceeded); partial + multiple refunds; reason required (≤140 chars, audit trail); method defaults to the largest original tender; $transaction; audit 'order.refund' (action+entity registered in audit.ts).
+- Z-report: refunds section added (aggregation in the payments loop; ZReport type + reports-view KPI tile + print HTML line — only rendered when count > 0).
+- Reports view: new RefundSection — admin-gated (['session'] query), recent 12 paid orders with paid/refunded/refundable columns, "Fully refunded" badge, refund dialog (amount prefilled to capacity, method Select, reason required), invalidations (orders/zreport/sales). 22 r17.refund.* keys EN/AR.
+- Curl-verified lifecycle: refund 10 EGP on paid order #139 (paid 56.70 → paidAmount 46.70, refundedTotal 10, capacity 46.70) · over-refund 999 → 400 "Refund exceeds refundable amount (46.70 EGP remaining of 56.70 paid)" · missing reason → 400 · waiter token → 403 · open order → 409 · zreport today: refunds {total 10, count 1} with paymentsTotal honestly −10 (only a refund left the drawer today). The test refund stays as audited demo data.
+- AI RESTORED (the "nothing deleted" spirit): R9's AiBriefingCard + AiCopilotSheet + /api/ai/* routes were fully built but ORPHANED (zero importers — wiring lost across rounds; their ai.* dictionary also lost). Re-wired: dashboard renders the briefing card + a Copilot header button + the sheet; rebuilt dict/ai.ts (21 keys EN/AR incl. 4 suggestion chips). Live-verified: briefing renders REAL analysis ("Revenue has been EGP 0.00 for six of the last seven days, with a single day of EGP 630.00"); copilot chat answered a suggestion with an accurate data-aware reply.
+- Scaffold route src/app/api/route.ts ("Hello, world!") removed — completing R16's deliberate cleanup that the incident-restore had resurrected.
+
+Stage Summary:
+- Refunds: production-grade, guard-tested, zero-schema-change, sync-safe; Z-report + reports UI surfaces live.
+- R9 AI features: fully functional again on the dashboard (briefing + copilot with real replies).
+- All quality gates green: ESLint 0, tsc 0 src errors, GET / 200, zero 5xx in dev.log.
+
+---
+Task ID: 17-final
+Agent: main (Z.ai Code) — COO / CTO / Project Manager / Restaurant-system structuring expert / UI architecture auditor
+Task: Round 17 closeout — E2E verification, zero-deletion proof, backups, git checkpoint, deliverables, honest report
+
+Work Log:
+- E2E (agent-browser, desktop 1536×960 + mobile 390×844): Admin menu shows Purchases/Stock Counts/Promotions/Payroll · Purchases view (Suppliers tab + PO list PO-0001..0006 across draft/ordered/received/cancelled states) · Stock Counts (SC-0001..0005 + Waste tab with log + report) · Promotions (active toggles: Happy Hour, Late Night Happy Hour) · Payroll (Amina 85 EGP/h, Omar 60 EGP/h, KPIs, Set-rate inline edit) · Dashboard forecast card ("Next 7 days: EGP23,841.12") · POS: opened table 1, added Koshari → cart showed "PROMO Happy Hour −EGP38.20" penny-exact (Subtotal 382.00 → Total 433.19 with VAT 48.13 + service 41.26); draft line removed after (order restored) · Reports Refunds card rendered with #139 refundable 46.70 · Mobile 390px: no horizontal overflow · Arabic RTL: dir=rtl, heading "الموردون وأوامر الشراء", no overflow · AI briefing + copilot live (real replies) · zero console/page errors.
+- ZERO-DELETION PROOF: scripts/round17-verify.ts — every one of the 27 pre-existing tables ≥ its pre-migration baseline (ZERO-DELETION VERIFIED; growth all accounted: orders +16 (17-c promo tests, all cancelled), order_items +30, payments +1 (test refund), audit_logs +123, inventory_transactions +17 (PO receipts/count adjustments/waste), attendance +3 (payroll test)); 7 new tables populated (suppliers 1, POs 6, PO lines 9, counts 5, count lines 110, waste 4, promos 3); integrity ok; 0 FK violations.
+- Backups: backups/custom-round17-start-20260917-112506.db (pre-migration) + custom-round17-final-20260917-140745.db (closeout).
+- Git: 2 fast-forward commits (source + deliverables); annotated tag round17-stable; rollback guard re-verified live (round16-stable tag deletion BLOCKED); offline bundle regenerated (complete history + all tags) → backups/repo-round17-stable.bundle + download/rsm-git-repository-backup.bundle.
+- Deliverables regenerated: download/rsm-platform-database.db (VACUUM INTO, 618,496 B, 34 tables, integrity ok, 0 FK) · rsm-database-manifest.json (R17 module inventory + r17ZeroDeletionVerified invariant) · rsm-windows-x64.zip (1,526,050 B, fresh via /api/desktop/package) · README updated for R17.
+- Final gates: ESLint 0 findings · tsc --noEmit 0 src errors (was 16 at round start — all dead-draft errors eliminated) · single dev server on :3000 · zero 500s in dev.log.
+
+Stage Summary:
+- Round 17 delivered Foodics/Odoo-level capability: purchasing (Odoo Purchase), stock counts (Foodics Stock Count), waste management (Foodics Waste), promotions engine (Foodics happy hour, server-authoritative, penny-exact in the POS), payroll (Odoo HR lite), forecast (restored properly), refunds (never actually shipped before — now production-grade), and the R9 AI differentiators restored to the dashboard.
+- Zero deletions proven; every guard in place; all data growth accounted and audited.
+- Known documented residuals (honest): R15 sync engine covers the original 9 tables — the 7 new R17 tables are NOT yet in sync bundles (offline Windows instances won't receive them; documented in manifest + worklog as the top R18 candidate); refunds are admin-only by design (no dedicated permission key); promotions re-evaluate on OPEN orders only.
