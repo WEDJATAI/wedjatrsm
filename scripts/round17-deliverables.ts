@@ -6,6 +6,8 @@ import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { rmSync } from 'node:fs'
 
 const db = new PrismaClient()
+
+async function main() {
 rmSync('download/rsm-platform-database.db', { force: true })
 await db.$queryRawUnsafe("VACUUM INTO 'download/rsm-platform-database.db'")
 const integ = await db.$queryRawUnsafe<{ integrity_check: string }[]>('PRAGMA integrity_check')
@@ -80,4 +82,6 @@ console.log(
   '| orders:', counts.orders,
   '| audit:', counts.audit_logs,
 )
-await db.$disconnect()
+}
+
+main().then(() => db.$disconnect())

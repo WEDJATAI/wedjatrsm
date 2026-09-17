@@ -1,52 +1,69 @@
 {
-  "generatedAt": "2026-09-15T23:52:56.263Z",
-  "round": "R16 — integrity verification, git rollback protection, security hardening (JWT secret, rate limiting, key masking), UI fixes",
+  "generatedAt": "2026-09-17T14:13:24.738Z",
+  "round": "R17 — Foodics/Odoo-level upgrade: purchasing (suppliers + POs + receiving), stock counts, waste management, promotions engine w/ live POS integration, payroll + forecast, refunds restored, R9 AI copilot/briefing re-wired",
   "database": {
     "file": "rsm-platform-database.db",
-    "bytes": 524288,
-    "sha256": "d368a8c2ba161f554814dbcac8e2bddfd4cb827d5785f46a68ed76ce829622f0",
+    "bytes": 618496,
+    "sha256": "4318c652b1bef241576621512fa51a031675b6b3d881ec53ccf1773d4c523b64",
     "engine": "SQLite (WAL) — single embedded file",
     "integrityCheck": "ok",
     "foreignKeyViolations": 0,
-    "tables": 27,
+    "tables": 34,
     "rowCount": {
       "categories": 6,
       "floor_plans": 2,
-      "order_items": 293,
+      "order_items": 324,
       "recipe_components": 38,
-      "inventory_transactions": 154,
+      "inventory_transactions": 171,
       "roles": 1,
-      "attendance": 0,
+      "attendance": 3,
       "shifts": 2,
       "app_settings": 12,
       "tables": 16,
       "users": 3,
-      "audit_logs": 674,
+      "audit_logs": 795,
       "modifier_groups": 7,
       "modifiers": 24,
       "product_modifier_groups": 14,
       "cash_drawer_sessions": 2,
       "cash_drawer_entries": 2,
-      "payments": 77,
+      "payments": 78,
       "vision_cameras": 2,
       "vision_zones": 6,
       "vision_events": 86,
       "vision_table_states": 6,
       "movement_candidates": 20,
       "customers": 1,
-      "orders": 129,
+      "orders": 146,
       "products": 49,
-      "reservations": 2
+      "reservations": 2,
+      "suppliers": 1,
+      "purchase_orders": 6,
+      "purchase_order_items": 9,
+      "stock_counts": 5,
+      "stock_count_lines": 110,
+      "waste_logs": 4,
+      "promotions": 3
     }
+  },
+  "r17Modules": {
+    "purchasing": "Suppliers CRUD + PO lifecycle (draft→ordered→received/cancelled, partial receiving, last-purchase-price revaluation, stock ledger integration) — #/purchases",
+    "stockCounts": "Count sheets with system snapshot, variance posting (adjustment transactions), cancel — #/stockcounts",
+    "waste": "Waste log (6 reasons, cost-valued) + waste report by reason/top items — #/stockcounts → Waste tab",
+    "promotions": "Time-windowed rules (percent/fixed × order/category/product), auto-applied server-side at the order recompute choke point, live POS cart preview, never stacks with manager discounts — #/promotions",
+    "payroll": "User hourly rates + attendance-based payroll report (sessions, hours, late minutes, gross pay) — #/payroll",
+    "forecast": "28-day history + same-weekday-average 7-day projection — dashboard card + /api/reports/forecast",
+    "refunds": "Admin-only negative-payment refunds against paid checks (capacity-clamped, reason-required, audited), Z-report refunds section + refunds card in Reports",
+    "aiRestored": "R9 AI morning briefing + copilot chat re-wired onto the dashboard (components + APIs existed but render wiring had been lost); ai.* dictionary rebuilt EN/AR"
   },
   "windowsPackage": {
     "file": "rsm-windows-x64.zip",
-    "note": "Generated on demand by an admin from Settings → Download for Windows (live or demo data). R16: every package now embeds its own crypto-random JWT_SECRET.",
+    "note": "Generated on demand by an admin from Settings → Download for Windows (live or demo data). Per-install crypto-random JWT_SECRET embedded. R17 note: new modules ship in the package; the R15 sync engine syncs the original 9 tables (R17 tables sync pending — documented).",
     "launcher": "windows/install.bat → windows/start.bat → http://localhost:3000"
   },
   "gitProtection": {
-    "tag": "round16-stable",
-    "rollbackGuard": "reference-transaction hook: non-FF branch updates, checkpoint-tag delete/rewrite, main deletion, and old-commit checkouts are all blocked (12/12 live tests)",
+    "tag": "round17-stable",
+    "rollbackGuard": "reference-transaction hook (unchanged from R16, 12/12 live tests): non-FF branch updates, checkpoint-tag delete/rewrite, main deletion, and old-commit checkouts are all blocked",
     "offlineBundle": "rsm-git-repository-backup.bundle",
     "recoveryDoc": "RECOVERY-GIT.md"
   },
@@ -72,6 +89,7 @@
     "cameraStreamUrlsCredentialFree": true,
     "everyAppliedMovementHasHumanDecider": true,
     "aiNeverMutatesPosTableStateDirectly": true,
-    "jwtSecretPerInstallation": true
+    "jwtSecretPerInstallation": true,
+    "r17ZeroDeletionVerified": true
   }
 }

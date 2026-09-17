@@ -2,28 +2,31 @@
 
 Complete, verified database deliverable for **Lilo Cafe and Restaurant** (RSM —
 Restaurant System Management, Next.js 16 + Prisma + SQLite). Refreshed through
-Round 16 (integrity verification, git rollback protection, security hardening,
-UI error states + color tokenization).
+Round 17 (Foodics/Odoo-level upgrade: purchasing, stock counts, waste
+management, promotions engine with live POS auto-apply, payroll + forecast,
+refunds restored, R9 AI copilot/briefing re-wired).
 
 ## Files
 
 | File | Description |
 | --- | --- |
-| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R16) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. |
+| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R17) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. |
 | `rsm-windows-x64.zip` | Ready-to-run Windows package reference copy: the full platform + `windows\install.bat` + `start.bat` + bilingual README + portable `.env` (R16: with its own crypto-random `JWT_SECRET`) + a live-data `db\custom.db`. Generated fresh from Settings → *Download for Windows* (live or demo data). |
-| `rsm-database-manifest.json` | Machine-readable audit manifest: SHA-256 checksum, integrity/foreign-key checks, row counts for all 27 tables, safety-invariant checks. |
-| `rsm-git-repository-backup.bundle` | **NEW (R16)** — offline git bundle: ALL branches, tags (incl. `round16-stable`) and complete history. Clone from it with `git clone rsm-git-repository-backup.bundle rsm-restored`. |
+| `rsm-database-manifest.json` | Machine-readable audit manifest: SHA-256 checksum, integrity/foreign-key checks, row counts for all 34 tables, safety-invariant checks. |
+| `rsm-git-repository-backup.bundle` | Offline git bundle: ALL branches, tags (incl. `round17-stable`) and complete history. Clone from it with `git clone rsm-git-repository-backup.bundle rsm-restored`. |
 | `RECOVERY-GIT.md` | **NEW (R16)** — git protection map + recovery procedures (what is blocked, what is allowed, how to restore). |
 | `r12-ux-audit-report.md` | Full UX audit scorecard (R11-R12), Foodics comparison, recommendations implementation record (R13), load-test & data-safety record (R14), Windows + mobile portals record (§8, R15). |
 
-## Verification (all PASS — Round 16 refresh)
+## Verification (all PASS — Round 17 refresh)
 
 - `PRAGMA integrity_check` → **ok**
 - `PRAGMA foreign_key_check` → **0 violations**
-- Table inventory → **27/27** tables present (matches `prisma/schema.prisma`)
-- **Nothing-deleted audit (R16)**: `scripts/round16-verify.ts` — 77/77 checks
-  against the R15 manifest (all counts ≥ manifest, live checks #126–#133
-  intact, one documented test-residue removal with audit trail)
+- Table inventory → **34/34** tables present (27 original + 7 new R17 tables) (matches `prisma/schema.prisma`)
+- **Nothing-deleted audit (R17)**: `scripts/round17-verify.ts` — every
+  pre-existing table at or above its pre-migration baseline (zero deletions;
+  all growth accounted: +16 test orders cancelled, +1 test refund, +123 audit
+  rows, +17 inventory transactions, +3 attendance sessions); live checks
+  #126–#133 intact through the R17 work
 - Safety invariants: AI never writes table state (0 auto-applied movements) ·
   bcrypt-only password hashes · no credentials embedded in camera URLs ·
   per-installation JWT secret (R16)
