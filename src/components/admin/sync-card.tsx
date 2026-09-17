@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
+  Check,
   CloudUpload,
   FileJson,
   KeyRound,
@@ -72,6 +73,16 @@ const PENDING_TABLES = [
   'inventoryTransactions',
   'reservations',
   'auditLogs',
+  // R21: purchasing, stock, promotions, person tracking
+  'suppliers',
+  'purchaseOrders',
+  'purchaseOrderItems',
+  'stockCounts',
+  'stockCountLines',
+  'wasteLogs',
+  'promotions',
+  'persons',
+  'customRoles',
 ] as const
 
 /** Sum the values of a per-table count record ({"orders": 3, …} → n). */
@@ -157,6 +168,24 @@ export function SyncCard() {
       }),
     onSuccess: () => {
       toast.success(t('sync.keyRegenerated'))
+      refreshStatus()
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // ── R21: set key manually (paste the master's key on a Windows instance) ──
+  const [showSetKey, setShowSetKey] = useState(false)
+  const [keyDraft, setKeyDraft] = useState('')
+  const setKeyMutation = useMutation({
+    mutationFn: (key: string) =>
+      apiFetch<{ sync: SyncSettingsDTO }>('/api/sync/settings', {
+        method: 'PUT',
+        body: { setKey: key },
+      }),
+    onSuccess: () => {
+      toast.success(t('sync.keySetDone'))
+      setKeyDraft('')
+      setShowSetKey(false)
       refreshStatus()
     },
     onError: (err: Error) => toast.error(err.message),
@@ -402,6 +431,60 @@ export function SyncCard() {
                 </AlertDialog>
               </div>
               <p className="text-xs text-muted-foreground">{t('sync.keyHelper')}</p>
+              {/* R21: manual key entry — closes the README-WINDOWS flow where a
+                  Windows instance needs to paste the master's sync key */}
+              {!showSetKey ? (
+                <Button
+                  variant="ghost"
+                  className="h-11 justify-start px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowSetKey(true)}
+                >
+                  <KeyRound className="size-3.5" />
+                  {t('sync.keySetShow')}
+                </Button>
+              ) : (
+                <div className="grid gap-2 rounded-md border border-dashed p-2">
+                  <Label htmlFor="sync-set-key" className="text-xs">
+                    {t('sync.keySetLabel')}
+                  </Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="sync-set-key"
+                      value={keyDraft}
+                      onChange={(e) => setKeyDraft(e.target.value)}
+                      placeholder={t('sync.keySetPh')}
+                      dir="ltr"
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="h-11 font-mono text-xs"
+                    />
+                    <Button
+                      variant="outline"
+                      className="h-11 shrink-0"
+                      disabled={setKeyMutation.isPending || keyDraft.trim().length < 8}
+                      onClick={() => setKeyMutation.mutate(keyDraft.trim())}
+                    >
+                      {setKeyMutation.isPending ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <Check className="size-4" />
+                      )}
+                      {t('sync.keySetSave')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="h-11 shrink-0"
+                      onClick={() => {
+                        setShowSetKey(false)
+                        setKeyDraft('')
+                      }}
+                    >
+                      {t('common.cancel')}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('sync.keySetHelper')}</p>
+                </div>
+              )}
             </div>
 
             <Separator />

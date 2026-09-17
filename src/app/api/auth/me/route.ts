@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ApiError, errorResponse, getSessionUser, loadSessionUser } from '@/lib/auth'
+// R21: in-app auto-snapshot watcher (side-effect import — do not remove).
+// This route is hit on every app boot/page load, guaranteeing the watcher lives
+// even in a server instance that started before instrumentation.ts existed.
+import '@/lib/snapshot-watch-init'
 
 export async function GET(req: NextRequest) {
   try {

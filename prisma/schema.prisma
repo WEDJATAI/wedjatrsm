@@ -51,6 +51,8 @@ model Person {
   name      String
   active    Boolean  @default(true) // inactive people can't be selected
   createdAt DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (renames/deactivations ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
   issuedChecks Order[] @relation("CheckIssuer")
 
   @@index([userId])
@@ -64,6 +66,8 @@ model CustomRole {
   permissions String   @default("") // comma-separated module keys (see PERMISSIONS)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (renames/permission edits ride delta bundles)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
   users       User[]
 
   @@map("roles")
@@ -259,6 +263,10 @@ model Order {
   checkIssuedAt         DateTime?  @map("check_issued_at")
   createdAt      DateTime           @default(now()) @map("created_at")
   closedAt       DateTime?          @map("closed_at")
+  // R21: sync mutation tracking — the open→paid/cancelled close transition
+  // (and any later edit) now rides delta bundles; previously a closed order's
+  // final state never propagated (createdAt-only watermark).
+  updatedAt      DateTime?          @updatedAt @map("updated_at")
   items          OrderItem[]
   payments       Payment[]
   inventoryTransactions InventoryTransaction[]
@@ -622,6 +630,8 @@ model Supplier {
   notes     String?
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (contact edits ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
 
   purchaseOrders PurchaseOrder[]
 
@@ -645,6 +655,8 @@ model PurchaseOrder {
   createdById Int?      @map("created_by_id")
   createdBy   User?     @relation("PurchaseOrderCreator", fields: [createdById], references: [id])
   createdAt   DateTime  @default(now()) @map("created_at")
+  // R21: sync mutation tracking (draft→ordered→received/cancelled lifecycle)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
 
   lines PurchaseOrderItem[]
 
@@ -662,6 +674,10 @@ model PurchaseOrderItem {
   quantity         Float // ordered quantity
   receivedQuantity Float         @default(0) @map("received_quantity")
   unitCost         Float         @map("unit_cost") // EGP per unit — revalued product cost on receive
+  // R21: sync tracking — line had no timestamps at all; createdAt feeds the
+  // delta watermark, updatedAt catches partial-receiving mutations.
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime?     @updatedAt @map("updated_at")
 
   @@index([purchaseOrderId])
   @@map("purchase_order_items")
@@ -680,6 +696,8 @@ model StockCount {
   createdBy   User?     @relation("StockCountCreator", fields: [createdById], references: [id])
   createdAt   DateTime  @default(now()) @map("created_at")
   postedAt    DateTime? @map("posted_at")
+  // R21: sync mutation tracking (open→posted/cancelled lifecycle)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
 
   lines StockCountLine[]
 
@@ -695,6 +713,10 @@ model StockCountLine {
   product      Product    @relation("StockCountLines", fields: [productId], references: [id])
   systemQty    Float      @map("system_qty") // snapshot at open time
   countedQty   Float?     @map("counted_qty") // null = not counted yet
+  // R21: sync tracking — line had no timestamps at all; createdAt feeds the
+  // delta watermark, updatedAt catches counted-qty mutations.
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime?  @updatedAt @map("updated_at")
 
   @@index([stockCountId])
   @@map("stock_count_lines")
@@ -743,6 +765,8 @@ model Promotion {
   endDate   DateTime? @map("end_date") // inclusive; null = always
   active    Boolean   @default(true)
   createdAt DateTime  @default(now()) @map("created_at")
+  // R21: sync mutation tracking (rule edits/toggles ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
 
   @@index([active])
   @@map("promotions")

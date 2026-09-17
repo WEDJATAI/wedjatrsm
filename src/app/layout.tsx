@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Cairo } from "next/font/google";
 import "./globals.css";
+// R21: in-app auto-snapshot watcher (side-effect import — do not remove)
+import "@/lib/snapshot-watch-init";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

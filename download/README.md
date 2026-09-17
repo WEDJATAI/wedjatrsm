@@ -2,15 +2,19 @@
 
 Complete, verified database deliverable for **Lilo Cafe and Restaurant** (RSM —
 Restaurant System Management, Next.js 16 + Prisma + SQLite). Refreshed through
-Round 17 (Foodics/Odoo-level upgrade: purchasing, stock counts, waste
-management, promotions engine with live POS auto-apply, payroll + forecast,
-refunds restored, R9 AI copilot/briefing re-wired).
+Round 21 (sync engine expanded 9 → 18 tables: purchasing, stock counts, waste,
+promotions, people & custom roles now sync to Windows instances; in-app
+auto-snapshot watcher keeps this recovery point at most ~10 minutes behind the
+live database). Earlier milestones: R19 (any-quantity move items + person-level
+tracking + check attribution), R17 (Foodics/Odoo-level upgrade: purchasing,
+stock counts, waste management, promotions engine, payroll + forecast, refunds,
+AI copilot).
 
 ## Files
 
 | File | Description |
 | --- | --- |
-| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R17) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. |
+| `rsm-platform-database.db` | The complete platform database (single embedded SQLite file — this is the ONLY database the platform needs; no external DB server is required). All schema modifications from every build round (R3 → R21) are applied. Snapshot taken with SQLite `VACUUM INTO` — consistent even while the live server serves traffic. **R21: auto-refreshed every ~10 minutes by the in-app snapshot watcher** (`src/lib/db-snapshot.ts` via `src/instrumentation.ts`) whenever the live DB changes — after an environment reset, this file is the disaster-recovery source (it survived both 2026-09-17 resets while `db/` and `backups/` were wiped). |
 | `rsm-windows-x64.zip` | Ready-to-run Windows package reference copy: the full platform + `windows\install.bat` + `start.bat` + bilingual README + portable `.env` (R16: with its own crypto-random `JWT_SECRET`) + a live-data `db\custom.db`. Generated fresh from Settings → *Download for Windows* (live or demo data). |
 | `rsm-database-manifest.json` | Machine-readable audit manifest: SHA-256 checksum, integrity/foreign-key checks, row counts for all 34 tables, safety-invariant checks. |
 | `rsm-git-repository-backup.bundle` | Offline git bundle: ALL branches, tags (incl. `round17-stable`) and complete history. Clone from it with `git clone rsm-git-repository-backup.bundle rsm-restored`. |
@@ -21,7 +25,9 @@ refunds restored, R9 AI copilot/briefing re-wired).
 
 - `PRAGMA integrity_check` → **ok**
 - `PRAGMA foreign_key_check` → **0 violations**
-- Table inventory → **34/34** tables present (27 original + 7 new R17 tables) (matches `prisma/schema.prisma`)
+- Table inventory → **35/35** tables present (27 original + 7 R17 tables + R19 `persons`; R21 added mutation-tracking `updated_at` columns additively — no table removed, no column changed) (matches `prisma/schema.prisma`)
+- **R21 sync round-trip (58/58)**: `scripts/round21-verify.ts` — 18-table bundles, self-import idempotency (0 inserted / 0 skipped / 0 data change), delta watermark advance, createdAt **and** updatedAt propagation (supplier rename of an old row rides the next delta), closed-order propagation (the pre-R21 engine never re-sent an order's final paid state), R19 person attribution survives import (previously silently dropped), FK-fallback for dangling check issuers, persons + custom roles ride every bundle
+- **R19 regression post-recovery**: move-items any-quantity + Move All + over-move/zero rejection + destination aggregation + audit — 9/9 pass
 - **Nothing-deleted audit (R17)**: `scripts/round17-verify.ts` — every
   pre-existing table at or above its pre-migration baseline (zero deletions;
   all growth accounted: +16 test orders cancelled, +1 test refund, +123 audit

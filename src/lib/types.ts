@@ -715,6 +715,7 @@ export type Reservation = {
 }
 
 // ─── R15: Offline-first Windows deployment — sync contracts ─────────
+// R21: purchasing/stock/promotions/person tables joined the sync set.
 export type SyncPendingCounts = {
   orders: number
   orderItems: number
@@ -725,6 +726,15 @@ export type SyncPendingCounts = {
   inventoryTransactions: number
   reservations: number
   auditLogs: number
+  suppliers: number
+  purchaseOrders: number
+  purchaseOrderItems: number
+  stockCounts: number
+  stockCountLines: number
+  wasteLogs: number
+  promotions: number
+  persons: number
+  customRoles: number
   total: number
 }
 
@@ -754,6 +764,15 @@ export type SyncBundle = {
     inventoryTransactions: unknown[]
     reservations: unknown[]
     auditLogs: unknown[]
+    suppliers: unknown[]
+    purchaseOrders: unknown[]
+    purchaseOrderItems: unknown[]
+    stockCounts: unknown[]
+    stockCountLines: unknown[]
+    wasteLogs: unknown[]
+    promotions: unknown[]
+    persons: unknown[]
+    customRoles: unknown[]
   }
 }
 

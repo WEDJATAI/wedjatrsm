@@ -1,7 +1,9 @@
 // /api/sync/settings — R15 Sync Center configuration (admin/settings).
-// PUT: { targetUrl?: string, autoExport?: boolean, rotateKey?: boolean }
+// PUT: { targetUrl?: string, autoExport?: boolean, rotateKey?: boolean, setKey?: string }
 // targetUrl must be '' (unset) or an http(s) URL. Rotating the key replaces
-// the stored sync key (the old one stops working immediately). Returns the
+// the stored sync key (the old one stops working immediately). R21: setKey
+// installs an explicit key (paste the master's key on a Windows instance —
+// closes the README-WINDOWS flow that previously had no UI). Returns the
 // recomputed { sync } status shape.
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -22,6 +24,15 @@ const SettingsBody = z.object({
     .optional(),
   autoExport: z.boolean().optional(),
   rotateKey: z.boolean().optional(),
+  // R21: install an explicit key (e.g. the master's key pasted on a Windows
+  // instance). 8-128 chars — hex keys are 48; the range also tolerates
+  // manually-chosen shared secrets.
+  setKey: z
+    .string()
+    .trim()
+    .min(8, 'setKey must be at least 8 characters')
+    .max(128, 'setKey is too long (max 128 characters)')
+    .optional(),
 })
 
 export async function PUT(req: NextRequest) {
@@ -51,6 +62,11 @@ export async function PUT(req: NextRequest) {
     if (parsed.data.rotateKey === true) {
       await writeSyncSettings({ rotateKey: true })
       changed.push('sync key rotated')
+    }
+    if (parsed.data.setKey !== undefined) {
+      // never echo the key itself into the audit trail
+      await writeSyncSettings({ setKey: parsed.data.setKey })
+      changed.push('sync key set manually')
     }
     if (changed.length === 0) throw new ApiError('Nothing to update', 400)
 
