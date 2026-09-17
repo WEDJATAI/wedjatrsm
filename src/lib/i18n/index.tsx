@@ -30,6 +30,8 @@ import { visionDict } from './dict/vision'
 import { r13Dict } from './dict/r13'
 import { r15SyncDict } from './dict/r15-sync'
 import { r15MobileDict } from './dict/r15-mobile'
+import { r17Dict } from './dict/r17'
+import { aiDict } from './dict/ai'
 import { setFormatLocale, type FormatLang } from '@/lib/format'
 
 export type Lang = 'en' | 'ar'
@@ -70,7 +72,7 @@ const LANG_EVENT = 'rms-lang-change'
 export type Dict = Record<string, string>
 export type DictPair = { en: Dict; ar: Dict }
 
-const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict, visionDict, r13Dict, r15SyncDict, r15MobileDict]
+const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict, visionDict, r13Dict, r15SyncDict, r15MobileDict, r17Dict, aiDict]
 
 const FULL_DICT: Record<Lang, Dict> = { en: {}, ar: {} }
 for (const pair of DICT_PAIRS) {

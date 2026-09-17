@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftRight,
@@ -44,7 +44,8 @@ import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/co
 import { formatCurrency, formatQty } from '@/lib/format'
 import { useI18n, localizedName } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import type { Customer, Order, OrderItem } from '@/lib/types'
+import { bestPromotion, isPromoReason, type CartLine } from '@/lib/promotions'
+import type { Customer, Order, OrderItem, Product, PromotionDTO } from '@/lib/types'
 import { computeCartTotals, lineUnitPrice, modifierDeltaLabel, round2, type DraftItem } from './pos-utils'
 
 type CartPanelProps = {
@@ -64,6 +65,9 @@ type CartPanelProps = {
   /** R13: loyalty — draft-scoped customer (pos-view owns the state). */
   draftCustomer?: Customer | null
   onDraftCustomerChange?: (customer: Customer | null) => void
+  /** R17 promotions — the sellable catalog (pos-view's live query), used
+   *  to resolve productId → categoryId for the category-scoped promo preview. */
+  products?: Product[]
 }
 
 const STATUS_CHIP: Record<string, string> = {
@@ -88,6 +92,7 @@ export default function CartPanel({
   userRole,
   draftCustomer = null,
   onDraftCustomerChange,
+  products = [],
 }: CartPanelProps) {
   const queryClient = useQueryClient()
   const { t, lang } = useI18n()
@@ -203,6 +208,73 @@ export default function CartPanel({
 
   const totals = computeCartTotals(order, draft)
   const noItems = (order?.items.length ?? 0) + draft.length === 0
+
+  // ── R17 promotions: live preview of the best automatic discount ──
+  // DISPLAY-ONLY: the promotion is (re)computed server-side at every order
+  // create / item mutation (lib/orders.ts recomputeTotals is authoritative);
+  // this preview never changes what the waiter sends. A failed promo fetch
+  // is non-fatal — the cart simply shows the plain totals.
+  const promosQuery = useQuery({
+    queryKey: ['promotions', 'active'],
+    queryFn: () => fetcher<{ promotions: PromotionDTO[] }>('/api/promotions?activeOnly=1'),
+    enabled: !noItems,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  // productId → categoryId (sent order lines don't embed categoryId; the
+  // POS catalog resolves it — products whose category is unknown simply
+  // only match whole-order promotions)
+  const productCategoryById = useMemo(() => {
+    const map = new Map<number, number | null>()
+    for (const p of products) map.set(p.id, p.categoryId ?? null)
+    return map
+  }, [products])
+
+  const promoCartLines = useMemo<CartLine[]>(() => {
+    const lines: CartLine[] = []
+    for (const item of order?.items ?? []) {
+      if (item.productId == null) continue
+      lines.push({
+        productId: item.productId,
+        categoryId: productCategoryById.get(item.productId) ?? null,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+      })
+    }
+    for (const d of draft) {
+      lines.push({
+        productId: d.productId,
+        categoryId: productCategoryById.get(d.productId) ?? null,
+        unitPrice: lineUnitPrice(d),
+        quantity: d.quantity,
+      })
+    }
+    return lines
+  }, [order, draft, productCategoryById])
+
+  // manager discount wins — promotions never stack on top of it
+  const managerDiscountActive =
+    (order?.discountReason ?? '').trim() !== '' &&
+    !isPromoReason(order?.discountReason) &&
+    (order?.discountAmount ?? 0) > 0
+
+  const promoPreview = useMemo(() => {
+    const promos = promosQuery.data?.promotions
+    if (!promos || promoCartLines.length === 0 || managerDiscountActive) return null
+    return bestPromotion(promos, promoCartLines, new Date())
+  }, [promosQuery.data, promoCartLines, managerDiscountActive])
+
+  // When the promo preview applies, the displayed discount/taxes mirror
+  // what the server will compute on send (same math as computeCartTotals).
+  const displayTotals = useMemo(() => {
+    if (promoPreview == null) return totals
+    const discount = round2(Math.min(promoPreview.discount, totals.subtotal))
+    const base = Math.max(0, round2(totals.subtotal - discount))
+    const tax = round2(base * TAX_RATE)
+    const serviceTax = round2(base * SERVICE_TAX_RATE)
+    return { ...totals, discount, tax, serviceTax, total: round2(base + tax + serviceTax) }
+  }, [totals, promoPreview])
 
   // Open orders (for the move-items target picker) — only fetched while the
   // picker dialog is open; the query key matches the floor's live query.
@@ -769,10 +841,32 @@ export default function CartPanel({
 
       {/* Footer */}
       <div className="shrink-0 space-y-1.5 border-t border-border p-4">
-        <SummaryRow label={t('money.subtotal')} value={formatCurrency(totals.subtotal)} />
+        <SummaryRow label={t('money.subtotal')} value={formatCurrency(displayTotals.subtotal)} />
+        {/* R17: when the live promo preview applies, this row becomes the
+            promo line — badge + promotion name (lang-aware) + −amount; the
+            pencil still offers a manager override (which replaces the promo
+            server-side: one discount source per order, manager wins). */}
         <div className="flex items-center justify-between text-sm">
-          <span className="flex items-center gap-1 text-muted-foreground">
-            {t('money.discount')}
+          <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            {promoPreview ? (
+              <>
+                <Badge
+                  className="h-5 shrink-0 border-primary/30 bg-primary/10 px-1.5 text-[10px] font-bold tracking-wide text-primary"
+                  title={promoPreview.scopeLabel ?? undefined}
+                >
+                  {t('r17.promo.badge')}
+                </Badge>
+                <span className="truncate">
+                  {localizedName(
+                    promoPreview.promotion.name,
+                    promoPreview.promotion.nameAr,
+                    lang,
+                  )}
+                </span>
+              </>
+            ) : (
+              t('money.discount')
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -785,14 +879,14 @@ export default function CartPanel({
             </Button>
           </span>
           <span className="tabular-nums text-muted-foreground">
-            − {formatCurrency(totals.discount)}
+            − {formatCurrency(displayTotals.discount)}
           </span>
         </div>
-        <SummaryRow label={t('money.tax')} value={formatCurrency(totals.tax)} />
-        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(totals.serviceTax)} />
+        <SummaryRow label={t('money.tax')} value={formatCurrency(displayTotals.tax)} />
+        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(displayTotals.serviceTax)} />
         <div className="flex items-center justify-between border-t border-border pt-2">
           <span className="text-sm font-semibold">{t('money.total')}</span>
-          <span className="text-lg font-bold tabular-nums">{formatCurrency(totals.total)}</span>
+          <span className="text-lg font-bold tabular-nums">{formatCurrency(displayTotals.total)}</span>
         </div>
         {order && order.paidAmount > 0 && (
           <>
@@ -867,7 +961,9 @@ export default function CartPanel({
               >
                 {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
                 <span className="truncate">
-                  {t('pos.payment')} · {formatCurrency(totals.total)}
+                  {/* R17: promo-aware amount (mirrors the summary rows above —
+                      the server recomputes it authoritatively on payment) */}
+                  {t('pos.payment')} · {formatCurrency(displayTotals.total)}
                 </span>
               </Button>
             </div>

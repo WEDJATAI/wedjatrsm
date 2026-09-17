@@ -35,6 +35,10 @@ export const PERMISSIONS = [
   'vision',
   'reservations',
   'customers',
+  // R17: Foodics/Odoo-level modules
+  'purchases',
+  'promotions',
+  'payroll',
 ] as const
 export type Permission = (typeof PERMISSIONS)[number]
 export type PermissionList = readonly string[]
@@ -58,7 +62,26 @@ export const PERMISSION_LABELS: Record<string, string> = {
   vision: 'AI Vision — CCTV Occupancy',
   reservations: 'Reservations — Table Bookings',
   customers: 'Customers & Loyalty',
+  purchases: 'Suppliers & Purchase Orders',
+  promotions: 'Promotions & Happy Hour',
+  payroll: 'Payroll',
 }
+
+// ─── R17: Waste management (Foodics Waste) ─────────────────────────
+export const WASTE_REASONS = [
+  'spoilage',
+  'expired',
+  'breakage',
+  'overproduction',
+  'complimentary',
+  'other',
+] as const
+export type WasteReason = (typeof WASTE_REASONS)[number]
+
+// ─── R17: Promotions (Foodics) ─────────────────────────────────────
+export const PROMO_TYPES = ['percent', 'fixed'] as const
+export const PROMO_SCOPES = ['order', 'category', 'product'] as const
+export const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
 export const BUILTIN_ROLE_PERMISSIONS: Record<string, string[]> = {

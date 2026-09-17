@@ -18,10 +18,16 @@ model User {
   roleRecord   CustomRole? @relation(fields: [roleId], references: [id])
   pin          String? // 6-digit quick-login / check-in PIN
   active       Boolean   @default(true)
+  // R17: payroll — hourly wage (EGP) used by the payroll report (attendance
+  // hours × rate). Nullable: users without a rate are excluded from payroll.
+  hourlyRate   Float?    @map("hourly_rate")
   createdAt    DateTime  @default(now()) @map("created_at")
   orders       Order[]
   attendance   Attendance[]
   cashDrawerSessions CashDrawerSession[]
+  purchaseOrdersCreated PurchaseOrder[] @relation("PurchaseOrderCreator")
+  stockCountsCreated    StockCount[]    @relation("StockCountCreator")
+  wasteLogEntries       WasteLog[]      @relation("WasteLogEntries")
 
   @@index([roleId])
   @@map("users")
@@ -85,6 +91,7 @@ model Category {
   prepDestination String? @map("prep_destination")
   active       Boolean   @default(true)
   products     Product[]
+  promotions   Promotion[] @relation("PromotionScopes")
 
   @@map("categories")
 }
@@ -142,6 +149,10 @@ model Product {
   recipeFor                RecipeComponent[] @relation("DishRecipe")
   recipeIngredients        RecipeComponent[] @relation("IngredientRecipe")
   inventoryTransactions    InventoryTransaction[]
+  purchaseOrderLines   PurchaseOrderItem[] @relation("PurchaseOrderLines")
+  stockCountLines      StockCountLine[]   @relation("StockCountLines")
+  wasteLogEntries      WasteLog[]         @relation("WasteLogEntries")
+  promotions           Promotion[]        @relation("PromotionScopes")
 
   @@index([categoryId])
   @@index([isSellable, active])
@@ -556,4 +567,147 @@ model Reservation {
   @@index([status])
   @@index([reservedAt])
   @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// R17: Foodics/Odoo-level operations — purchasing, stock counts,
+// waste management, promotions engine, payroll. All models are
+// ADDITIVE: nothing existing was modified except two optional,
+// nullable fields on User (hourlyRate) — zero data loss by design.
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── R17: Suppliers (Odoo Purchasing) ──────────────────────────────
+model Supplier {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+// Lifecycle: draft → ordered (confirmed with the supplier) → received
+// (stock landed, InventoryTransaction 'purchase' rows written, last
+// purchase cost applied) / cancelled. Partial receiving supported via
+// line-level receivedQuantity.
+model PurchaseOrder {
+  id          Int       @id @default(autoincrement())
+  number      String    @unique // "PO-0001"
+  supplierId  Int       @map("supplier_id")
+  supplier    Supplier  @relation(fields: [supplierId], references: [id])
+  status      String    @default("draft") // 'draft' | 'ordered' | 'received' | 'cancelled'
+  note        String?
+  expectedAt  DateTime? @map("expected_at")
+  orderedAt   DateTime?
+  receivedAt  DateTime?
+  createdById Int?      @map("created_by_id")
+  createdBy   User?     @relation("PurchaseOrderCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  lines PurchaseOrderItem[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               Int           @id @default(autoincrement())
+  purchaseOrderId  Int           @map("purchase_order_id")
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId        Int           @map("product_id")
+  product          Product       @relation("PurchaseOrderLines", fields: [productId], references: [id])
+  quantity         Float // ordered quantity
+  receivedQuantity Float         @default(0) @map("received_quantity")
+  unitCost         Float         @map("unit_cost") // EGP per unit — revalued product cost on receive
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+// ─── R17: Physical stock counts (Foodics Stock Count) ───────────────
+// Open a count sheet → system qty snapshotted per line → staff counts →
+// post (variance ≠ 0 lines create InventoryTransaction 'adjustment'
+// rows and restock product.stock) / cancel.
+model StockCount {
+  id          Int       @id @default(autoincrement())
+  number      String    @unique // "SC-0001"
+  status      String    @default("open") // 'open' | 'posted' | 'cancelled'
+  note        String?
+  createdById Int?      @map("created_by_id")
+  createdBy   User?     @relation("StockCountCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+  postedAt    DateTime? @map("posted_at")
+
+  lines StockCountLine[]
+
+  @@index([status])
+  @@map("stock_counts")
+}
+
+model StockCountLine {
+  id           Int        @id @default(autoincrement())
+  stockCountId Int        @map("stock_count_id")
+  stockCount   StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  productId    Int        @map("product_id")
+  product      Product    @relation("StockCountLines", fields: [productId], references: [id])
+  systemQty    Float      @map("system_qty") // snapshot at open time
+  countedQty   Float?     @map("counted_qty") // null = not counted yet
+
+  @@index([stockCountId])
+  @@map("stock_count_lines")
+}
+
+// ─── R17: Waste log (Foodics Waste) ────────────────────────────────
+// Every waste entry deducts stock (InventoryTransaction 'waste') and
+// records cost value at the moment of loss for the waste report.
+model WasteLog {
+  id        Int      @id @default(autoincrement())
+  productId Int      @map("product_id")
+  product   Product  @relation("WasteLogEntries", fields: [productId], references: [id])
+  quantity  Float
+  costValue Float    @map("cost_value") // quantity × product cost at log time
+  reason    String   // 'spoilage'|'expired'|'breakage'|'overproduction'|'complimentary'|'other'
+  note      String?
+  userId    Int?     @map("user_id")
+  user      User?    @relation("WasteLogEntries", fields: [userId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([createdAt])
+  @@map("waste_logs")
+}
+
+// ─── R17: Promotions engine (Foodics) ──────────────────────────────
+// Time-windowed automatic rules (happy hour, category days). Applied
+// automatically in the POS cart when active AND matching; the best
+// (largest) discount wins and stacks with nothing (one promo per
+// order). Manual manager discounts remain a separate, audited path.
+model Promotion {
+  id        Int       @id @default(autoincrement())
+  name      String
+  nameAr    String?   @map("name_ar")
+  type      String    @default("percent") // 'percent' | 'fixed'
+  value     Float // percent 1-100, or fixed EGP off the matched scope
+  scope     String    @default("order") // 'order' | 'category' | 'product'
+  categoryId Int?     @map("category_id")
+  category  Category? @relation("PromotionScopes", fields: [categoryId], references: [id])
+  productId Int?      @map("product_id")
+  product   Product?  @relation("PromotionScopes", fields: [productId], references: [id])
+  daysOfWeek String   @default("0,1,2,3,4,5,6") // CSV of JS getDay() digits
+  startTime String?   @map("start_time") // "HH:MM" 24h; null = start of day
+  endTime   String?   @map("end_time") // "HH:MM" 24h; may wrap past midnight
+  startDate DateTime? @map("start_date") // inclusive; null = always
+  endDate   DateTime? @map("end_date") // inclusive; null = always
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([active])
+  @@map("promotions")
 }

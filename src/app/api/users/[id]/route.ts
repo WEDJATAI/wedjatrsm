@@ -15,6 +15,8 @@ const USER_SAFE_SELECT = {
   roleRecord: { select: { name: true, permissions: true, active: true } },
   pin: true,
   active: true,
+  // R17: payroll — hourly wage (EGP/h, null = not in payroll)
+  hourlyRate: true,
   createdAt: true,
 }
 
@@ -27,6 +29,7 @@ type UserRowWithRole = {
   roleRecord: { name: string; permissions: string; active: boolean } | null
   pin: string | null
   active: boolean
+  hourlyRate: number | null
   createdAt: Date
 }
 
@@ -46,6 +49,7 @@ function serializeUser(user: UserRowWithRole) {
     ),
     pin: user.pin,
     active: user.active,
+    hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
   }
 }
@@ -105,7 +109,7 @@ export async function PUT(
 
     const existing = await db.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, roleId: true },
+      select: { id: true, role: true, roleId: true, hourlyRate: true },
     })
     if (!existing) throw new ApiError('User not found', 404)
 
@@ -133,6 +137,24 @@ export async function PUT(
 
     if (body.pin !== undefined) {
       data.pin = parsePin(body.pin)
+    }
+
+    // R17 payroll: hourly rate (EGP/h). null or '' clears it; otherwise a
+    // finite number ≥ 0. Audited separately as payroll.rateUpdate on change.
+    let newHourlyRate: number | null | undefined
+    if (body.hourlyRate !== undefined) {
+      if (body.hourlyRate === null || body.hourlyRate === '') {
+        newHourlyRate = null
+      } else if (typeof body.hourlyRate === 'number' || typeof body.hourlyRate === 'string') {
+        const rate = Number(body.hourlyRate)
+        if (!Number.isFinite(rate) || rate < 0) {
+          throw new ApiError('Hourly rate must be a number ≥ 0', 400)
+        }
+        newHourlyRate = rate
+      } else {
+        throw new ApiError('Hourly rate must be a number ≥ 0', 400)
+      }
+      data.hourlyRate = newHourlyRate
     }
 
     if (body.active !== undefined) {
@@ -207,6 +229,7 @@ export async function PUT(
     if (data.passwordHash !== undefined) changedKeys.push('password')
     if (data.active !== undefined) changedKeys.push('active')
     if (data.roleId !== undefined) changedKeys.push('roleId')
+    if (data.hourlyRate !== undefined) changedKeys.push('hourlyRate')
     const softDeleted = body.active === false
     await logAudit({
       user: session,
@@ -217,6 +240,20 @@ export async function PUT(
         changedKeys.length > 0 ? ` — keys: ${changedKeys.join(', ')}` : ''
       }`,
     })
+
+    // R17 payroll: dedicated audit trail for wage changes (old → new).
+    if (newHourlyRate !== undefined && newHourlyRate !== existing.hourlyRate) {
+      const fmt = (v: number | null) => (v === null ? 'not set' : `${v} EGP/h`)
+      await logAudit({
+        user: session,
+        action: 'payroll.rateUpdate',
+        entity: 'payroll',
+        entityId: userId,
+        details: `Hourly rate for ${serialized.name} (${serialized.email}): ${fmt(
+          existing.hourlyRate,
+        )} → ${fmt(newHourlyRate)}`,
+      })
+    }
 
     return NextResponse.json({ user: serialized })
   } catch (err) {

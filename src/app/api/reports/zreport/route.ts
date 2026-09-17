@@ -132,6 +132,9 @@ export async function GET(req: NextRequest) {
     let paymentsTotalRaw = 0
     let deferredSettledRaw = 0
     let tipsTotalRaw = 0
+    // R17: refunds issued today (negative payments)
+    let refundsTotalRaw = 0
+    let refundsCount = 0
     let tipsCashRaw = 0
     let tipsCardRaw = 0
     let tipsOtherRaw = 0
@@ -139,6 +142,13 @@ export async function GET(req: NextRequest) {
     const waiterTipName = new Map<number | null, string>()
     for (const payment of payments) {
       paymentsTotalRaw += payment.amount
+
+      // R17: explicit refund aggregation (already netted into the method
+      // aggregates above — this line is for the dedicated refunds section)
+      if (payment.amount < 0) {
+        refundsTotalRaw += -payment.amount
+        refundsCount += 1
+      }
 
       const agg = methodAgg.get(payment.method) ?? { amount: 0, count: 0 }
       agg.amount += payment.amount
@@ -219,6 +229,13 @@ export async function GET(req: NextRequest) {
         cash: round2(tipsCashRaw),
         card: round2(tipsCardRaw),
         other: round2(tipsOtherRaw),
+      },
+      // R17: refunds issued this day (negative payments — the money left
+      // TODAY's drawer, regardless of when the check closed). paymentsTotal
+      // and paymentsByMethod already net these automatically.
+      refunds: {
+        total: round2(refundsTotalRaw),
+        count: refundsCount,
       },
     }
 

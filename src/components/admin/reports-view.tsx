@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   Ban,
@@ -23,6 +23,7 @@ import {
   ReceiptText,
   Star,
   TrendingUp,
+  Undo2,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -39,14 +40,22 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { fetcher } from '@/lib/api'
+import { apiFetch, fetcher } from '@/lib/api'
 import type {
   InventoryValueReport,
   MenuEngineeringReport,
+  Order,
   SalesReport,
+  SessionUser,
   ZReport,
 } from '@/lib/types'
-import { formatCurrency, formatDate, formatLocale, toDateInputValue } from '@/lib/format'
+import {
+  formatCurrency,
+  formatDate,
+  formatDateTime,
+  formatLocale,
+  toDateInputValue,
+} from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -57,9 +66,24 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -232,6 +256,15 @@ function buildZReportHtml(
       'bold',
     ),
   )
+  // R17: refunds issued this day (negative payments) — only when any exist
+  if (report.refunds && report.refunds.count > 0) {
+    lines.push(
+      row(
+        `${t('r17.refund.zreportLine')} (${report.refunds.count})`,
+        formatCurrency(report.refunds.total),
+      ),
+    )
+  }
   lines.push(dashed)
   lines.push(row(t('admin.zreportDeferredSettled'), formatCurrency(report.deferredSettled)))
   lines.push(row(t('admin.zreportDeferredOutstanding'), formatCurrency(report.deferredOutstanding)))
@@ -242,6 +275,256 @@ function buildZReportHtml(
   }
   if (report.byWaiter.length === 0) lines.push('<p class="muted">—</p>')
   return lines.join('\n')
+}
+
+/** R17: Refunds — issue manager-approved refunds against paid checks.
+ *  A refund is a negative payment row (reference `refund: <reason>`);
+ *  the Z-report nets it automatically for the day it left the drawer. */
+function RefundSection() {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const [target, setTarget] = useState<Order | null>(null)
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+  const [method, setMethod] = useState('cash')
+
+  // Refunds are an admin-only action (matches the API guard) — hide the
+  // section entirely for non-admin report viewers.
+  const sessionQuery = useQuery({
+    queryKey: ['session'],
+    queryFn: () => fetcher<{ user: SessionUser }>('/api/auth/me'),
+    staleTime: 60_000,
+  })
+  const isAdmin = sessionQuery.data?.user.role === 'admin'
+
+  const paidQuery = useQuery({
+    queryKey: ['orders', 'paid'],
+    enabled: isAdmin === true,
+    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=paid'),
+    staleTime: 15_000,
+  })
+
+  const recent = useMemo(
+    () =>
+      [...(paidQuery.data?.orders ?? [])]
+        .sort((a, b) => (b.closedAt ?? b.createdAt).localeCompare(a.closedAt ?? a.createdAt))
+        .slice(0, 12),
+    [paidQuery.data],
+  )
+
+  const refundMutation = useMutation({
+    mutationFn: (input: { orderId: number; amount: number; reason: string; method: string }) =>
+      apiFetch<{
+        refundedTotal: number
+        remainingCapacity: number
+      }>(`/api/orders/${input.orderId}/refund`, {
+        method: 'POST',
+        body: { amount: input.amount, reason: input.reason, method: input.method },
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        t('r17.refund.issued', {
+          amount: formatCurrency(target ? Number(amount) : 0),
+          order: target?.id ?? 0,
+        }),
+      )
+      setTarget(null)
+      setAmount('')
+      setReason('')
+      void queryClient.invalidateQueries({ queryKey: ['orders', 'paid'] })
+      void queryClient.invalidateQueries({ queryKey: ['zreport'] })
+      void queryClient.invalidateQueries({ queryKey: ['sales-report'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  if (sessionQuery.isLoading || !isAdmin) return null
+
+  function openRefund(order: Order) {
+    let paid = 0
+    let refunded = 0
+    for (const p of order.payments ?? []) {
+      if (p.amount >= 0) paid += p.amount
+      else refunded += -p.amount
+    }
+    const capacity = Math.round((paid - refunded) * 100) / 100
+    setTarget(order)
+    setAmount(capacity > 0 ? String(capacity) : '')
+    setReason('')
+    setMethod(
+      [...(order.payments ?? [])].filter((p) => p.amount > 0).sort((a, b) => b.amount - a.amount)[0]
+        ?.method ?? 'cash',
+    )
+  }
+
+  function submitRefund() {
+    if (target == null) return
+    const value = Math.round(Number(amount) * 100) / 100
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error(t('r17.refund.needAmount'))
+      return
+    }
+    let paid = 0
+    let refunded = 0
+    for (const p of target.payments ?? []) {
+      if (p.amount >= 0) paid += p.amount
+      else refunded += -p.amount
+    }
+    const capacity = Math.round((paid - refunded) * 100) / 100
+    if (value > capacity) {
+      toast.error(t('r17.refund.exceeds', { amount: formatCurrency(capacity) }))
+      return
+    }
+    if (!reason.trim()) {
+      toast.error(t('r17.refund.needReason'))
+      return
+    }
+    refundMutation.mutate({ orderId: target.id, amount: value, reason: reason.trim(), method })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Undo2 className="size-5 text-rose-600" aria-hidden />
+          {t('r17.refund.title')}
+        </CardTitle>
+        <CardDescription>{t('r17.refund.subtitle')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {paidQuery.isLoading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : paidQuery.isError ? (
+          <div className="flex flex-col items-center gap-2 py-6">
+            <p className="text-sm text-muted-foreground">{t('r17.common.error')}</p>
+            <Button variant="outline" size="sm" onClick={() => void paidQuery.refetch()}>
+              {t('r17.common.retry')}
+            </Button>
+          </div>
+        ) : recent.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {t('r17.refund.noOrders')}
+          </p>
+        ) : (
+          <div className="max-h-96 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('r17.refund.order')}</TableHead>
+                  <TableHead>{t('r17.refund.closed')}</TableHead>
+                  <TableHead className="text-end">{t('r17.refund.paid')}</TableHead>
+                  <TableHead className="text-end">{t('r17.refund.refunded')}</TableHead>
+                  <TableHead className="text-end">{t('r17.refund.remaining')}</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recent.map((order) => {
+                  let paid = 0
+                  let refunded = 0
+                  for (const p of order.payments ?? []) {
+                    if (p.amount >= 0) paid += p.amount
+                    else refunded += -p.amount
+                  }
+                  const capacity = Math.round((paid - refunded) * 100) / 100
+                  return (
+                    <TableRow key={order.id}>
+                      <TableCell className="font-medium">#{order.id}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDateTime(order.closedAt ?? order.createdAt)}
+                      </TableCell>
+                      <TableCell className="text-end">{formatCurrency(paid)}</TableCell>
+                      <TableCell className="text-end">
+                        {refunded > 0 ? (
+                          <span className="text-rose-600">−{formatCurrency(refunded)}</span>
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
+                      <TableCell className="text-end">
+                        {capacity > 0 ? (
+                          formatCurrency(capacity)
+                        ) : (
+                          <Badge variant="secondary">{t('r17.refund.alreadyRefunded')}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={capacity <= 0}
+                          aria-label={`${t('r17.refund.issue')} #${order.id}`}
+                          onClick={() => openRefund(order)}
+                        >
+                          {t('r17.refund.issue')}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+
+      {/* Refund dialog */}
+      <Dialog open={target != null} onOpenChange={(open) => !open && setTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {t('r17.refund.issue')} · #{target?.id}
+            </DialogTitle>
+            <DialogDescription>{t('r17.refund.subtitle')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="refund-amount">{t('r17.refund.amount')}</Label>
+              <Input
+                id="refund-amount"
+                type="number"
+                min="0"
+                step="0.5"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="refund-method">{t('r17.refund.method')}</Label>
+              <Select value={method} onValueChange={setMethod}>
+                <SelectTrigger id="refund-method" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">{t('status.payment.cash')}</SelectItem>
+                  <SelectItem value="card">{t('status.payment.card')}</SelectItem>
+                  <SelectItem value="other">{t('status.payment.other')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="refund-reason">{t('r17.refund.reason')}</Label>
+              <Input
+                id="refund-reason"
+                value={reason}
+                maxLength={140}
+                placeholder={t('r17.refund.reasonPlaceholder')}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTarget(null)}>
+              {t('r17.common.cancel')}
+            </Button>
+            <Button onClick={submitRefund} disabled={refundMutation.isPending}>
+              {refundMutation.isPending ? t('common.loading') : t('r17.refund.issue')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  )
 }
 
 /** One KPI tile of the Z-Report grid (mirrors the view's KPI card markup). */
@@ -424,6 +707,13 @@ function ZReportSection() {
                 value={String(report.cancelledCount)}
                 icon={<Ban className="size-5 text-rose-600" />}
               />
+              {report.refunds && report.refunds.count > 0 ? (
+                <ZKpi
+                  label={t('r17.refund.zreportLine')}
+                  value={formatCurrency(report.refunds.total)}
+                  icon={<Undo2 className="size-5 text-rose-600" />}
+                />
+              ) : null}
             </div>
 
             {/* Payments by method + deferred chips · Sales by waiter */}
@@ -1263,6 +1553,9 @@ export default function ReportsView() {
 
       {/* Z-Report — end-of-day cash reconciliation (manual date + print) */}
       <ZReportSection />
+
+      {/* R17: Refunds — manager-approved refunds against paid checks */}
+      <RefundSection />
 
       {/* Menu engineering — popularity vs. margin quadrants */}
       <MenuEngineeringSection />

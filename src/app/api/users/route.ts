@@ -15,6 +15,8 @@ const USER_SAFE_SELECT = {
   roleRecord: { select: { name: true, permissions: true, active: true } },
   pin: true,
   active: true,
+  // R17: payroll — hourly wage (EGP/h, null = not in payroll)
+  hourlyRate: true,
   createdAt: true,
 }
 
@@ -27,6 +29,7 @@ type UserRowWithRole = {
   roleRecord: { name: string; permissions: string; active: boolean } | null
   pin: string | null
   active: boolean
+  hourlyRate: number | null
   createdAt: Date
 }
 
@@ -46,6 +49,7 @@ function serializeUser(user: UserRowWithRole) {
     ),
     pin: user.pin,
     active: user.active,
+    hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
   }
 }

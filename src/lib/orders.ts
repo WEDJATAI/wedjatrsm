@@ -7,6 +7,13 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, type SessionPayload } from '@/lib/auth'
 import { COURSES, MONEY_EPSILON, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+import {
+  bestPromotion,
+  isPromoReason,
+  promoReason,
+  toPromotionDTO,
+  type CartLine,
+} from '@/lib/promotions'
 import type {
   FloorPlan,
   Order,
@@ -278,14 +285,69 @@ export async function setTablesStatusForOrder(
  * service tax = (subtotal − discount) × SERVICE_TAX_RATE (12%),
  * total = subtotal − discount + VAT + service tax.
  * Persists the result and returns the serialized order.
+ *
+ * R17 promotions — ONE discount source per order, manager wins, else best
+ * promo (this is the single server-authoritative choke point: it runs at
+ * order creation, every item add/remove/update (PUT /api/orders/[id]),
+ * item transfer and order merge):
+ *  - a MANAGER discount (discountReason non-empty, NOT engine-generated and
+ *    discountAmount > 0) is kept as-is and promotions are NEVER stacked;
+ *  - otherwise the best live promotion is evaluated against the current
+ *    items at server time and stored as
+ *      discountReason = `PROMO #<id> — <name>`   ← audit marker convention
+ *    (reasons starting with 'PROMO' are reserved for the engine); when no
+ *    promotion matches, the discount resets to 0 — promo money is never
+ *    stored on the promotion row, it is recomputed live every time.
+ *  - only OPEN orders re-evaluate; paid/cancelled/deferred orders keep
+ *    their settled totals untouched.
  */
 export async function recomputeTotals(orderId: number): Promise<Order> {
-  const order = await db.order.findUnique({ where: { id: orderId }, include: { items: true } })
+  const order = await db.order.findUnique({
+    where: { id: orderId },
+    // R17: product → categoryId is needed for category-scoped promo matching
+    include: { items: { include: { product: { select: { id: true, categoryId: true } } } } },
+  })
   if (!order) throw new ApiError('Order not found', 404)
   const subtotal = round2(
     order.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
   )
-  const discount = Math.min(Math.max(order.discountAmount, 0), subtotal)
+
+  // ── R17: decide the discount source (manager vs best live promo) ──
+  let discountAmount = order.discountAmount
+  let discountReason: string | null = order.discountReason
+  const hasManagerDiscount =
+    (order.discountReason ?? '').trim() !== '' &&
+    !isPromoReason(order.discountReason) &&
+    order.discountAmount > 0
+
+  if (!hasManagerDiscount && order.status === 'open') {
+    const promoRows = await db.promotion.findMany({
+      where: { active: true },
+      include: {
+        category: { select: { id: true, name: true } },
+        product: { select: { id: true, name: true } },
+      },
+    })
+    const lines: CartLine[] = order.items.map((item) => ({
+      productId: item.productId ?? -1,
+      categoryId: item.product?.categoryId ?? null,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+    }))
+    const best =
+      promoRows.length > 0 ? bestPromotion(promoRows.map(toPromotionDTO), lines, new Date()) : null
+    if (best != null && best.discount > 0) {
+      discountAmount = best.discount
+      discountReason = promoReason(best.promotion.id, best.promotion.name)
+    } else {
+      // no live promotion matches → clear any stale promo discount
+      // (zero open orders carried a discount before R17 — verified)
+      discountAmount = 0
+      discountReason = null
+    }
+  }
+
+  const discount = Math.min(Math.max(discountAmount, 0), subtotal)
   const base = round2(subtotal - discount)
   const tax = round2(base * TAX_RATE)
   const serviceTax = round2(base * SERVICE_TAX_RATE)
@@ -295,6 +357,7 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
     data: {
       subtotalAmount: subtotal,
       discountAmount: round2(discount),
+      discountReason,
       taxAmount: tax,
       serviceTaxAmount: serviceTax,
       totalAmount: total,

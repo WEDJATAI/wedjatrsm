@@ -1,0 +1,41 @@
+#!/bin/sh
+# ─── R11 git hardening: update hook ─────────────────────────────────
+# Blocks rollback/deletion on protected history. Runs for every ref
+# update attempted against this repository (push/receive-pack).
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+ZERO="0000000000000000000000000000000000000000"
+
+# 1) Protected refs are FROZEN — no create/update/delete.
+case "$refname" in
+  refs/protected/*)
+    echo "BLOCKED: '$refname' is a protected ref — it cannot be changed." >&2
+    exit 1
+    ;;
+esac
+
+# 2) Never allow deleting a stable round tag or any branch (history anchors).
+if [ "$newrev" = "$ZERO" ] && [ "$oldrev" != "$ZERO" ]; then
+  case "$refname" in
+    refs/tags/round*-stable|refs/heads/*)
+      echo "BLOCKED: deleting '$refname' is not allowed (history protection)." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+# 3) Branch updates must be fast-forward (no force/rollback over history).
+case "$refname" in
+  refs/heads/*)
+    if [ "$oldrev" != "$ZERO" ] && [ "$newrev" != "$ZERO" ]; then
+      if ! git merge-base --is-ancestor "$oldrev" "$newrev"; then
+        echo "BLOCKED: non-fast-forward update to '$refname' (rollback protection). Use a new commit instead." >&2
+        exit 1
+      fi
+    fi
+    ;;
+esac
+
+exit 0

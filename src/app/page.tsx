@@ -31,6 +31,10 @@ import ReservationsView from '@/components/admin/reservations-view'
 import CustomersView from '@/components/admin/customers-view'
 import InventoryView from '@/components/admin/inventory-view'
 import RecipesView from '@/components/admin/recipes-view'
+import PurchasesView from '@/components/admin/purchases-view'
+import StockCountsView from '@/components/admin/stockcounts-view'
+import PromotionsView from '@/components/admin/promotions-view'
+import PayrollView from '@/components/admin/payroll-view'
 import ReportsView from '@/components/admin/reports-view'
 import ModifiersView from '@/components/admin/modifiers-view'
 import CashDrawerView from '@/components/admin/cash-drawer-view'
@@ -53,13 +57,17 @@ type View =
   | 'reservations'
   | 'customers'
   | 'inventory'
+  | 'purchases'
+  | 'stockcounts'
   | 'recipes'
+  | 'promotions'
   | 'reports'
   | 'cashdrawer'
   | 'vision'
   | 'users'
   | 'roles'
   | 'attendance'
+  | 'payroll'
   | 'activity'
   | 'integrations'
   | 'settings'
@@ -76,13 +84,17 @@ const VIEW_PERMISSION: Record<View, string> = {
   reservations: 'reservations',
   customers: 'customers',
   inventory: 'inventory',
+  purchases: 'purchases',
+  stockcounts: 'inventory',
   recipes: 'recipes',
+  promotions: 'promotions',
   reports: 'reports',
   cashdrawer: 'cashdrawer',
   vision: 'vision',
   users: 'users',
   roles: 'roles',
   attendance: 'attendance',
+  payroll: 'payroll',
   activity: 'audit',
   integrations: 'settings',
   settings: 'settings',
@@ -97,13 +109,17 @@ const ADMIN_VIEWS: View[] = [
   'reservations',
   'customers',
   'inventory',
+  'purchases',
+  'stockcounts',
   'recipes',
+  'promotions',
   'reports',
   'cashdrawer',
   'vision',
   'users',
   'roles',
   'attendance',
+  'payroll',
   'activity',
   'integrations',
   'settings',
@@ -127,6 +143,10 @@ const VIEW_PRIORITY: View[] = [
   'reservations',
   'customers',
   'recipes',
+  'promotions',
+  'purchases',
+  'stockcounts',
+  'payroll',
   'users',
   'roles',
   'settings',
@@ -265,6 +285,14 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         return <InventoryView />
       case 'recipes':
         return <RecipesView />
+      case 'purchases':
+        return <PurchasesView />
+      case 'stockcounts':
+        return <StockCountsView />
+      case 'promotions':
+        return <PromotionsView />
+      case 'payroll':
+        return <PayrollView />
       case 'reports':
         return <ReportsView />
       case 'cashdrawer':

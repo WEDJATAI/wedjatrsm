@@ -424,6 +424,8 @@ export type ZReport = {
   byWaiter: { userId: number | null; name: string; orders: number; net: number; tips?: number }[]
   /** R8: gratuity totals for the day */
   tips: { total: number; cash: number; card: number; other: number }
+  /** R17: refunds issued this day (negative payments) — net value */
+  refunds: { total: number; count: number }
 }
 
 // ─── Backups ────────────────────────────────────────
@@ -739,4 +741,177 @@ export type SyncImportSummary = {
   inserted: Record<string, number>
   updated: Record<string, number>
   skipped: Record<string, number>
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// R17: Foodics/Odoo-level operations — shared API contracts for the
+// purchasing, stock-count, waste, promotions and payroll modules.
+// These types are the contract between the R17 API routes and views.
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── R17: Suppliers & purchase orders (Odoo Purchasing) ────────────
+export type Supplier = {
+  id: number
+  name: string
+  phone: string | null
+  email: string | null
+  address: string | null
+  notes: string | null
+  active: boolean
+  createdAt: string
+  /** aggregated across received PO lines (0 for new suppliers) */
+  purchaseCount: number
+  totalPurchased: number
+}
+
+export type PurchaseOrderLineDTO = {
+  id: number
+  productId: number
+  product: { id: number; name: string; nameAr: string | null; sku: string | null; cost: number }
+  quantity: number
+  receivedQuantity: number
+  unitCost: number
+  /** quantity × unitCost */
+  lineTotal: number
+}
+
+export type PurchaseOrderDTO = {
+  id: number
+  number: string
+  supplierId: number
+  supplier: { id: number; name: string }
+  status: 'draft' | 'ordered' | 'received' | 'cancelled' | string
+  note: string | null
+  expectedAt: string | null
+  orderedAt: string | null
+  receivedAt: string | null
+  createdAt: string
+  createdBy: string | null
+  lines: PurchaseOrderLineDTO[]
+  total: number
+  receivedTotal: number
+  /** sum((quantity − receivedQuantity) × unitCost) over open lines */
+  outstanding: number
+}
+
+// ─── R17: Stock counts (Foodics Stock Count) ───────────────────────
+export type StockCountLineDTO = {
+  id: number
+  productId: number
+  product: { id: number; name: string; nameAr: string | null; sku: string | null; cost: number }
+  systemQty: number
+  countedQty: number | null
+  /** countedQty − systemQty (null while uncounted) */
+  variance: number | null
+  /** variance × product cost (null while uncounted) */
+  valueImpact: number | null
+}
+
+export type StockCountDTO = {
+  id: number
+  number: string
+  status: 'open' | 'posted' | 'cancelled' | string
+  note: string | null
+  createdAt: string
+  postedAt: string | null
+  createdBy: string | null
+  lines: StockCountLineDTO[]
+  /** sum of |valueImpact| for counted lines (shrinkage + overage magnitude) */
+  totalValueImpact: number
+}
+
+// ─── R17: Waste log (Foodics Waste) ────────────────────────────────
+export type WasteLogDTO = {
+  id: number
+  productId: number
+  product: { id: number; name: string; nameAr: string | null }
+  quantity: number
+  costValue: number
+  reason: string
+  note: string | null
+  user: { id: number; name: string } | null
+  createdAt: string
+}
+
+export type WasteReport = {
+  from: string
+  to: string
+  totalValue: number
+  entries: number
+  byReason: { reason: string; quantity: number; value: number; entries: number }[]
+  topItems: { productId: number; name: string; quantity: number; value: number }[]
+}
+
+// ─── R17: Promotions engine (Foodics) ──────────────────────────────
+export type PromotionDTO = {
+  id: number
+  name: string
+  nameAr: string | null
+  type: 'percent' | 'fixed' | string
+  value: number
+  scope: 'order' | 'category' | 'product' | string
+  categoryId: number | null
+  category: { id: number; name: string } | null
+  productId: number | null
+  product: { id: number; name: string } | null
+  /** parsed from the stored CSV (empty array = every day) */
+  daysOfWeek: number[]
+  startTime: string | null
+  endTime: string | null
+  startDate: string | null
+  endDate: string | null
+  active: boolean
+  createdAt: string
+}
+
+/** runtime evaluation of one cart against active promotions (shared by the
+ *  POS cart preview and the order-submit revalidation — server-authoritative) */
+export type PromoEvaluation = {
+  promotion: { id: number; name: string; nameAr: string | null; type: string; value: number }
+  /** EGP discount this promotion gives the cart */
+  discount: number
+  /** matched scope label ('Drinks', product name, null for whole order) */
+  scopeLabel: string | null
+}
+
+// ─── R17: Payroll (Odoo HR lite) ───────────────────────────────────
+export type PayrollLine = {
+  userId: number
+  name: string
+  role: string
+  hourlyRate: number
+  sessions: number
+  /** worked hours in the window, 2dp */
+  hours: number
+  grossPay: number
+  lateMinutes: number
+}
+
+export type PayrollReport = {
+  from: string
+  to: string
+  lines: PayrollLine[]
+  totalHours: number
+  totalGrossPay: number
+}
+
+// ─── R17: Sales forecast (restored properly) ───────────────────────
+export type ForecastDay = {
+  date: string // YYYY-MM-DD
+  dayLabel: string // e.g. 'Sat'
+  actual: number | null // gross sales that day (null = future)
+  projected: number | null // projected sales (null = past)
+}
+
+export type ForecastReport = {
+  /** first history day (28 days back) */
+  from: string
+  /** last projected day (7 days ahead) */
+  to: string
+  history: ForecastDay[]
+  projection: ForecastDay[]
+  /** average daily sales over the history window */
+  avgDaily: number
+  /** projected weekly total */
+  projectedWeekTotal: number
 }

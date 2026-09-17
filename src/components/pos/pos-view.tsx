@@ -1192,6 +1192,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
             userRole={user?.role ?? ''}
             draftCustomer={draftCustomer}
             onDraftCustomerChange={setDraftCustomer}
+            products={products}
           />
         </div>
       </div>

@@ -58,6 +58,8 @@ export const AUDIT_ACTIONS = [
   'integration.update',
   'integration.webhook',
   'order.externalCreate',
+  // R17: refunds — negative-payment issuance against paid checks
+  'order.refund',
   'invoice.export',
   // R14: data safety — consistent snapshots (auto/manual/download)
   'backup.auto',
@@ -69,6 +71,23 @@ export const AUDIT_ACTIONS = [
   'sync.push',
   'sync.settings',
   'desktop.package',
+  // R17: Foodics/Odoo-level modules — purchasing, counts, waste, promos, payroll
+  'supplier.create',
+  'supplier.update',
+  'supplier.delete',
+  'purchase.create',
+  'purchase.confirm',
+  'purchase.receive',
+  'purchase.cancel',
+  'stockcount.create',
+  'stockcount.saveCounts',
+  'stockcount.post',
+  'stockcount.cancel',
+  'waste.log',
+  'promotion.create',
+  'promotion.update',
+  'promotion.delete',
+  'payroll.rateUpdate',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -91,6 +110,13 @@ export type AuditInput = {
     | 'integration'
     | 'invoice'
     | 'system'
+    // R17: Foodics/Odoo-level modules
+    | 'supplier'
+    | 'purchase'
+    | 'stockcount'
+    | 'waste'
+    | 'promotion'
+    | 'payroll'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null

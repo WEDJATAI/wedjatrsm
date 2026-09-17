@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -9,6 +9,7 @@ import {
   Boxes,
   ChefHat,
   Receipt,
+  TrendingUp,
   Users,
   Utensils,
   type LucideIcon,
@@ -23,6 +24,7 @@ import {
   YAxis,
 } from 'recharts'
 import { toast } from 'sonner'
+import { Sparkles } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -30,8 +32,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { fetcher } from '@/lib/api'
+import { WEEKDAY_KEYS } from '@/lib/constants'
+// R17 restore: R9's AI briefing + copilot were fully built but had lost
+// their render wiring (orphaned through later rounds) — back on the dashboard.
+import AiBriefingCard from '@/components/admin/ai-briefing-card'
+import AiCopilotSheet from '@/components/admin/ai-copilot-sheet'
 import { formatCurrency, formatDate, formatLocale, formatQty, toDateInputValue } from '@/lib/format'
-import type { InventoryItem, Order, SalesReport } from '@/lib/types'
+import type { ForecastReport, InventoryItem, Order, SalesReport } from '@/lib/types'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -73,6 +80,9 @@ function yTick(value: number): string {
 
 export default function DashboardView({ onNavigate }: { onNavigate?: (view: string) => void }) {
   const { t } = useI18n()
+  // R17 restore: copilot trigger state (admin-only sheet; the API 403s
+  // for anyone else and the sheet surfaces errors gracefully)
+  const [copilotOpen, setCopilotOpen] = useState(false)
   const today = useMemo(() => toDateInputValue(new Date()), [])
   const weekStart = useMemo(() => {
     const d = new Date()
@@ -162,8 +172,23 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
           <h1 className="text-2xl font-bold tracking-tight">{t('admin.dashboard')}</h1>
           <p className="text-sm text-muted-foreground">{t('admin.todayAtGlance')}</p>
         </div>
-        <p className="text-xs text-muted-foreground">{formatDate(new Date())}</p>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            aria-label={t('ai.copilotTitle')}
+            onClick={() => setCopilotOpen(true)}
+          >
+            <Sparkles className="size-4 text-primary" aria-hidden />
+            <span className="hidden sm:inline">{t('ai.copilotTitle')}</span>
+          </Button>
+          <p className="text-xs text-muted-foreground">{formatDate(new Date())}</p>
+        </div>
       </div>
+
+      {/* R17 restore: AI morning briefing (self-fetching, graceful on error) */}
+      <AiBriefingCard />
 
       {errorMessage && (
         <Alert variant="destructive">
@@ -376,6 +401,9 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
         </Card>
       </div>
 
+      {/* R17: sales forecast — avg daily + 7-day projection */}
+      <ForecastCard />
+
       {/* Quick actions */}
       {onNavigate && (
         <Card className="gap-3 p-5">
@@ -398,6 +426,9 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (view: stri
           </div>
         </Card>
       )}
+
+      {/* R17 restore: copilot chat sheet (triggered from the header) */}
+      <AiCopilotSheet open={copilotOpen} onOpenChange={setCopilotOpen} />
     </div>
   )
 }
@@ -452,5 +483,110 @@ function ChartError({ title, message }: { title: string; message: string }) {
         <AlertDescription>{message}</AlertDescription>
       </Alert>
     </div>
+  )
+}
+
+// ─── R17: sales forecast card (28-day history → 7-day projection) ────
+// Component-local literals (the i18n dict files are owned elsewhere).
+
+function ForecastCard() {
+  const { t, lang } = useI18n()
+
+  const forecast = useQuery({
+    queryKey: ['forecast'],
+    queryFn: () => fetcher<ForecastReport>('/api/reports/forecast'),
+  })
+
+  const title = lang === 'ar' ? 'توقعات المبيعات' : 'Sales Forecast'
+  const avgDailyLabel = lang === 'ar' ? 'متوسط يومي (٢٨ يومًا)' : 'Avg / day (28d)'
+  const weekLabel = lang === 'ar' ? 'الأيام السبعة القادمة' : 'Next 7 days'
+  const noDataLabel = lang === 'ar' ? 'لا مبيعات بعد للتنبؤ' : 'No sales history to forecast yet'
+
+  const projection = forecast.data?.projection ?? []
+  const maxProjected = useMemo(
+    () => Math.max(...projection.map((d) => d.projected ?? 0), 1),
+    [projection],
+  )
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5 text-primary" aria-hidden />
+          {title}
+        </CardTitle>
+        <CardDescription>
+          {forecast.data ? `${forecast.data.from} → ${forecast.data.to}` : t('common.loading')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {forecast.isError ? (
+          <div className="grid h-28 place-items-center text-sm text-muted-foreground">
+            {t('admin.failedToLoad')}
+          </div>
+        ) : forecast.isLoading ? (
+          <div className="space-y-4">
+            <div className="flex gap-8">
+              <Skeleton className="h-12 w-28" />
+              <Skeleton className="h-12 w-28" />
+            </div>
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : projection.length === 0 || (forecast.data?.avgDaily ?? 0) === 0 ? (
+          <div className="grid h-28 place-items-center text-sm text-muted-foreground">
+            {noDataLabel}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-x-10 gap-y-3">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{avgDailyLabel}</p>
+                <p className="text-xl font-bold tabular-nums">
+                  {formatCurrency(forecast.data?.avgDaily ?? 0)}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{weekLabel}</p>
+                <p className="text-xl font-bold tabular-nums">
+                  {formatCurrency(forecast.data?.projectedWeekTotal ?? 0)}
+                </p>
+              </div>
+            </div>
+            {/* mini 7-day bar chart — pure divs on a fixed 64px track (h-16)
+                so the tallest bar can never overflow into the value labels */}
+            <div
+              className="flex items-end gap-2 sm:gap-3"
+              role="img"
+              aria-label={`${title} — ${weekLabel}: ${formatCurrency(
+                forecast.data?.projectedWeekTotal ?? 0,
+              )}`}
+            >
+              {projection.map((day) => {
+                const value = day.projected ?? 0
+                const px = Math.max(4, Math.round((value / maxProjected) * 64))
+                const weekday = new Date(`${day.date}T00:00:00`).getDay()
+                return (
+                  <div key={day.date} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                      {formatQty(value)}
+                    </span>
+                    <div className="flex h-16 w-full items-end">
+                      <div
+                        className="w-full rounded-t bg-primary/80"
+                        style={{ height: px }}
+                        title={`${day.date}: ${formatCurrency(value)}`}
+                      />
+                    </div>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      {t(`r17.day.${WEEKDAY_KEYS[weekday]}`)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

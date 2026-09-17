@@ -1,0 +1,13 @@
+#!/bin/sh
+# ─── R11 git hardening: pre-push hook ───────────────────────────────
+# Blocks pushing anything that would rewrite or delete protected
+# history (defense in depth alongside receive.denyNonFastForwards).
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/protected/*)
+      echo "BLOCKED: refusing to push protected ref '$remote_ref'." >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
