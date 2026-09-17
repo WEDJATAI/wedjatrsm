@@ -3,14 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  ChefHat,
   CheckCircle2,
   Clock,
+  ConciergeBell,
   Delete,
   KeyRound,
   Loader2,
   LogIn,
   LogOut,
   Mail,
+  ShieldCheck,
   Timer,
   UserCheck,
   UtensilsCrossed,
@@ -32,11 +35,19 @@ import { cn } from '@/lib/utils'
 
 const PIN_LENGTH = 6
 
-const DEMO_ACCOUNTS: [email: string, password: string, pin: string][] = [
-  ['admin@rms.com', 'admin123', '123456'],
-  ['waiter@rms.com', 'waiter123', '111111'],
-  ['kitchen@rms.com', 'kitchen123', '222222'],
+type DemoRole = 'admin' | 'waiter' | 'kitchen'
+
+const DEMO_ACCOUNTS: [role: DemoRole, email: string, password: string, pin: string][] = [
+  ['admin', 'admin@rms.com', 'admin123', '123456'],
+  ['waiter', 'waiter@rms.com', 'waiter123', '111111'],
+  ['kitchen', 'kitchen@rms.com', 'kitchen123', '222222'],
 ]
+
+const DEMO_ROLE_ICONS: Record<DemoRole, typeof ShieldCheck> = {
+  admin: ShieldCheck,
+  waiter: ConciergeBell,
+  kitchen: ChefHat,
+}
 
 // ── Public attendance API shapes (POST /api/attendance/check-in|out) ─
 type AttendanceUser = {
@@ -160,6 +171,33 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
       }
     },
     [onLogin, t, triggerShake],
+  )
+
+  // ── One-click demo sign-in (dev/demo convenience) ───────────────
+  /** role key of the account currently being quick-signed-in (null = idle) */
+  const [quickLoading, setQuickLoading] = useState<DemoRole | null>(null)
+
+  const quickLogin = useCallback(
+    async (role: DemoRole, mail: string, pass: string) => {
+      if (quickLoading) return
+      setQuickLoading(role)
+      try {
+        const { user, token } = await apiFetch<{
+          user: SessionUser
+          token?: string
+        }>('/api/auth/login', {
+          body: { email: mail, password: pass },
+        })
+        if (token) setSessionToken(token)
+        toast.success(t('auth.welcomeBack', { name: user.name }))
+        onLogin()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t('auth.loginFailed'))
+      } finally {
+        setQuickLoading(null)
+      }
+    },
+    [onLogin, quickLoading, t],
   )
 
   const pressDigit = useCallback(
@@ -636,27 +674,56 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
             </TabsContent>
           </Tabs>
 
-          {/* Demo credentials hint */}
+          {/* One-click demo sign-in (dev convenience) + credentials reference */}
           <div className="rounded-lg border bg-muted/50 p-3">
             <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground rtl:tracking-normal">
-              {t('auth.demo')}
+              {t('auth.oneClick')}
             </p>
-            <div className="space-y-1 font-mono text-xs text-muted-foreground">
-              {DEMO_ACCOUNTS.map(([mail, pass, pinCode]) => (
-                <div
-                  key={mail}
-                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5"
-                >
-                  <span className="tabular-nums">{mail} / {pass}</span>
-                  <span className="inline-flex items-center gap-1 tabular-nums">
-                    <KeyRound className="h-3 w-3" aria-hidden />
-                    {pinCode}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-1.5">
+              {DEMO_ACCOUNTS.map(([role, mail, pass, pinCode]) => {
+                const RoleIcon = DEMO_ROLE_ICONS[role]
+                const busy = quickLoading === role
+                return (
+                  <button
+                    key={mail}
+                    type="button"
+                    onClick={() => void quickLogin(role, mail, pass)}
+                    disabled={quickLoading !== null}
+                    aria-label={t('auth.oneClickA11y', {
+                      role: t(`auth.role${role.charAt(0).toUpperCase()}${role.slice(1)}`),
+                    })}
+                    className="flex w-full items-center gap-3 rounded-lg border bg-background px-3 py-2.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 min-h-11"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" aria-hidden />
+                    ) : (
+                      <RoleIcon className="h-5 w-5 shrink-0 text-primary" aria-hidden />
+                    )}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="text-sm font-medium capitalize">
+                        {t(`auth.role${role.charAt(0).toUpperCase()}${role.slice(1)}`)}
+                      </span>
+                      <span className="inline-flex flex-wrap items-center gap-x-2 truncate font-mono text-[10px] text-muted-foreground">
+                        <span className="tabular-nums">{mail}</span>
+                        <span className="inline-flex items-center gap-0.5 tabular-nums">
+                          <KeyRound className="h-3 w-3" aria-hidden />
+                          {pinCode}
+                        </span>
+                      </span>
+                    </span>
+                    {busy ? (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {t('auth.signingIn')}
+                      </span>
+                    ) : (
+                      <LogIn className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                    )}
+                  </button>
+                )
+              })}
             </div>
             <p className="mt-2 border-t pt-2 text-xs leading-relaxed text-muted-foreground">
-              {t('auth.demoHint')}
+              {t('auth.oneClickHint')}
             </p>
           </div>
         </div>

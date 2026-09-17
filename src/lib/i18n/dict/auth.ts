@@ -42,9 +42,15 @@ export const authDict: DictPair = {
     'auth.checkingIn': 'Checking in…',
     'auth.checkingOut': 'Checking out…',
 
-    // demo credentials card
+    // demo credentials card + one-click sign-in (R18 dev convenience)
     'auth.demoHint':
       'Employees: check in from the “Employee check-in” tab with your name and PIN.',
+    'auth.oneClick': 'One-click sign-in',
+    'auth.oneClickHint': 'Tap a role to sign in instantly — demo & development convenience.',
+    'auth.oneClickA11y': 'Sign in instantly as {role}',
+    'auth.roleAdmin': 'Admin',
+    'auth.roleWaiter': 'Waiter',
+    'auth.roleKitchen': 'Kitchen',
   },
   ar: {
     'auth.title': 'تسجيل الدخول',
@@ -80,7 +86,13 @@ export const authDict: DictPair = {
     'auth.checkingIn': 'جارٍ تسجيل الحضور…',
     'auth.checkingOut': 'جارٍ تسجيل الانصراف…',
 
-    // demo credentials card
+    // demo credentials card + one-click sign-in (R18 dev convenience)
     'auth.demoHint': 'للموظفين: سجّلوا الحضور من تبويب «حضور الموظفين» بالاسم والرمز السري.',
+    'auth.oneClick': 'دخول بضغطة واحدة',
+    'auth.oneClickHint': 'اضغط على الدور للدخول فوراً — للاستخدام التجريبي والتطوير.',
+    'auth.oneClickA11y': 'الدخول فوراً كـ {role}',
+    'auth.roleAdmin': 'مدير',
+    'auth.roleWaiter': 'نادل',
+    'auth.roleKitchen': 'مطبخ',
   },
 }

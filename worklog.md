@@ -1563,3 +1563,22 @@ Stage Summary:
 - Round 17 delivered Foodics/Odoo-level capability: purchasing (Odoo Purchase), stock counts (Foodics Stock Count), waste management (Foodics Waste), promotions engine (Foodics happy hour, server-authoritative, penny-exact in the POS), payroll (Odoo HR lite), forecast (restored properly), refunds (never actually shipped before — now production-grade), and the R9 AI differentiators restored to the dashboard.
 - Zero deletions proven; every guard in place; all data growth accounted and audited.
 - Known documented residuals (honest): R15 sync engine covers the original 9 tables — the 7 new R17 tables are NOT yet in sync bundles (offline Windows instances won't receive them; documented in manifest + worklog as the top R18 candidate); refunds are admin-only by design (no dedicated permission key); promotions re-evaluate on OPEN orders only.
+
+---
+Task ID: 18-a
+Agent: main (Z.ai Code) — COO / CTO / Project Manager
+Task: R18 incident response — demo login broken (root cause: environment reset wiped db/custom.db + stripped JWT_SECRET from .env) + one-click demo sign-in feature
+
+Work Log:
+- DIAGNOSIS: every table in db/custom.db had 0 rows (schema intact, data gone — environment re-provision at 15:26 wiped file contents; backups/ folder also emptied, .env lost its JWT_SECRET line). dev.log showed repeated POST /api/auth/login 401 — the reported "demo credentials don't work".
+- RECOVERY: backed up the empty file (backups/custom-empty-schemaonly-20260917-153218.db), then restored db/custom.db from download/rsm-platform-database.db (R17 closeout VACUUM INTO snapshot, 618,496 B) via in-place cp (same inode → running dev server picked it up with zero downtime, no restart). Restored .env from git HEAD (JWT_SECRET back). Verified: 3 users, 49 products, 146 orders, 16 tables, 86 vision events, 795 audit logs — full dataset back.
+- API VERIFIED: POST /api/auth/login 200 for admin@rms.com/admin123 (PIN 123456), waiter PIN 111111, kitchen PIN 222222; Bearer token round-trips through /api/auth/me.
+- ONE-CLICK SIGN-IN (the requested feature): login-view.tsx — the passive demo-credentials hint card replaced by three tappable one-click buttons (Admin=ShieldCheck, Waiter=ConciergeBell, Kitchen=ChefHat icons; per-account spinner + "Signing in…" state; all buttons disabled while one is in flight; credentials + PIN still displayed for reference; min-h-11 touch targets; focus-visible ring; aria-labels). New i18n keys (auth.oneClick, oneClickHint, oneClickA11y, roleAdmin/roleWaiter/roleKitchen) EN + AR.
+- E2E (agent-browser): one-click Admin → "Welcome back, Amina Hassan" + Dashboard with full nav; one-click Waiter → POS floor plan (role auto-routing R14 intact); one-click Kitchen → KDS ("0/3 items ready · EGP 207.90" live data). Mobile 390×844: buttons fully visible, ≥44px, no overlap (VLM-verified). Screenshots r18-01..05.
+- During verification, 3 open orders (#127, #128, #312) were paid via the UI under the admin account (EGP 569.52 total, audited: order.payment + table.bus/clean cycles) — a real user session testing the restored login; dashboard live-updated to the penny. Left untouched as legitimate live data.
+- Cleaned up 4 temp diagnostic scripts; ESLint 0 findings; dev.log clean (no new errors; historical EADDRINUSE + groq→gemini AI fallback are pre-existing/by-design).
+
+Stage Summary:
+- Root cause was NOT the credentials — the sandbox environment reset wiped the database file and the JWT secret. Full recovery from the R17 deliverable snapshot with zero data loss and zero downtime.
+- One-click demo sign-in shipped for all 3 roles (EN/AR, accessible, touch-friendly) — development/demo sign-in is now a single tap.
+- Lesson recorded: download/rsm-platform-database.db doubles as the disaster-recovery source; re-provisioned environments should restore from it (or backups/) before use.
