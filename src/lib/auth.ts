@@ -50,6 +50,11 @@ export type SessionPayload = {
   permissions: string[]
   /** display name of the custom role when role === 'custom' */
   roleName: string | null
+  /** R19: the actual person operating this account (person-level
+   *  attribution), or null when no person is selected / the account has
+   *  no people registered. */
+  personId: number | null
+  personName: string | null
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -94,6 +99,7 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
     const raw = payload as Record<string, unknown>
     const rawId: unknown = raw.userId ?? raw.id
     const rawPerms = Array.isArray(raw.permissions) ? raw.permissions : []
+    const rawPersonId: unknown = raw.personId
     return {
       userId: Number(rawId),
       email: String(raw.email ?? ''),
@@ -101,6 +107,14 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
       role: String(raw.role ?? 'waiter'),
       permissions: rawPerms.map(String),
       roleName: typeof raw.roleName === 'string' ? raw.roleName : null,
+      // R19: tolerate tokens issued before person tracking existed
+      personId:
+        rawPersonId === null || rawPersonId === undefined
+          ? null
+          : Number.isInteger(Number(rawPersonId)) && Number(rawPersonId) > 0
+            ? Number(rawPersonId)
+            : null,
+      personName: typeof raw.personName === 'string' && raw.personName ? raw.personName : null,
     }
   } catch {
     return null
@@ -116,13 +130,18 @@ export type SessionUserRow = {
   roleId: number | null
   roleName: string | null
   permissions: string[]
+  /** R19: active people registered under this account */
+  people: { id: number; name: string }[]
 }
 
 /** Load a user by id and derive their permissions (null if missing/inactive). */
 export async function loadSessionUser(userId: number): Promise<SessionUserRow | null> {
   const user = await db.user.findFirst({
     where: { id: userId, active: true },
-    include: { roleRecord: { select: { name: true, permissions: true, active: true } } },
+    include: {
+      roleRecord: { select: { name: true, permissions: true, active: true } },
+      people: { where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } },
+    },
   })
   if (!user) return null
   const roleRecord = user.roleId ? user.roleRecord : null
@@ -137,6 +156,7 @@ export async function loadSessionUser(userId: number): Promise<SessionUserRow | 
       user.role,
       roleRecord?.active ? roleRecord.permissions : null,
     ),
+    people: user.people,
   }
 }
 
@@ -156,6 +176,20 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
   // Ensure user still exists and is active (fresh DB read also picks up role edits)
   const user = await loadSessionUser(payload.userId)
   if (!user) return null
+  // R19: keep the person attribution only while the person row still exists,
+  // is active and belongs to this account — a deactivated person silently
+  // falls back to account-level attribution instead of forging a name.
+  let personId = payload.personId
+  let personName = payload.personName
+  if (personId != null) {
+    const person = user.people.find((p) => p.id === personId)
+    if (!person) {
+      personId = null
+      personName = null
+    } else {
+      personName = person.name // fresh name (renames reflect immediately)
+    }
+  }
   return {
     userId: user.id,
     email: user.email,
@@ -163,6 +197,8 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
     role: user.role,
     permissions: user.permissions,
     roleName: user.roleName,
+    personId,
+    personName,
   }
 }
 

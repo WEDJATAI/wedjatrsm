@@ -101,6 +101,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // check that this payment fully settles gets its own audit entry)
     const wasDeferred = order.status === 'deferred'
 
+    // R19: paying = the check was definitely presented — stamp the PERSON
+    // who issued it when nobody stamped earlier (first issuance wins; an
+    // account-level session doesn't burn the stamp slot).
+    if (order.checkIssuedByPersonId == null && user.personId != null) {
+      await db.order.updateMany({
+        where: { id: orderId, checkIssuedByPersonId: null },
+        data: {
+          checkIssuedByPersonId: user.personId,
+          checkIssuedAt: new Date(),
+        },
+      })
+    }
+
     await db.payment.createMany({
       data: rows.map((p) => ({
         orderId,

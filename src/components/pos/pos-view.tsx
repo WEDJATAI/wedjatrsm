@@ -1272,6 +1272,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           key={checkOrder.id}
           order={checkOrder}
           open={checkOpen}
+          sessionPersonName={user?.personName ?? null}
           onOpenChange={(o) => {
             setCheckOpen(o)
             if (!o) setCheckOrder(null)

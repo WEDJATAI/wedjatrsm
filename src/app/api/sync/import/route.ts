@@ -37,12 +37,12 @@ function keysMatch(provided: string, stored: string): boolean {
 export async function POST(req: NextRequest) {
   try {
     // ── dual auth: session OR sync key ──
-    let actor: { userId: number; name: string } | null = null
+    let actor: { userId: number; name: string; personId: number | null; personName: string | null } | null = null
     const session = await getSessionUser(req)
     if (session) {
       const allowed = session.role === 'admin' || session.permissions.includes('settings')
       if (!allowed) throw new ApiError('Forbidden: insufficient role', 403)
-      actor = { userId: session.userId, name: session.name }
+      actor = { userId: session.userId, name: session.name, personId: session.personId, personName: session.personName }
     } else {
       const provided = (req.headers.get('x-rsm-sync-key') ?? '').trim()
       const state = await readSyncState()
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
       }
       // audit_logs.user_id carries no FK (denormalized snapshot column), so a
       // synthetic id is safe — the human-readable name is what matters.
-      actor = { userId: 0, name: 'system (sync)' }
+      actor = { userId: 0, name: 'system (sync)', personId: null, personName: null }
     }
 
     const body: SyncBundleInput = await req.json().catch(() => {

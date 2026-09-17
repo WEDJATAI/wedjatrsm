@@ -90,6 +90,14 @@ export const common: DictPair = {
     'nav.logout': 'Log out',
     'nav.home': 'Home',
 
+    // R19: person-level attribution (who operates this device)
+    'nav.switchPerson': 'Switch person — who is using this device',
+    'nav.switchPersonTitle': 'Who is using this device?',
+    'nav.noPersonSelected': 'No person selected',
+    'nav.currentPerson': 'Current',
+    'nav.accountLevel': 'Account level: {name}',
+    'nav.personSwitched': 'Person updated — new actions will be attributed to them',
+
     // roles
     'role.admin': 'Admin',
     'role.waiter': 'Waiter',
@@ -311,6 +319,14 @@ export const common: DictPair = {
     'nav.admin': 'الإدارة',
     'nav.logout': 'تسجيل الخروج',
     'nav.home': 'الرئيسية',
+
+    // R19: person-level attribution (who operates this device)
+    'nav.switchPerson': 'تبديل الشخص — من يستخدم هذا الجهاز',
+    'nav.switchPersonTitle': 'من يستخدم هذا الجهاز؟',
+    'nav.noPersonSelected': 'لم يتم اختيار شخص',
+    'nav.currentPerson': 'الحالي',
+    'nav.accountLevel': 'مستوى الحساب: {name}',
+    'nav.personSwitched': 'تم تحديث الشخص — ستُنسب الإجراءات الجديدة إليه',
 
     // roles
     'role.admin': 'مدير النظام',

@@ -76,6 +76,8 @@ export const ORDER_INCLUDE = {
   payments: true,
   table: { select: { id: true, name: true } },
   user: { select: { id: true, name: true } },
+  // R19: the actual person who presented/issued the guest check
+  checkIssuedByPerson: { select: { id: true, name: true } },
   // R13: loyalty — attached customer (name/phone/points for POS + payment)
   customer: { select: { id: true, name: true, phone: true, points: true } },
 } satisfies Prisma.OrderInclude
@@ -182,6 +184,9 @@ export function serializeOrder(order: OrderWithRelations): Order {
     paidAmount: round2(paidAmount),
     remainingAmount: round2(total - paidAmount),
     guests: order.guests,
+    // R19: person-level check attribution (null on orders predating R19)
+    checkIssuedByPerson: order.checkIssuedByPerson,
+    checkIssuedAt: order.checkIssuedAt ? order.checkIssuedAt.toISOString() : null,
     createdAt: order.createdAt.toISOString(),
     closedAt: order.closedAt ? order.closedAt.toISOString() : null,
     items: order.items.map(serializeOrderItem),

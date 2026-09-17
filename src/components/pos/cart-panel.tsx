@@ -487,6 +487,16 @@ export default function CartPanel({
     })
   }
 
+  // Direct-set handler (typed input / “Move All”) — clamps between 1 and
+  // the live row quantity so staff can never request an impossible move.
+  const setMoveQtyExact = (item: OrderItem, value: number) => {
+    if (!Number.isFinite(value)) return
+    setMoveQty((prev) => ({
+      ...prev,
+      [item.id]: Math.min(Math.max(round2(value), 1), item.quantity),
+    }))
+  }
+
   // Total UNITS selected to move (CTA label + moved toast).
   const moveUnits = round2(selectedMoveIds.reduce((n, id) => n + moveQtyFor(id), 0))
 
@@ -811,6 +821,11 @@ export default function CartPanel({
                     onMoveQty={
                       moveMode && moveSelected.has(item.id)
                         ? (delta: number) => changeMoveQty(item, delta)
+                        : undefined
+                    }
+                    onSetMoveQty={
+                      moveMode && moveSelected.has(item.id)
+                        ? (value: number) => setMoveQtyExact(item, value)
                         : undefined
                     }
                   />
@@ -1346,6 +1361,7 @@ function SentItemRow({
   onToggleMove,
   moveQty,
   onMoveQty,
+  onSetMoveQty,
 }: {
   item: OrderItem
   onServed: () => void
@@ -1359,6 +1375,8 @@ function SentItemRow({
   moveQty?: number
   /** stepper delta — the parent clamps against the live row quantity */
   onMoveQty?: (delta: number) => void
+  /** direct set (typed input / “All”) — the parent clamps 1..available */
+  onSetMoveQty?: (value: number) => void
 }) {
   const { t, lang } = useI18n()
   const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
@@ -1514,43 +1532,102 @@ function SentItemRow({
         </div>
       </div>
       {showMoveQty && (
-        /* Partial-quantity stepper — clicks here never toggle the selection. */
+        /* Partial-quantity stepper — clicks here never toggle the selection.
+           R19: shows the AVAILABLE quantity up front, a direct numeric input
+           and an “All” quick action (Move All) next to the − / + stepper. */
         <div
           role="group"
           aria-label={t('pos.moveQtyLabel')}
           title={t('pos.moveQtyLabel')}
           onClick={(e) => e.stopPropagation()}
-          className="mb-2 ms-7 flex items-center gap-2 rounded-b-lg bg-primary/[0.06] px-2 py-1.5"
+          className="mb-2 ms-7 space-y-1.5 rounded-b-lg bg-primary/[0.06] px-2 py-1.5"
         >
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-10 shrink-0"
-            disabled={qty <= 1}
-            onClick={() => onMoveQty?.(-1)}
-          >
-            <Minus className="size-4" />
-            <span className="sr-only">−</span>
-          </Button>
-          <span className="min-w-8 shrink-0 text-center text-sm font-semibold tabular-nums">
-            {formatQty(qty)}
-          </span>
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-10 shrink-0"
-            disabled={qty >= item.quantity}
-            onClick={() => onMoveQty?.(1)}
-          >
-            <Plus className="size-4" />
-            <span className="sr-only">+</span>
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {t('pos.moveQtyOf', { qty: formatQty(item.quantity) })}
-          </span>
+          <p className="text-xs font-medium text-muted-foreground">
+            {t('pos.moveAvailable', { qty: formatQty(item.quantity) })}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              disabled={qty <= 1}
+              onClick={() => onMoveQty?.(-1)}
+            >
+              <Minus className="size-4" />
+              <span className="sr-only">−</span>
+            </Button>
+            <MoveQtyInput
+              value={qty}
+              max={item.quantity}
+              ariaLabel={t('pos.moveQtyLabel')}
+              onCommit={(value) => onSetMoveQty?.(value)}
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              disabled={qty >= item.quantity}
+              onClick={() => onMoveQty?.(1)}
+            >
+              <Plus className="size-4" />
+              <span className="sr-only">+</span>
+            </Button>
+            {qty < item.quantity && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-10 shrink-0 px-3"
+                onClick={() => onSetMoveQty?.(item.quantity)}
+              >
+                {t('pos.moveAll')}
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>
+  )
+}
+
+/** Direct quantity input for partial moves — keeps its own text state while
+ *  focused so typing is never fought by the parent's clamping; commits a
+ *  parsed value on every valid change and clamps 1..max on blur. */
+function MoveQtyInput({
+  value,
+  max,
+  ariaLabel,
+  onCommit,
+}: {
+  value: number
+  max: number
+  ariaLabel: string
+  onCommit: (value: number) => void
+}) {
+  const [text, setText] = useState<string | null>(null) // null = not focused
+  const display = text ?? formatQty(value)
+  const commit = (raw: string) => {
+    const parsed = parseFloat(raw.replace(',', '.'))
+    if (Number.isFinite(parsed) && parsed > 0) onCommit(Math.min(parsed, max))
+  }
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      value={display}
+      onChange={(e) => {
+        setText(e.target.value)
+        commit(e.target.value)
+      }}
+      onFocus={(e) => e.target.select()}
+      onBlur={() => {
+        setText(null) // snap back to the (clamped) parent value
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+      }}
+      className="h-10 w-14 shrink-0 rounded-md border border-input bg-background text-center text-sm font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    />
   )
 }
 

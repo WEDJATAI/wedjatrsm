@@ -26,6 +26,11 @@ export const AUDIT_ACTIONS = [
   'role.create',
   'role.update',
   'role.delete',
+  // R19: person-level tracking — who is using each account
+  'person.create',
+  'person.update',
+  // R19: guest check issued/presented by a specific person
+  'order.checkIssue',
   'inventory.adjust',
   // R9: AI vision — cameras/zones config, human-confirmed movements,
   // overrides and edge settings (append-only trail)
@@ -92,8 +97,9 @@ export const AUDIT_ACTIONS = [
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
 export type AuditInput = {
-  /** the session user performing the action (name snapshotted) */
-  user?: Pick<SessionPayload, 'userId' | 'name'> | null
+  /** the session user performing the action (name snapshotted; R19 person
+   *  fields picked up automatically when the session has one selected) */
+  user?: Pick<SessionPayload, 'userId' | 'name' | 'personId' | 'personName'> | null
   action: AuditAction
   entity:
     | 'order'
@@ -102,6 +108,7 @@ export type AuditInput = {
     | 'settings'
     | 'user'
     | 'role'
+    | 'person'
     | 'inventory'
     | 'vision'
     | 'reservation'
@@ -120,6 +127,11 @@ export type AuditInput = {
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null
+  /** R19: override the session person for this entry (rare — e.g. system
+   *  actions performed on behalf of a person). Defaults to the session's
+   *  selected person. */
+  personId?: number | null
+  personName?: string | null
 }
 
 /** Record an audit entry (fire-and-forget; never rejects). */
@@ -129,6 +141,11 @@ export async function logAudit(input: AuditInput): Promise<void> {
       data: {
         userId: input.user?.userId ?? null,
         userName: input.user?.name ?? 'system',
+        // R19 person-level attribution (null on sessions without a selected
+        // person and on all rows predating R19 — never fabricated)
+        personId: input.personId !== undefined ? input.personId : (input.user?.personId ?? null),
+        personName:
+          input.personName !== undefined ? input.personName : (input.user?.personName ?? null),
         action: input.action,
         entity: input.entity,
         entityId: input.entityId ?? null,

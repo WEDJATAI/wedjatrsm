@@ -78,7 +78,10 @@ function validatePeople(raw: unknown, fallback: number, min: number, max: number
   return n
 }
 
-async function logSim(user: { userId: number; name: string }, details: string) {
+async function logSim(
+  user: { userId: number; name: string; personId: number | null; personName: string | null },
+  details: string,
+) {
   await logAudit({ user, action: 'vision.simulate', entity: 'vision', entityId: null, details })
 }
 

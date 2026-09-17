@@ -7,6 +7,17 @@
 //   · `itemIds: number[]` (legacy) — moves the FULL quantity of each row.
 // Inventory and table statuses are untouched (both orders keep their
 // tables); payments stay on their orders.
+//
+// R19 hardening + aggregation:
+//   · Destination AGGREGATION — when the target order already has a row
+//     with the identical signature (product, unit price, notes, course,
+//     status, selected modifiers), the moved units are ADDED to it instead
+//     of printing a duplicate line on the check.
+//   · Concurrency — partial moves use a compare-and-set decrement
+//     (`UPDATE … WHERE quantity >= moved`) inside the transaction, so two
+//     staff moving from the same row at the same time can never drive the
+//     quantity negative or move more units than the row holds. Both
+//     orders' open status is re-verified inside the same transaction.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
@@ -19,6 +30,36 @@ type Ctx = { params: Promise<{ id: string }> }
 
 // A validated move entry: which row and how many units move to the target.
 type MoveEntry = { id: number; quantity: number }
+
+/** Fields that make up an order-item "identity" — rows that match on ALL of
+ *  these are the same line as far as the printed check is concerned, so
+ *  moved units aggregate into the existing row instead of duplicating it. */
+type ItemSignature = {
+  productId: number | null
+  unitPrice: number
+  notes: string | null
+  course: string
+  status: string
+  selectedModifiers: string | null
+}
+
+function signatureOf(row: {
+  productId: number | null
+  unitPrice: number
+  notes: string | null
+  course: string
+  status: string
+  selectedModifiers: string | null
+}): ItemSignature {
+  return {
+    productId: row.productId,
+    unitPrice: round2(row.unitPrice),
+    notes: row.notes,
+    course: row.course,
+    status: row.status,
+    selectedModifiers: row.selectedModifiers,
+  }
+}
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   try {
@@ -134,10 +175,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }
     }
 
-    // Classify: a FULL move re-parents the whole row (single bulk update);
-    // a PARTIAL move splits the row — moved units become a NEW row on the
-    // target order (same product/price/notes/course/status) and the source
-    // row keeps the remainder (guaranteed > 0 after the clamp above).
+    // Classify: a FULL move re-parents the whole row; a PARTIAL move splits
+    // the row — moved units go to the target order (aggregating into an
+    // identical row when one exists) and the source row keeps the remainder.
     const fullMoves: MoveEntry[] = []
     const partialMoves: MoveEntry[] = []
     for (const entry of entries) {
@@ -150,36 +190,118 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }
     }
 
-    // All writes in ONE transaction: rows are never lost or duplicated.
+    // All writes in ONE transaction. Partial moves are guarded by a
+    // compare-and-set decrement (quantity >= moved) so concurrent moves can
+    // never corrupt quantities; order statuses are re-verified inside.
     await db.$transaction(async (tx) => {
-      if (fullMoves.length > 0) {
-        // Re-parent the fully-moved rows onto the target order (single atomic update)
-        await tx.orderItem.updateMany({
-          where: { id: { in: fullMoves.map((move) => move.id) } },
-          data: { orderId: targetOrderId },
-        })
+      // Re-verify both orders are still open INSIDE the transaction (one may
+      // have been paid/cancelled between the read above and this write).
+      const [srcNow, tgtNow] = await Promise.all([
+        tx.order.findUnique({ where: { id: sourceId }, select: { status: true } }),
+        tx.order.findUnique({ where: { id: targetOrderId }, select: { status: true } }),
+      ])
+      if (srcNow?.status !== 'open' || tgtNow?.status !== 'open') {
+        throw new ApiError('Only open orders can be modified', 400)
       }
+
+      // Signature index of the target order's existing rows → aggregation.
+      const targetRows = await tx.orderItem.findMany({
+        where: { orderId: targetOrderId },
+        select: {
+          id: true,
+          productId: true,
+          quantity: true,
+          unitPrice: true,
+          notes: true,
+          course: true,
+          status: true,
+          selectedModifiers: true,
+        },
+      })
+      const targetBySignature = new Map<string, number>() // signature → row id
+      for (const row of targetRows) {
+        targetBySignature.set(JSON.stringify(signatureOf(row)), row.id)
+      }
+
+      // ── Partial moves: CAS decrement + aggregate onto the target ──────
       for (const move of partialMoves) {
         const row = itemById.get(move.id)!
-        // New row on the target order carrying just the moved units
-        // (R8: the option snapshot moves with the units — copied verbatim)
-        await tx.orderItem.create({
-          data: {
-            orderId: targetOrderId,
-            productId: row.productId,
-            quantity: move.quantity,
-            unitPrice: row.unitPrice,
-            notes: row.notes,
-            course: row.course,
-            status: row.status,
-            selectedModifiers: row.selectedModifiers,
-          },
+        // Atomic guard: only decrements when the row still holds enough
+        // units (returns 0 otherwise → concurrent move already took them).
+        const taken = await tx.orderItem.updateMany({
+          where: { id: row.id, orderId: sourceId, quantity: { gte: move.quantity } },
+          data: { quantity: { decrement: move.quantity } },
         })
-        // Source row keeps the remaining quantity (round2 keeps it > 0)
-        await tx.orderItem.update({
+        if (taken.count !== 1) {
+          throw new ApiError(
+            `Cannot move more than the available quantity for item ${row.id}`,
+            400,
+          )
+        }
+        // Normalize float drift (e.g. 0.25 kg moves) — read the committed
+        // post-decrement value INSIDE the tx so concurrent moves are safe.
+        const afterDecrement = await tx.orderItem.findUnique({
           where: { id: row.id },
-          data: { quantity: round2(row.quantity - move.quantity) },
+          select: { quantity: true },
         })
+        if (afterDecrement && round2(afterDecrement.quantity) !== afterDecrement.quantity) {
+          await tx.orderItem.update({
+            where: { id: row.id },
+            data: { quantity: round2(afterDecrement.quantity) },
+          })
+        }
+        // Aggregate into an identical target row when present (no duplicate
+        // check lines); otherwise create a row carrying just the moved units.
+        const signature = JSON.stringify(signatureOf(row))
+        const existingTargetRowId = targetBySignature.get(signature)
+        if (existingTargetRowId != null) {
+          await tx.orderItem.update({
+            where: { id: existingTargetRowId },
+            data: { quantity: { increment: move.quantity } },
+          })
+        } else {
+          const created = await tx.orderItem.create({
+            data: {
+              orderId: targetOrderId,
+              productId: row.productId,
+              quantity: move.quantity,
+              unitPrice: row.unitPrice,
+              notes: row.notes,
+              course: row.course,
+              status: row.status,
+              selectedModifiers: row.selectedModifiers,
+            },
+            select: { id: true },
+          })
+          targetBySignature.set(signature, created.id)
+        }
+      }
+
+      // ── Full moves: re-parent, aggregating when an identical row exists ──
+      for (const move of fullMoves) {
+        const row = itemById.get(move.id)!
+        const signature = JSON.stringify(signatureOf(row))
+        const existingTargetRowId = targetBySignature.get(signature)
+        if (existingTargetRowId != null) {
+          // Target already shows the identical line: add the units there and
+          // drop the source row (the check stays clean — one line, correct total).
+          await tx.orderItem.update({
+            where: { id: existingTargetRowId },
+            data: { quantity: { increment: move.quantity } },
+          })
+          await tx.orderItem.delete({ where: { id: row.id } })
+        } else {
+          // Re-parent the fully-moved row onto the target order (identity
+          // preserved: same row id, timestamps and modifiers move with it).
+          const updated = await tx.orderItem.updateMany({
+            where: { id: row.id, orderId: sourceId },
+            data: { orderId: targetOrderId },
+          })
+          if (updated.count !== 1) {
+            throw new ApiError(`Item ${row.id} is no longer on this order`, 400)
+          }
+          targetBySignature.set(signature, row.id)
+        }
       }
     })
 

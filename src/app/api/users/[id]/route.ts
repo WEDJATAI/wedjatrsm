@@ -18,7 +18,9 @@ const USER_SAFE_SELECT = {
   // R17: payroll — hourly wage (EGP/h, null = not in payroll)
   hourlyRate: true,
   createdAt: true,
-}
+  // R19: the actual people operating this account
+  people: { select: { id: true, name: true, active: true }, orderBy: { name: 'asc' as const } },
+} satisfies Prisma.UserSelect
 
 type UserRowWithRole = {
   id: number
@@ -31,6 +33,7 @@ type UserRowWithRole = {
   active: boolean
   hourlyRate: number | null
   createdAt: Date
+  people: { id: number; name: string; active: boolean }[]
 }
 
 /** User row + derived role info (roleName / permissions) for the API. */
@@ -51,6 +54,8 @@ function serializeUser(user: UserRowWithRole) {
     active: user.active,
     hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
+    // R19: people registered under this account
+    people: user.people,
   }
 }
 

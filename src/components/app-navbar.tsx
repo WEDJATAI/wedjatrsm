@@ -47,6 +47,7 @@ import { useI18n } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import type { SessionUser } from '@/lib/types'
 import { startTour } from '@/components/tour/tour-bus'
+import { PersonSwitcher } from '@/components/person-switcher'
 import { cn } from '@/lib/utils'
 
 type NavItem = { view: string; permission: string; icon: LucideIcon }
@@ -199,6 +200,8 @@ export default function AppNavbar({
           >
             <Languages className="h-5 w-5" aria-hidden />
           </Button>
+          {/* R19: who is operating this device (person-level attribution) */}
+          <PersonSwitcher user={user} />
           <div className="flex min-w-0 items-center gap-2">
             <Avatar className="h-8 w-8">
               <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">

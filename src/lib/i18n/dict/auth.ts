@@ -46,6 +46,10 @@ export const authDict: DictPair = {
     'auth.demoHint':
       'Employees: check in from the “Employee check-in” tab with your name and PIN.',
     'auth.oneClick': 'One-click sign-in',
+    'auth.whoIsUsing': 'Who is using this device?',
+    'auth.whoIsUsingSub':
+      'Select your name — checks and item moves will be attributed to you.',
+    'auth.continueAsAccount': 'Continue as {name} (account level)',
     'auth.oneClickHint': 'Tap a role to sign in instantly — demo & development convenience.',
     'auth.oneClickA11y': 'Sign in instantly as {role}',
     'auth.roleAdmin': 'Admin',
@@ -89,6 +93,9 @@ export const authDict: DictPair = {
     // demo credentials card + one-click sign-in (R18 dev convenience)
     'auth.demoHint': 'للموظفين: سجّلوا الحضور من تبويب «حضور الموظفين» بالاسم والرمز السري.',
     'auth.oneClick': 'دخول بضغطة واحدة',
+    'auth.whoIsUsing': 'من يستخدم هذا الجهاز؟',
+    'auth.whoIsUsingSub': 'اختر اسمك — سيتم نسب الفواتير ونقل الأصناف إليك.',
+    'auth.continueAsAccount': 'المتابعة باسم {name} (مستوى الحساب)',
     'auth.oneClickHint': 'اضغط على الدور للدخول فوراً — للاستخدام التجريبي والتطوير.',
     'auth.oneClickA11y': 'الدخول فوراً كـ {role}',
     'auth.roleAdmin': 'مدير',

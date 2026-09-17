@@ -19,6 +19,7 @@ type LoginUser = {
   roleRecord: { name: string; permissions: string; active: boolean } | null
   passwordHash: string
   active: boolean
+  people: { id: number; name: string }[]
 }
 
 export async function POST(req: NextRequest) {
@@ -79,12 +80,18 @@ export async function POST(req: NextRequest) {
       // PIN quick-login: exact match on an active user
       user = await db.user.findFirst({
         where: { pin, active: true },
-        include: { roleRecord: { select: { name: true, permissions: true, active: true } } },
+        include: {
+          roleRecord: { select: { name: true, permissions: true, active: true } },
+          people: { where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } },
+        },
       })
     } else {
       const found = await db.user.findFirst({
         where: { email },
-        include: { roleRecord: { select: { name: true, permissions: true, active: true } } },
+        include: {
+          roleRecord: { select: { name: true, permissions: true, active: true } },
+          people: { where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } },
+        },
       })
       if (
         found &&
@@ -109,6 +116,12 @@ export async function POST(req: NextRequest) {
     )
     const roleName = roleRecord?.name ?? null
 
+    // R19 person attribution: when the account has exactly ONE active person
+    // registered, they are embedded in the session right away (zero extra
+    // taps — the account is theirs in practice). With several people the
+    // client shows a one-tap picker right after login.
+    const autoPerson = user.people.length === 1 ? user.people[0] : null
+
     const token = await createSessionToken({
       userId: user.id,
       email: user.email,
@@ -116,6 +129,8 @@ export async function POST(req: NextRequest) {
       role: user.role,
       permissions,
       roleName,
+      personId: autoPerson?.id ?? null,
+      personName: autoPerson?.name ?? null,
     })
     resetRateLimit(rlKey)
     const res = NextResponse.json({
@@ -126,7 +141,12 @@ export async function POST(req: NextRequest) {
         role: user.role,
         permissions,
         roleName,
+        personId: autoPerson?.id ?? null,
+        personName: autoPerson?.name ?? null,
       },
+      // R19: active people under this account — when more than one, the
+      // client asks who is operating the device before entering the app.
+      people: user.people,
       // Raw token for the client-side Bearer fallback (used when cookies are
       // unavailable, e.g. cross-site preview iframes). Kept in localStorage.
       token,

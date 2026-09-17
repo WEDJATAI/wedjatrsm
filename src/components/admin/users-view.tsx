@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Eye, EyeOff, MoreHorizontal, Pencil, Plus, TriangleAlert, UsersRound } from 'lucide-react'
 
+import { PeopleRoster } from '@/components/admin/people-roster'
 import { apiFetch, fetcher } from '@/lib/api'
 import { ROLES } from '@/lib/constants'
 import { formatDate } from '@/lib/format'
@@ -62,6 +63,8 @@ type AdminUser = {
   pin: string | null
   active: boolean
   createdAt: string
+  /** R19: actual people operating this account */
+  people?: { id: number; name: string; active: boolean }[]
 }
 
 type UserForm = {
@@ -172,6 +175,38 @@ export default function UsersView() {
   }, [rolesQuery.data, editing])
 
   const isCreate = editing === null
+
+  // ── R19: free-text custom user type (“Cashier”, “Host”, “Runner”…) ──
+  // Choosing “New custom type…” in the role Select reveals an input; the
+  // typed type is created through the existing roles API (POS permissions
+  // by default — editable later in Roles & permissions) and immediately
+  // assigned to the user being created/edited.
+  const [showNewType, setShowNewType] = useState(false)
+  const [newTypeName, setNewTypeName] = useState('')
+
+  const createRoleMutation = useMutation({
+    mutationFn: (name: string) =>
+      apiFetch<{ role: CustomRole }>('/api/roles', {
+        body: { name, permissions: ['pos'] },
+      }),
+    onSuccess: (data) => {
+      toast.success(t('admin.customTypeCreated', { name: data.role.name }))
+      setForm((prev) => ({ ...prev, role: 'custom', roleId: String(data.role.id) }))
+      setShowNewType(false)
+      setNewTypeName('')
+      void queryClient.invalidateQueries({ queryKey: ['roles'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const submitNewType = () => {
+    const name = newTypeName.trim()
+    if (name.length < 2) {
+      toast.error(t('admin.customTypeNameRequired'))
+      return
+    }
+    createRoleMutation.mutate(name)
+  }
 
   function validateForm(): UserFormErrors {
     const errors: UserFormErrors = {}
@@ -473,6 +508,10 @@ export default function UsersView() {
         )}
       </Card>
 
+      {/* R19: people roster — the actual humans behind each account,
+          with per-person activity stats (checks / moves / actions) */}
+      <PeopleRoster users={users} />
+
       {/* Create / edit dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
@@ -548,6 +587,11 @@ export default function UsersView() {
               <Select
                 value={roleValue(form.role, form.roleId)}
                 onValueChange={(value) => {
+                  if (value === '__new_type__') {
+                    setShowNewType(true)
+                    return
+                  }
+                  setShowNewType(false)
                   if (value.startsWith('custom:')) {
                     setForm({ ...form, role: 'custom', roleId: value.slice('custom:'.length) })
                   } else {
@@ -570,8 +614,37 @@ export default function UsersView() {
                       {!r.active ? ` ${t('admin.inactiveSuffix')}` : ''}
                     </SelectItem>
                   ))}
+                  {/* R19: free-text custom type entry point */}
+                  <SelectItem value="__new_type__">+ {t('admin.newCustomType')}</SelectItem>
                 </SelectContent>
               </Select>
+              {showNewType && (
+                <div className="flex items-center gap-2">
+                  <Input
+                    autoFocus
+                    value={newTypeName}
+                    onChange={(e) => setNewTypeName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitNewType()
+                      if (e.key === 'Escape') setShowNewType(false)
+                    }}
+                    placeholder={t('admin.customTypePlaceholder')}
+                    className="h-11"
+                    aria-label={t('admin.newCustomType')}
+                  />
+                  <Button
+                    type="button"
+                    className="h-11"
+                    disabled={createRoleMutation.isPending}
+                    onClick={submitNewType}
+                  >
+                    {createRoleMutation.isPending ? t('admin.saving') : t('admin.customTypeCreate')}
+                  </Button>
+                </div>
+              )}
+              {form.role === 'custom' && !showNewType && (
+                <p className="text-muted-foreground text-xs">{t('admin.customTypeHint')}</p>
+              )}
               <FieldError message={errors.role} />
             </div>
 

@@ -110,6 +110,54 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
   const [emailLoading, setEmailLoading] = useState(false)
   const [emailError, setEmailError] = useState(false)
 
+  // ── R19 person picker — “who is using this device?” ─────────────
+  // After a successful login on an account with SEVERAL registered people,
+  // we ask which staff member is operating the device before entering the
+  // app (checks & item moves are attributed to them). One person → already
+  // embedded by the server; zero people → straight in (backward compatible).
+  const [pendingPeople, setPendingPeople] = useState<{ id: number; name: string }[] | null>(null)
+  const [personLoadingId, setPersonLoadingId] = useState<number | 'none' | null>(null)
+  // the account name is kept for the “continue as …” escape hatch
+  const [pendingAccountName, setPendingAccountName] = useState('')
+
+  const finishLogin = useCallback(
+    (user: SessionUser, token: string | undefined, people: { id: number; name: string }[]) => {
+      if (token) setSessionToken(token)
+      if (user.personId == null && people.length > 1) {
+        setPendingAccountName(user.name)
+        setPendingPeople(people)
+        return // pick a person first — one extra tap, full attribution
+      }
+      toast.success(t('auth.welcomeBack', { name: user.name }))
+      onLogin()
+    },
+    [onLogin, t],
+  )
+
+  const selectLoginPerson = useCallback(
+    async (person: { id: number; name: string } | null) => {
+      if (personLoadingId !== null) return
+      setPersonLoadingId(person?.id ?? 'none')
+      try {
+        if (person) {
+          const { token } = await apiFetch<{ user: SessionUser; token?: string }>(
+            '/api/auth/person',
+            { body: { personId: person.id } },
+          )
+          if (token) setSessionToken(token)
+          toast.success(t('auth.welcomeBack', { name: person.name }))
+        }
+        setPendingPeople(null)
+        onLogin()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t('auth.loginFailed'))
+      } finally {
+        setPersonLoadingId(null)
+      }
+    },
+    [onLogin, personLoadingId, t],
+  )
+
   const handleEmailSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault()
@@ -122,15 +170,14 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
       setEmailLoading(true)
       setEmailError(false)
       try {
-        const { user, token } = await apiFetch<{
+        const { user, token, people } = await apiFetch<{
           user: SessionUser
+          people?: { id: number; name: string }[]
           token?: string
         }>('/api/auth/login', {
           body: { email: email.trim().toLowerCase(), password },
         })
-        if (token) setSessionToken(token)
-        toast.success(t('auth.welcomeBack', { name: user.name }))
-        onLogin()
+        finishLogin(user, token, people ?? [])
       } catch (err) {
         setEmailError(true)
         toast.error(err instanceof Error ? err.message : t('auth.loginFailed'))
@@ -138,7 +185,7 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
         setEmailLoading(false)
       }
     },
-    [email, emailLoading, onLogin, password, t],
+    [email, emailLoading, finishLogin, password, t],
   )
 
   // ── Sign-in tab: email | PIN ──────────────────────────────────────
@@ -152,15 +199,14 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
     async (value: string) => {
       setPinLoading(true)
       try {
-        const { user, token } = await apiFetch<{
+        const { user, token, people } = await apiFetch<{
           user: SessionUser
+          people?: { id: number; name: string }[]
           token?: string
         }>('/api/auth/login', {
           body: { pin: value },
         })
-        if (token) setSessionToken(token)
-        toast.success(t('auth.welcomeBack', { name: user.name }))
-        onLogin()
+        finishLogin(user, token, people ?? [])
       } catch (err) {
         toast.error(err instanceof Error ? err.message : t('auth.loginFailed'))
         setPin('')
@@ -170,7 +216,7 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
         setPinLoading(false)
       }
     },
-    [onLogin, t, triggerShake],
+    [finishLogin, t, triggerShake],
   )
 
   // ── One-click demo sign-in (dev/demo convenience) ───────────────
@@ -182,22 +228,21 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
       if (quickLoading) return
       setQuickLoading(role)
       try {
-        const { user, token } = await apiFetch<{
+        const { user, token, people } = await apiFetch<{
           user: SessionUser
+          people?: { id: number; name: string }[]
           token?: string
         }>('/api/auth/login', {
           body: { email: mail, password: pass },
         })
-        if (token) setSessionToken(token)
-        toast.success(t('auth.welcomeBack', { name: user.name }))
-        onLogin()
+        finishLogin(user, token, people ?? [])
       } catch (err) {
         toast.error(err instanceof Error ? err.message : t('auth.loginFailed'))
       } finally {
         setQuickLoading(null)
       }
     },
-    [onLogin, quickLoading, t],
+    [finishLogin, quickLoading, t],
   )
 
   const pressDigit = useCallback(
@@ -346,6 +391,68 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [keypadMode])
+
+  if (pendingPeople) {
+    return (
+      <div className="grid min-h-screen w-full place-items-center bg-background p-4 sm:p-6">
+        <div className="w-full max-w-md">
+          <div className="bg-card flex w-full flex-col gap-6 rounded-xl border p-6 shadow-lg sm:p-8">
+            {/* Brand header (same mark as the sign-in card) */}
+            <div className="flex flex-col items-center gap-3 text-center">
+              <span className="bg-primary text-primary-foreground grid h-12 w-12 place-items-center rounded-lg shadow-sm">
+                <UserCheck className="h-6 w-6" aria-hidden />
+              </span>
+              <div className="space-y-1">
+                <h1 className="text-xl font-bold tracking-tight">{t('auth.whoIsUsing')}</h1>
+                <p className="text-sm text-muted-foreground">{t('auth.whoIsUsingSub')}</p>
+              </div>
+            </div>
+
+            {/* One tap per person — big touch targets for POS devices */}
+            <div className="space-y-2" role="listbox" aria-label={t('auth.whoIsUsing')}>
+              {pendingPeople.map((person) => {
+                const busy = personLoadingId === person.id
+                return (
+                  <button
+                    key={person.id}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    onClick={() => void selectLoginPerson(person)}
+                    disabled={personLoadingId !== null}
+                    className="flex min-h-14 w-full items-center gap-3 rounded-lg border bg-background px-4 py-3 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" aria-hidden />
+                    ) : (
+                      <span className="bg-primary/10 text-primary grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-bold" aria-hidden>
+                        {person.name.trim().charAt(0).toUpperCase()}
+                      </span>
+                    )}
+                    <span className="flex-1 truncate text-sm font-semibold">{person.name}</span>
+                    <LogIn className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  </button>
+                )
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void selectLoginPerson(null)}
+              disabled={personLoadingId !== null}
+              className="rounded text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t('auth.continueAsAccount', { name: pendingAccountName })}
+            </button>
+          </div>
+
+          <p className="mt-4 text-center text-xs text-muted-foreground">
+            {restaurantName} · {new Date().getFullYear()}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="grid min-h-screen w-full place-items-center bg-background p-4 sm:p-6">

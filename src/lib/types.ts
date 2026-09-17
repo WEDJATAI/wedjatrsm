@@ -8,6 +8,22 @@ export type SessionUser = {
   permissions: string[]
   /** display name of the custom role (role === 'custom'), else null */
   roleName: string | null
+  /** R19: the actual person operating this account, else null */
+  personId?: number | null
+  personName?: string | null
+}
+
+/** R19: an actual staff member operating a user account. */
+export type Person = {
+  id: number
+  name: string
+  active: boolean
+  createdAt?: string
+  /** stats (reports/people only) */
+  checks?: number
+  moves?: number
+  unitsMoved?: number
+  transactions?: number
 }
 
 export type CustomRole = {
@@ -191,6 +207,10 @@ export type Order = {
   paidAmount: number
   remainingAmount: number
   guests: number
+  /** R19: the actual person who presented/issued the guest check (null on
+   *  orders predating R19 or when nobody was selected). */
+  checkIssuedByPerson?: { id: number; name: string } | null
+  checkIssuedAt?: string | null
   createdAt: string
   closedAt: string | null
   items: OrderItem[]

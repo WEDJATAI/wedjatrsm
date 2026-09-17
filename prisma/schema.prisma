@@ -28,9 +28,33 @@ model User {
   purchaseOrdersCreated PurchaseOrder[] @relation("PurchaseOrderCreator")
   stockCountsCreated    StockCount[]    @relation("StockCountCreator")
   wasteLogEntries       WasteLog[]      @relation("WasteLogEntries")
+  // R19: actual people operating this account (a shared waiter profile can
+  // be used by several staff — the business needs to know WHO specifically
+  // served a check or moved an item, not just the shared login).
+  people       Person[]
 
   @@index([roleId])
   @@map("users")
+}
+
+// ─── R19: People — the actual humans behind each user account ───────
+// A user ACCOUNT (e.g. waiter@rms.com, type Waiter) is a login identity;
+// PERSONS are the staff members who operate it (Ahmed Hassan, Mohamed
+// Ali…). Multiple people may share one account; the person selected at
+// login rides the session token and is stamped on checks, item moves and
+// audit entries. Never delete a person that history references —
+// DEACTIVATE instead (deletion is blocked by Restrict on Order).
+model Person {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  active    Boolean  @default(true) // inactive people can't be selected
+  createdAt DateTime @default(now()) @map("created_at")
+  issuedChecks Order[] @relation("CheckIssuer")
+
+  @@index([userId])
+  @@map("persons")
 }
 
 // ─── Custom roles (admin-defined, e.g. "Accountant") ────────────────
@@ -227,6 +251,12 @@ model Order {
   discountReason  String?           @map("discount_reason")
   clientName     String?            @map("client_name") // deferred-check client name
   extraTableIds  String?            @map("extra_table_ids") // JSON array of extra table ids (merged seating from the beginning)
+  // R19: who actually presented/issued the guest check (person-level — a
+  // real staff member, not just the shared account). Stamped on first
+  // issue (print/present or first payment) and never overwritten.
+  checkIssuedByPersonId Int?        @map("check_issued_by_person_id")
+  checkIssuedByPerson   Person?     @relation("CheckIssuer", fields: [checkIssuedByPersonId], references: [id])
+  checkIssuedAt         DateTime?  @map("check_issued_at")
   createdAt      DateTime           @default(now()) @map("created_at")
   closedAt       DateTime?          @map("closed_at")
   items          OrderItem[]
@@ -382,6 +412,12 @@ model AuditLog {
   id        Int      @id @default(autoincrement())
   userId    Int?     @map("user_id")
   userName  String   @map("user_name")
+  // R19: person-level attribution — the actual staff member operating the
+  // account when the action happened (null = no person was selected on the
+  // session, or the row predates R19). No FK: the log is append-only and
+  // keeps a name snapshot even if the person row is later deactivated.
+  personId   Int?    @map("person_id")
+  personName String? @map("person_name")
   action    String // e.g. 'order.payment', 'table.bus', 'table.clean', 'order.itemDelete'
   entity    String // 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory'
   entityId  Int?     @map("entity_id")

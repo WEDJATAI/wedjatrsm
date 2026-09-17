@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { apiFetch } from '@/lib/api'
 import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
 import { bilingualLabel, bothLabels, localizedName, useI18n, type Lang } from '@/lib/i18n'
@@ -32,6 +33,10 @@ type CheckModalProps = {
   onOpenChange: (open: boolean) => void
   /** Optional split rows (from the payment modal) — defaults the modal to Split mode showing them. */
   rows?: CheckSplitRow[]
+  /** R19: the person currently operating the device (session-level). Used
+   *  on the paper when the order has no stamped issuer yet — the check
+   *  shows who is actually handing it over, not just the shared account. */
+  sessionPersonName?: string | null
 }
 
 type CheckTitleKey = 'guestCheck' | 'bill' | 'invoice'
@@ -93,7 +98,11 @@ type CheckModel = {
   customer: string
   orderId: number
   tableName: string
+  /** R19: the actual person who issued the check (falls back to the
+   *  account name, then "—" when even that is unknown). */
   waiter: string
+  /** R19: when the check was presented/issued (null = not yet stamped) */
+  issuedAt: string | null
   date: string
   items: {
     qty: string
@@ -132,6 +141,7 @@ function buildCheckModel(
     eqPayers: number
     selectedIds: Set<number>
     lang: Lang
+    sessionPersonName?: string | null
   },
 ): CheckModel {
   // Paper item lines are bilingual: English primary + Arabic secondary.
@@ -141,7 +151,15 @@ function buildCheckModel(
     customer: opts.customer.trim(),
     orderId: order.id,
     tableName: order.table?.name ?? bilingualLabel('common.takeaway'),
-    waiter: order.user?.name ?? '—',
+    // R19: person-level attribution — the real staff member who presented
+    // the check (stamped issuer → the person operating this device now →
+    // the shared account name for orders predating person tracking).
+    waiter:
+      order.checkIssuedByPerson?.name ??
+      opts.sessionPersonName ??
+      order.user?.name ??
+      '—',
+    issuedAt: order.checkIssuedAt ? formatDateTime(order.checkIssuedAt) : null,
     date: formatDateTime(order.createdAt),
   }
   const allItems = order.items.map((it) => {
@@ -260,6 +278,7 @@ function buildCheckHtml(
   lines.push(dashed)
   lines.push(row(`${bilingualLabel('common.order')} #${m.orderId}`, m.tableName))
   lines.push(row(bilingualLabel('pos.waiter'), m.waiter))
+  if (m.issuedAt) lines.push(row(bilingualLabel('pos.checkIssued'), m.issuedAt))
   lines.push(row(bilingualLabel('common.date'), m.date))
   lines.push(dashed)
   for (const it of m.items) {
@@ -303,7 +322,7 @@ function buildCheckHtml(
   return lines.join('\n')
 }
 
-export default function CheckModal({ order, open, onOpenChange, rows }: CheckModalProps) {
+export default function CheckModal({ order, open, onOpenChange, rows, sessionPersonName }: CheckModalProps) {
   const { t, lang, isRTL } = useI18n()
   const { restaurantName, restaurantNameAr } = useAppSettings()
   // Initial state is derived from the props at mount time — parents mount this
@@ -335,6 +354,7 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
     eqPayers,
     selectedIds,
     lang,
+    sessionPersonName,
   })
 
   const clampPayers = (raw: number) => {
@@ -359,6 +379,15 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
   )
 
   const handlePrint = () => {
+    // R19: printing/presenting the check = issuing it — stamp the current
+    // session person as the responsible waiter (fire-and-forget: the paper
+    // prints regardless; the first stamp wins and is never overwritten).
+    void apiFetch(`/api/orders/${order.id}/check-issue`, {
+      method: 'POST',
+      body: {},
+    }).catch(() => {
+      /* attribution stamping is best-effort — never block the print */
+    })
     const html = buildCheckHtml(model, restaurantName, restaurantNameAr, isRTL)
     const w = window.open('', '_blank', 'width=380,height=640')
     if (!w) {
@@ -583,6 +612,9 @@ export default function CheckModal({ order, open, onOpenChange, rows }: CheckMod
               <div className="my-2 border-t border-dashed border-stone-400" />
               <CheckRow left={`${bilingualLabel('common.order')} #${model.orderId}`} right={model.tableName} />
               <CheckRow left={bilingualLabel('pos.waiter')} right={model.waiter} />
+              {model.issuedAt && (
+                <CheckRow left={bilingualLabel('pos.checkIssued')} right={model.issuedAt} />
+              )}
               <CheckRow left={bilingualLabel('common.date')} right={model.date} />
               <div className="my-2 border-t border-dashed border-stone-400" />
               {model.items.map((it, i) => (

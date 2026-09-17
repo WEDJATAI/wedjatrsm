@@ -102,6 +102,9 @@ export const posDict: DictPair = {
     'pos.moveNItems': 'Move {n} items',
     'pos.moveNUnits': 'Move {n}',
     'pos.moveQtyOf': 'of {qty}',
+    'pos.moveAvailable': 'Available: {qty}',
+    'pos.moveAll': 'All',
+    'pos.checkIssued': 'Issued',
     'pos.moveQtyLabel': 'Quantity to move',
     'pos.moveItemsTitle': 'Move items to another order',
     'pos.moveItemsDesc':
@@ -417,6 +420,9 @@ export const posDict: DictPair = {
     'pos.moveNItems': 'نقل {n} أصناف',
     'pos.moveNUnits': 'نقل {n}',
     'pos.moveQtyOf': 'من {qty}',
+    'pos.moveAvailable': 'المتاح: {qty}',
+    'pos.moveAll': 'الكل',
+    'pos.checkIssued': 'تاريخ الإصدار',
     'pos.moveQtyLabel': 'الكمية المراد نقلها',
     'pos.moveItemsTitle': 'نقل الأصناف إلى طلب آخر',
     'pos.moveItemsDesc':
