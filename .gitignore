@@ -77,3 +77,8 @@ server.log
 /desktop/dist/
 /desktop/resources/seed.db
 
+
+# R22: tool/agent artifacts never tracked (public-repo hygiene)
+/.agent-screens/
+/upload/
+/dev.log*
