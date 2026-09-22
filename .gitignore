@@ -65,3 +65,15 @@ server.log
 # snowballs: each regeneration would contain the previous one)
 *.bundle
 .zscripts/dev.pid
+
+# Task 22-c: Electron desktop packaging — everything under desktop/ that is
+# GENERATED. The tracked sources are desktop/package.json, main.js,
+# preload.js, prepare-server.mjs, README.md and resources/icon.png;
+# node_modules/, server/ (assembled by prepare-server.mjs), dist/
+# (electron-builder output) and resources/seed.db (staged by CI from
+# download/rsm-platform-database.db — never commit a database binary) are not.
+/desktop/node_modules/
+/desktop/server/
+/desktop/dist/
+/desktop/resources/seed.db
+

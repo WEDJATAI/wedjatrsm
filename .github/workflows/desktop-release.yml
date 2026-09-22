@@ -1,0 +1,101 @@
+# Desktop Release — builds the Windows 10 (x64) Electron app and publishes
+# it to GitHub Releases (https://github.com/WEDJATAI/wedjatrsm/releases).
+#
+# RELEASE FLOW — how a new version ships:
+#   1. Bump "version" in desktop/package.json (e.g. 1.0.0 -> 1.0.1).
+#   2. Commit + push that change.
+#   3. Tag the commit and push the tag:
+#        git tag desktop-v1.0.1 && git push origin desktop-v1.0.1
+#   4. This workflow builds the NSIS installer + portable exe on
+#      windows-latest and publishes them to the release for that tag.
+#   5. Installed apps pick the release up AUTOMATICALLY (electron-updater
+#      checks on launch + every 30 min, downloads in the background, and
+#      installs on the next app quit) — nothing to do on the restaurant PCs.
+#
+# No secrets need to be configured: GH_TOKEN below is the per-run
+# GITHUB_TOKEN that GitHub Actions injects into every workflow automatically
+# (allowed to write releases by the "permissions: contents: write" block).
+#
+# workflow_dispatch allows building without a tag; the release is then
+# published for the version in desktop/package.json. Prefer tag builds —
+# bump the version before a manual run if that release already exists.
+
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows installer (x64)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Regenerate the Prisma client on the Windows runner so the native
+      # query engine binary matches the platform the installer targets.
+      - name: Generate Prisma client (Windows engine)
+        run: bunx prisma generate
+        env:
+          DATABASE_URL: "file:./db/custom.db"
+          JWT_SECRET: "ci-placeholder-secret-not-used-at-build"
+
+      # Stage the seed DB where build-time code paths expect it, in case the
+      # build touches the database.
+      - name: Stage seed database for the build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force db | Out-Null
+          Copy-Item download/rsm-platform-database.db db/custom.db
+
+      # NOTE: bunx next build, NOT `bun run build` — the root "build" script
+      # appends POSIX `cp` commands that don't exist on Windows runners;
+      # prepare-server.mjs performs those copies in pure Node instead.
+      - name: Build Next.js (standalone output)
+        run: bunx next build
+        env:
+          DATABASE_URL: "file:./db/custom.db"
+          JWT_SECRET: "ci-placeholder-secret-not-used-at-build"
+
+      - name: Assemble desktop/server (standalone + static + public + Prisma)
+        shell: bash
+        run: node desktop/prepare-server.mjs
+
+      # Fresh seed with every build: the database that ships inside the
+      # installer (extraResources -> resources/seed.db) is the newest
+      # recovery snapshot committed to the repo.
+      - name: Stage seed database for the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force desktop/resources | Out-Null
+          Copy-Item download/rsm-platform-database.db desktop/resources/seed.db
+
+      - name: Install desktop toolchain
+        working-directory: desktop
+        run: npm install
+
+      # CSC_IDENTITY_AUTO_DISCOVERY=false: the exe is unsigned — without this
+      # electron-builder would try to discover a Windows code-signing
+      # certificate and fail. GH_TOKEN publishes the artifacts to the
+      # GitHub Release for the pushed desktop-v* tag.
+      - name: Build and publish Windows installer
+        working-directory: desktop
+        shell: bash
+        run: npx electron-builder --win nsis portable --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false

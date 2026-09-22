@@ -1,0 +1,70 @@
+{
+  "name": "rsm-desktop",
+  "productName": "RSM Restaurant Platform",
+  "version": "1.0.0",
+  "description": "RSM Restaurant Platform — offline-first restaurant POS, kitchen display, inventory and reports for Windows. Built by GitHub Actions, self-updating via GitHub Releases.",
+  "author": "WEDJATAI",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^31.7.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
+  },
+  "build": {
+    "appId": "com.wedjatai.rsm",
+    "productName": "RSM Restaurant Platform",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "server/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/seed.db",
+        "to": "seed.db"
+      }
+    ],
+    "asar": false,
+    "win": {
+      "icon": "resources/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "RSM-Restaurant-Platform-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "RSM-Restaurant-Platform-Portable-${version}.exe"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "WEDJATAI",
+      "repo": "wedjatrsm",
+      "releaseType": "release"
+    }
+  }
+}
