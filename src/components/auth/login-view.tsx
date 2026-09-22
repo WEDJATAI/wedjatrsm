@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Timer,
   UserCheck,
+  UserPlus,
   UtensilsCrossed,
   X,
 } from 'lucide-react'
@@ -26,6 +27,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { apiFetch, setSessionToken } from '@/lib/api'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
@@ -81,6 +89,15 @@ function formatWorkedMinutes(minutes: number): string {
 }
 
 type KeypadHandlers = { press: (digit: string) => void; back: () => void; clear: () => void }
+
+type RegisterRoleOption = { value: string; label: string }
+
+// Built-in picker fallback — replaced by GET /api/auth/register (which also
+// lists admin-approved custom service roles) as soon as it resolves.
+const REGISTER_ROLES_FALLBACK: RegisterRoleOption[] = [
+  { value: 'waiter', label: 'Waiter' },
+  { value: 'kitchen', label: 'Kitchen' },
+]
 
 export default function LoginView({ onLogin }: { onLogin: () => void }) {
   const { t } = useI18n()
@@ -359,6 +376,92 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
     setUsername('')
   }, [])
 
+  // ── R22 self-registration (name + PIN, service roles) ────────────
+  const [showRegister, setShowRegister] = useState(false)
+  const [regName, setRegName] = useState('')
+  const [regRole, setRegRole] = useState('waiter')
+  const [regRoles, setRegRoles] = useState<RegisterRoleOption[]>(REGISTER_ROLES_FALLBACK)
+  const [regPin, setRegPin] = useState('')
+  const [regPinConfirm, setRegPinConfirm] = useState('')
+  const [regLoading, setRegLoading] = useState(false)
+  /** inline error inside the register card (server 4xx / local validation) */
+  const [regError, setRegError] = useState<string | null>(null)
+
+  // Role list comes from the server so admin-approved custom service roles
+  // (e.g. “Host”) appear automatically — built-ins stay as the fallback.
+  useEffect(() => {
+    if (!showRegister) return
+    let cancelled = false
+    apiFetch<{ roles: RegisterRoleOption[] }>('/api/auth/register', { method: 'GET' })
+      .then((res) => {
+        if (!cancelled && Array.isArray(res.roles) && res.roles.length > 0) {
+          setRegRoles(res.roles)
+        }
+      })
+      .catch(() => {
+        // offline/fallback — the built-in list stays
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showRegister])
+
+  const roleOptionLabel = useCallback(
+    (r: RegisterRoleOption) =>
+      r.value === 'waiter'
+        ? t('auth.registerRoleWaiter')
+        : r.value === 'kitchen'
+          ? t('auth.registerRoleKitchen')
+          : r.label,
+    [t],
+  )
+
+  const submitRegister = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault()
+      if (regLoading) return
+      const name = regName.trim()
+      if (name.length < 2) {
+        setRegError(t('auth.registerNameShort'))
+        return
+      }
+      if (!/^\d{6}$/.test(regPin)) {
+        setRegError(t('auth.registerPinInvalid'))
+        return
+      }
+      if (regPin !== regPinConfirm) {
+        setRegError(t('auth.registerPinMismatch'))
+        return
+      }
+      setRegLoading(true)
+      setRegError(null)
+      try {
+        const { user, token, people } = await apiFetch<{
+          user: SessionUser
+          people?: { id: number; name: string }[]
+          token?: string
+        }>('/api/auth/register', {
+          body: { name, pin: regPin, confirmPin: regPinConfirm, role: regRole },
+        })
+        toast.success(t('auth.registerSuccess', { name: user.name }))
+        // identical shape to a login response → same post-login flow
+        finishLogin(user, token, people ?? [])
+      } catch (err) {
+        setRegError(err instanceof Error ? err.message : t('auth.loginFailed'))
+      } finally {
+        setRegLoading(false)
+      }
+    },
+    [finishLogin, regLoading, regName, regPin, regPinConfirm, regRole, t],
+  )
+
+  const openRegister = useCallback(() => {
+    setRegError(null)
+    setRegPin('')
+    setRegPinConfirm('')
+    setShowRegister(true)
+  }, [])
+
   // ── Physical keyboard support (whichever keypad is on screen) ─────
   // Keep latest handlers in a ref so the window keydown listener never goes stale
   const keypadHandlersRef = useRef<Record<'login' | 'attendance', KeypadHandlers>>({
@@ -374,8 +477,15 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
 
   // Digits type into the login keypad (PIN sub-tab) or the check-in keypad
   // (check-in tab, form state only — never while the success panel is up).
+  // The register form uses real inputs, so no keypad is active there.
   const keypadMode: 'login' | 'attendance' | null =
-    topTab === 'checkin' ? (attResult ? null : 'attendance') : tab === 'pin' ? 'login' : null
+    topTab === 'checkin'
+      ? attResult
+        ? null
+        : 'attendance'
+      : showRegister || tab !== 'pin'
+        ? null
+        : 'login'
 
   useEffect(() => {
     if (!keypadMode) return
@@ -481,6 +591,133 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
             </div>
           </div>
 
+          {/* R22: self-registration swaps the card body (tabs + demo list)
+              for the create-account form — same card, same brand header. */}
+          {showRegister ? (
+            <form className="space-y-4" onSubmit={submitRegister} noValidate>
+              <div className="space-y-1.5 text-center">
+                <h2 className="text-lg font-bold tracking-tight">
+                  {t('auth.registerTitle')}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {t('auth.registerSub')}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="reg-name">{t('auth.registerName')}</Label>
+                <Input
+                  id="reg-name"
+                  type="text"
+                  autoComplete="name"
+                  placeholder={t('auth.registerNamePlaceholder')}
+                  className="h-11"
+                  maxLength={60}
+                  value={regName}
+                  onChange={(e) => {
+                    setRegName(e.target.value)
+                    if (regError) setRegError(null)
+                  }}
+                  aria-invalid={regError || undefined}
+                  disabled={regLoading}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="reg-role">{t('auth.registerRole')}</Label>
+                <Select value={regRole} onValueChange={setRegRole} disabled={regLoading}>
+                  <SelectTrigger id="reg-role" className="h-11 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {regRoles.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>
+                        {roleOptionLabel(r)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="reg-pin">{t('auth.registerPin')}</Label>
+                  <Input
+                    id="reg-pin"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    dir="ltr"
+                    placeholder="••••••"
+                    className="h-11 text-center font-mono text-lg tracking-[0.35em]"
+                    maxLength={6}
+                    value={regPin}
+                    onChange={(e) => {
+                      setRegPin(e.target.value.replace(/\D/g, '').slice(0, 6))
+                      if (regError) setRegError(null)
+                    }}
+                    aria-invalid={regError || undefined}
+                    disabled={regLoading}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="reg-pin-confirm">{t('auth.registerPinConfirm')}</Label>
+                  <Input
+                    id="reg-pin-confirm"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    dir="ltr"
+                    placeholder="••••••"
+                    className="h-11 text-center font-mono text-lg tracking-[0.35em]"
+                    maxLength={6}
+                    value={regPinConfirm}
+                    onChange={(e) => {
+                      setRegPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 6))
+                      if (regError) setRegError(null)
+                    }}
+                    aria-invalid={regError || undefined}
+                    disabled={regLoading}
+                  />
+                </div>
+              </div>
+
+              {regError && (
+                <div
+                  className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                  role="alert"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <span>{regError}</span>
+                </div>
+              )}
+
+              <Button type="submit" className="h-11 w-full text-sm" disabled={regLoading}>
+                {regLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    {t('auth.registerCreating')}
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="h-4 w-4" aria-hidden />
+                    {t('auth.registerSubmit')}
+                  </>
+                )}
+              </Button>
+
+              <button
+                type="button"
+                onClick={() => setShowRegister(false)}
+                disabled={regLoading}
+                className="mx-auto flex min-h-8 items-center gap-1.5 rounded text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <LogIn className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden />
+                {t('auth.registerBack')}
+              </button>
+            </form>
+          ) : (
+            <>
           {/* Top level: system sign-in | employee attendance check-in */}
           <Tabs value={topTab} onValueChange={(v) => setTopTab(v as 'signin' | 'checkin')}>
             <TabsList className="grid w-full grid-cols-2">
@@ -577,6 +814,19 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
                   />
                 </TabsContent>
               </Tabs>
+
+              {/* R22: self-registration entry point (service roles only —
+                  admins are provisioned from the Users screen) */}
+              <p className="pt-1 text-center text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={openRegister}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded font-medium text-primary underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <UserPlus className="h-3.5 w-3.5" aria-hidden />
+                  {t('auth.registerLink')}
+                </button>
+              </p>
             </TabsContent>
 
             {/* ── Employee check-in (public — no system sign-in) ── */}
@@ -833,6 +1083,8 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
               {t('auth.oneClickHint')}
             </p>
           </div>
+            </>
+          )}
         </div>
 
         <p className="mt-4 text-center text-xs text-muted-foreground">

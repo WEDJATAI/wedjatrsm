@@ -55,6 +55,26 @@ export const authDict: DictPair = {
     'auth.roleAdmin': 'Admin',
     'auth.roleWaiter': 'Waiter',
     'auth.roleKitchen': 'Kitchen',
+
+    // R22 self-registration (name + PIN, service roles)
+    'auth.registerLink': 'New staff member? Create an account',
+    'auth.registerTitle': 'Create account',
+    'auth.registerSub':
+      'Enter your name and a 6-digit PIN — you will use this PIN to sign in every shift',
+    'auth.registerName': 'Full name',
+    'auth.registerNamePlaceholder': 'e.g. Sara Mahmoud',
+    'auth.registerRole': 'Role',
+    'auth.registerPin': '6-digit PIN',
+    'auth.registerPinConfirm': 'Confirm PIN',
+    'auth.registerSubmit': 'Create account',
+    'auth.registerCreating': 'Creating account…',
+    'auth.registerBack': 'Back to sign in',
+    'auth.registerSuccess': 'Account created — welcome, {name}',
+    'auth.registerNameShort': 'Enter your full name (at least 2 characters)',
+    'auth.registerPinInvalid': 'PIN must be exactly 6 digits',
+    'auth.registerPinMismatch': 'PINs do not match',
+    'auth.registerRoleWaiter': 'Waiter — takes orders at tables',
+    'auth.registerRoleKitchen': 'Kitchen — prepares the orders',
   },
   ar: {
     'auth.title': 'تسجيل الدخول',
@@ -101,5 +121,25 @@ export const authDict: DictPair = {
     'auth.roleAdmin': 'مدير',
     'auth.roleWaiter': 'نادل',
     'auth.roleKitchen': 'مطبخ',
+
+    // R22 self-registration (name + PIN, service roles)
+    'auth.registerLink': 'موظف جديد؟ أنشئ حساباً',
+    'auth.registerTitle': 'إنشاء حساب',
+    'auth.registerSub':
+      'أدخل اسمك ورمزاً سرياً من 6 أرقام — ستستخدم هذا الرمز للدخول في كل مرة',
+    'auth.registerName': 'الاسم الكامل',
+    'auth.registerNamePlaceholder': 'مثال: سارة محمود',
+    'auth.registerRole': 'الدور',
+    'auth.registerPin': 'رمز سري من 6 أرقام',
+    'auth.registerPinConfirm': 'تأكيد الرمز السري',
+    'auth.registerSubmit': 'إنشاء الحساب',
+    'auth.registerCreating': 'جارٍ إنشاء الحساب…',
+    'auth.registerBack': 'العودة لتسجيل الدخول',
+    'auth.registerSuccess': 'تم إنشاء الحساب — أهلاً {name}',
+    'auth.registerNameShort': 'أدخل اسمك الكامل (حرفان على الأقل)',
+    'auth.registerPinInvalid': 'يجب أن يكون الرمز السري 6 أرقام بالضبط',
+    'auth.registerPinMismatch': 'الرمزان السريان غير متطابقين',
+    'auth.registerRoleWaiter': 'نادل — يستقبل الطلبات على الطاولات',
+    'auth.registerRoleKitchen': 'مطبخ — يحضّر الطلبات',
   },
 }

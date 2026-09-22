@@ -64,3 +64,4 @@ server.log
 # R16: git bundles are offline artifacts — never tracked (a committed bundle
 # snowballs: each regeneration would contain the previous one)
 *.bundle
+.zscripts/dev.pid
