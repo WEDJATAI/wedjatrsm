@@ -21,6 +21,7 @@ import { promisify } from 'node:util'
 
 import { PrismaClient } from '@prisma/client'
 
+import { ApiError } from '@/lib/auth'
 import { db } from '@/lib/db'
 
 const execFileAsync = promisify(execFile)
@@ -304,6 +305,15 @@ tick **Private networks** and allow it. The app only listens on your own PC
 export async function buildWindowsPackage(
   data: 'live' | 'demo',
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
+  // R23: SQLite-only feature — packaging a Windows zip from the cloud
+  // deployment (Neon Postgres) is not possible; download the desktop
+  // installer from GitHub Releases instead (auto-updating Electron app).
+  if (!process.env.DATABASE_URL?.startsWith('file:')) {
+    throw new ApiError(
+      'Windows packaging is only available on SQLite deployments — download the desktop app from GitHub Releases instead',
+      501,
+    )
+  }
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'rsm-windows-'))
   try {
     // ── 1. app tree ──

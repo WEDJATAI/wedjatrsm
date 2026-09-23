@@ -82,3 +82,7 @@ server.log
 /.agent-screens/
 /upload/
 /dev.log*
+/pgtmp-client/
+
+# R23: production secrets saved for ops reference — NEVER track
+/.zscripts/prod-*.txt

@@ -1,0 +1,784 @@
+// R23: TEMPORARY variant of prisma/schema.postgres.prisma with a custom generator
+// output — used ONLY by scripts/migrate-neon.ts so the Postgres client can be
+// generated next to the (untouched) default SQLite client. Never used by the app.
+// Regenerate with: bunx prisma generate --schema prisma/schema.pgtmp.prisma
+// R23: PostgreSQL mirror of prisma/schema.prisma (SQLite). SAME models — only the
+// provider differs. This is the production datasource for the Vercel deployment
+// (Neon Postgres, us-east-1): the Vercel buildCommand regenerates the Prisma
+// client from THIS file, and scripts/migrate-neon.ts used it for the one-time
+// SQLite → Neon data migration. Keep both schemas in sync (identical models).
+// Local dev + the Windows desktop app keep using prisma/schema.prisma (SQLite).
+generator client {
+  provider = "prisma-client-js"
+  output   = "../pgtmp-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users (admin / waiter / kitchen / custom) ─────────────────────
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  name         String
+  role         String    @default("waiter") // 'admin' | 'waiter' | 'kitchen' | 'custom'
+  roleId       Int?      @map("role_id") // set when role = 'custom'
+  roleRecord   CustomRole? @relation(fields: [roleId], references: [id])
+  pin          String? // 6-digit quick-login / check-in PIN
+  active       Boolean   @default(true)
+  // R17: payroll — hourly wage (EGP) used by the payroll report (attendance
+  // hours × rate). Nullable: users without a rate are excluded from payroll.
+  hourlyRate   Float?    @map("hourly_rate")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  orders       Order[]
+  attendance   Attendance[]
+  cashDrawerSessions CashDrawerSession[]
+  purchaseOrdersCreated PurchaseOrder[] @relation("PurchaseOrderCreator")
+  stockCountsCreated    StockCount[]    @relation("StockCountCreator")
+  wasteLogEntries       WasteLog[]      @relation("WasteLogEntries")
+  // R19: actual people operating this account (a shared waiter profile can
+  // be used by several staff — the business needs to know WHO specifically
+  // served a check or moved an item, not just the shared login).
+  people       Person[]
+
+  @@index([roleId])
+  @@map("users")
+}
+
+// ─── R19: People — the actual humans behind each user account ───────
+// A user ACCOUNT (e.g. waiter@rms.com, type Waiter) is a login identity;
+// PERSONS are the staff members who operate it (Ahmed Hassan, Mohamed
+// Ali…). Multiple people may share one account; the person selected at
+// login rides the session token and is stamped on checks, item moves and
+// audit entries. Never delete a person that history references —
+// DEACTIVATE instead (deletion is blocked by Restrict on Order).
+model Person {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  active    Boolean  @default(true) // inactive people can't be selected
+  createdAt DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (renames/deactivations ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
+  issuedChecks Order[] @relation("CheckIssuer")
+
+  @@index([userId])
+  @@map("persons")
+}
+
+// ─── Custom roles (admin-defined, e.g. "Accountant") ────────────────
+model CustomRole {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  permissions String   @default("") // comma-separated module keys (see PERMISSIONS)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (renames/permission edits ride delta bundles)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+  users       User[]
+
+  @@map("roles")
+}
+
+// ─── Employee attendance (check-in / check-out) ─────────────────────
+model Attendance {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  user         User      @relation(fields: [userId], references: [id])
+  checkInAt    DateTime  @default(now()) @map("check_in_at")
+  checkOutAt   DateTime? @map("check_out_at")
+  lateMinutes  Int       @default(0) @map("late_minutes") // minutes after shift start (+15 grace)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, checkInAt])
+  @@map("attendance")
+}
+
+// ─── Work shifts (attendance reference only — NOT used for sign-in) ──
+model Shift {
+  id        Int      @id @default(autoincrement())
+  name      String
+  startTime String   @map("start_time") // "HH:MM" 24h
+  endTime   String   @map("end_time") // "HH:MM" 24h (may wrap past midnight)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("shifts")
+}
+
+// ─── App settings (editable by admin, e.g. restaurant name) ────────
+model AppSetting {
+  key   String @id
+  value String
+
+  @@map("app_settings")
+}
+
+// ─── Categories ─────────────────────────────────────────────────────
+model Category {
+  id           Int       @id @default(autoincrement())
+  name         String
+  nameAr       String?   @map("name_ar") // optional Arabic display name (menu localization)
+  displayOrder Int       @default(0) @map("display_order")
+  // R11: station routing — where this category's items are prepared/
+  // served. null/absent = default kitchen screen. Free-form key so admins
+  // can define custom stations ('bar', 'shisha', 'sushi', …).
+  prepDestination String? @map("prep_destination")
+  active       Boolean   @default(true)
+  products     Product[]
+  promotions   Promotion[] @relation("PromotionScopes")
+
+  @@map("categories")
+}
+
+// ─── R13: Customers & loyalty ────────────────────────────────────
+// Lightweight CRM: identified at the POS (phone/name search), attached to
+// orders; visits/points/totalSpent accrue automatically when an order with
+// a customer closes. Points are redeemed as tender in the payment flow
+// (method 'loyalty') — never cash-out.
+model Customer {
+  id          Int       @id @default(autoincrement())
+  name        String
+  phone       String?   @unique
+  visits      Int       @default(0)
+  points      Float     @default(0) // loyalty balance (1 point ≈ LOYALTY egpPerPoint)
+  totalSpent  Float     @default(0) @map("total_spent")
+  lastVisitAt DateTime? @map("last_visit_at")
+  notes       String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  orders      Order[]
+  reservations Reservation[]
+
+  @@index([name])
+  @@map("customers")
+}
+
+// ─── Products (dishes + ingredients) ────────────────────────────────
+model Product {
+  id                Int      @id @default(autoincrement())
+  name              String
+  nameAr            String?  @map("name_ar") // optional Arabic display name (menu localization)
+  categoryId        Int?     @map("category_id")
+  category          Category? @relation(fields: [categoryId], references: [id])
+  price             Float    @default(0)
+  cost              Float    @default(0)
+  isStockable       Boolean  @default(false) @map("is_stockable")
+  isSellable        Boolean  @default(true) @map("is_sellable")
+  sku               String?
+  imageUrl          String?  @map("image_url")
+  active            Boolean  @default(true)
+  lowStockThreshold Float    @default(0) @map("low_stock_threshold")
+  stock             Float    @default(0) // materialized current stock for stockable products
+  // R13: manual "86 / sold out" flag — one-tap toggle from the POS product
+  // tile. Independent of stock counting: a dish can be 86'd even when not
+  // stock-tracked (ran out of a side, equipment down…).
+  soldOut           Boolean  @default(false) @map("sold_out")
+  // R8: JSON string arrays of tags (see ALLERGENS / DIETARY_TAGS in constants)
+  allergens         String? // e.g. '["gluten","dairy"]' — red warning badges (POS + KDS)
+  dietary           String? // e.g. '["vegetarian","spicy"]' — green badges
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  orderItems               OrderItem[]
+  modifierGroups          ProductModifierGroup[]
+  recipeFor                RecipeComponent[] @relation("DishRecipe")
+  recipeIngredients        RecipeComponent[] @relation("IngredientRecipe")
+  inventoryTransactions    InventoryTransaction[]
+  purchaseOrderLines   PurchaseOrderItem[] @relation("PurchaseOrderLines")
+  stockCountLines      StockCountLine[]   @relation("StockCountLines")
+  wasteLogEntries      WasteLog[]         @relation("WasteLogEntries")
+  promotions           Promotion[]        @relation("PromotionScopes")
+
+  @@index([categoryId])
+  @@index([isSellable, active])
+  @@index([isStockable])
+  @@map("products")
+}
+
+// ─── Floor plans ────────────────────────────────────────────────────
+model FloorPlan {
+  id              Int      @id @default(autoincrement())
+  name            String
+  backgroundImage String?  @map("background_image")
+  active          Boolean  @default(true)
+  tables          RestaurantTable[]
+  visionCameras   VisionCamera[] // R9 back-relation (additive)
+  reservations    Reservation[] // R11 back-relation (additive)
+
+  @@map("floor_plans")
+}
+
+// ─── Tables ─────────────────────────────────────────────────────────
+model RestaurantTable {
+  id         Int        @id @default(autoincrement())
+  floorPlanId Int?      @map("floor_plan_id")
+  floorPlan  FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  name       String
+  capacity   Int        @default(2)
+  shape      String     @default("square") // 'square' | 'round' | 'rectangle' | 'oval'
+  positionX  Float      @default(50) @map("position_x") // percentage 0-100
+  positionY  Float      @default(50) @map("position_y") // percentage 0-100
+  status     String     @default("free") // 'free' | 'occupied' | 'reserved' | 'paid' (bill settled, awaiting bussing click) | 'deferred' (check deferred, client left) | 'dirty' (amber — bussed, awaiting the cleaned click)
+  active     Boolean    @default(true)
+  orders     Order[]
+  // R9 vision back-relations (additive)
+  visionZones     VisionZone[]
+  visionState     VisionTableState?
+  movementFrom    MovementCandidate[] @relation("MovementFrom")
+  movementTo      MovementCandidate[] @relation("MovementTo")
+  reservations    Reservation[] // R11 back-relation (additive)
+
+  @@index([floorPlanId])
+  @@map("tables")
+}
+
+// ─── Orders ─────────────────────────────────────────────────────────
+model Order {
+  id             Int                @id @default(autoincrement())
+  tableId        Int?               @map("table_id")
+  table          RestaurantTable?   @relation(fields: [tableId], references: [id])
+  userId         Int?               @map("user_id")
+  user           User?              @relation(fields: [userId], references: [id])
+  status         String             @default("open") // 'open' | 'paid' | 'cancelled' | 'merged' (source of a merge) | 'deferred' (client pays later)
+  // R11: order type — 'dinein' (table-bound, default) | 'takeaway' |
+  // 'delivery' (customer phone/address attached)
+  orderType      String             @default("dinein") @map("order_type")
+  deliveryPhone  String?            @map("delivery_phone") // required when orderType = 'delivery'
+  deliveryAddress String?           @map("delivery_address")
+  // R13: loyalty — attached customer + points earned/redeemed on this order
+  customerId     Int?               @map("customer_id")
+  customer       Customer?          @relation(fields: [customerId], references: [id])
+  pointsEarned   Float              @default(0) @map("points_earned")
+  pointsRedeemed Float              @default(0) @map("points_redeemed")
+  // R13: delivery-aggregator idempotency key ('<provider>:<externalId>')
+  externalRef    String?            @unique @map("external_ref")
+  guests         Int                @default(1) // number of people seated on this order
+  subtotalAmount Float              @default(0) @map("subtotal_amount")
+  totalAmount    Float              @default(0) @map("total_amount")
+  discountAmount Float              @default(0) @map("discount_amount")
+  taxAmount      Float              @default(0) @map("tax_amount") // 14% VAT
+  serviceTaxAmount Float            @default(0) @map("service_tax_amount") // 12% service tax (Egypt)
+  // R8: manager-approved order-level discount justification (audit trail)
+  discountReason  String?           @map("discount_reason")
+  clientName     String?            @map("client_name") // deferred-check client name
+  extraTableIds  String?            @map("extra_table_ids") // JSON array of extra table ids (merged seating from the beginning)
+  // R19: who actually presented/issued the guest check (person-level — a
+  // real staff member, not just the shared account). Stamped on first
+  // issue (print/present or first payment) and never overwritten.
+  checkIssuedByPersonId Int?        @map("check_issued_by_person_id")
+  checkIssuedByPerson   Person?     @relation("CheckIssuer", fields: [checkIssuedByPersonId], references: [id])
+  checkIssuedAt         DateTime?  @map("check_issued_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  closedAt       DateTime?          @map("closed_at")
+  // R21: sync mutation tracking — the open→paid/cancelled close transition
+  // (and any later edit) now rides delta bundles; previously a closed order's
+  // final state never propagated (createdAt-only watermark).
+  updatedAt      DateTime?          @updatedAt @map("updated_at")
+  items          OrderItem[]
+  payments       Payment[]
+  inventoryTransactions InventoryTransaction[]
+  reservation    Reservation? // R11 back-relation (additive)
+
+  @@index([status])
+  @@index([tableId])
+  @@index([createdAt])
+  @@index([orderType])
+  @@index([customerId])
+  @@map("orders")
+}
+
+// ─── Order items ────────────────────────────────────────────────────
+model OrderItem {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId Int?     @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+  quantity  Float    @default(1)
+  unitPrice Float    @default(0) @map("unit_price")
+  notes     String?
+  course    String   @default("main") // 'starter' | 'main' | 'dessert' | 'drink'
+  status    String   @default("new") // 'new' | 'preparing' | 'ready' | 'served'
+  // R8: JSON array of selected modifiers: [{"id":1,"name":"Extra cheese","nameAr":null,"priceDelta":8}]
+  // unitPrice already includes the price deltas (baked in at order time).
+  selectedModifiers String?  @map("selected_modifiers")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([status])
+  @@map("order_items")
+}
+
+// ─── Payments (split payment support) ───────────────────────────────
+model Payment {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method    String // 'cash' | 'card' | 'other'
+  amount    Float
+  // R8: gratuity on top of the billed amount — does NOT count toward
+  // paidAmount / order closure; aggregated per server + Z-report.
+  tip       Float    @default(0)
+  reference String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+// ─── Modifier groups (item options, R8) ─────────────────────────────
+// e.g. group "Coffee size" (required, max 1) with options Small (+0) /
+// Large (+15); group "Extras" (optional, max 3) with Extra cheese (+8)…
+// priceDelta is added to the product base price at order time.
+model ModifierGroup {
+  id        Int      @id @default(autoincrement())
+  name      String
+  nameAr    String?  @map("name_ar")
+  minSelect Int      @default(0) @map("min_select") // 0 = nothing required
+  maxSelect Int      @default(1) @map("max_select") // 1 = pick one; >1 multi-select
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  modifiers Modifier[]
+  products  ProductModifierGroup[]
+
+  @@map("modifier_groups")
+}
+
+model Modifier {
+  id         Int           @id @default(autoincrement())
+  groupId    Int           @map("group_id")
+  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name       String
+  nameAr     String?       @map("name_ar")
+  priceDelta Float         @default(0) @map("price_delta") // may be negative
+  active     Boolean       @default(true)
+  sortOrder  Int           @default(0) @map("sort_order")
+
+  @@index([groupId])
+  @@map("modifiers")
+}
+
+// Which modifier groups are offered for which products (many-to-many).
+model ProductModifierGroup {
+  productId       Int           @map("product_id")
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modifierGroupId Int           @map("modifier_group_id")
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  sortOrder       Int           @default(0) @map("sort_order")
+
+  @@id([productId, modifierGroupId])
+  @@index([modifierGroupId])
+  @@map("product_modifier_groups")
+}
+
+// ─── Cash drawer sessions (R8) ───────────────────────────────────────
+// Open with a float; cash sales + paid-in/out accrue while open; close
+// with a counted amount → variance (expected computed from payments).
+model CashDrawerSession {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  user         User     @relation(fields: [userId], references: [id])
+  openingFloat Float    @default(0) @map("opening_float")
+  openedAt     DateTime @default(now()) @map("opened_at")
+  closedAt     DateTime? @map("closed_at")
+  countedCash  Float?   @map("counted_cash") // entered at close
+  expectedCash Float?   @map("expected_cash") // float + cash sales + paid-ins − paid-outs
+  variance     Float? // counted − expected
+  note         String?
+  entries      CashDrawerEntry[]
+
+  @@index([closedAt])
+  @@map("cash_drawer_sessions")
+}
+
+// Manual paid-in / paid-out entries on an open drawer session.
+model CashDrawerEntry {
+  id        Int      @id @default(autoincrement())
+  sessionId Int      @map("session_id")
+  session   CashDrawerSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type      String // 'paid_in' | 'paid_out'
+  amount    Float
+  note      String?
+  userId    Int?     @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([sessionId])
+  @@map("cash_drawer_entries")
+}
+
+// ─── Recipes (bill of materials) ────────────────────────────────────
+model RecipeComponent {
+  id           Int     @id @default(autoincrement())
+  productId    Int     @map("product_id") // finished dish
+  product      Product @relation("DishRecipe", fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId Int     @map("ingredient_id")
+  ingredient   Product @relation("IngredientRecipe", fields: [ingredientId], references: [id])
+  quantity     Float // ingredient qty per 1 unit of dish
+
+  @@unique([productId, ingredientId])
+  @@map("recipe_components")
+}
+
+// ─── Audit log (sensitive-action trail) ──────────────────────────────
+// Payments, defers, cancels, PIN item deletions, transfers/merges, table
+// bus/clean, settings & user/role changes. Denormalized userName snapshot
+// so rows stay readable even after user edits/deactivation.
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  userName  String   @map("user_name")
+  // R19: person-level attribution — the actual staff member operating the
+  // account when the action happened (null = no person was selected on the
+  // session, or the row predates R19). No FK: the log is append-only and
+  // keeps a name snapshot even if the person row is later deactivated.
+  personId   Int?    @map("person_id")
+  personName String? @map("person_name")
+  action    String // e.g. 'order.payment', 'table.bus', 'table.clean', 'order.itemDelete'
+  entity    String // 'order' | 'table' | 'payment' | 'settings' | 'user' | 'role' | 'inventory'
+  entityId  Int?     @map("entity_id")
+  details   String? // human-readable summary (EN codes stay stable)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ─── R9: AI vision / CCTV seating intelligence ───────────────────────
+// Edge-processed camera events ONLY — no raw video is transported or
+// stored by RSM. These tables are a parallel OBSERVATIONAL layer:
+// operational table status (`tables.status`) is never written by vision
+// code except through the human-confirmed movement flow, which reuses
+// the same re-housing transaction as the POS table transfer.
+
+// Registered IP/CCTV camera (RTSP/ONVIF stream processed at the edge).
+// Credentials are never embedded in streamUrl — camera authentication
+// belongs to the edge vision processor.
+model VisionCamera {
+  id          Int          @id @default(autoincrement())
+  code        String       @unique // stable edge identifier, e.g. 'CAM-001'
+  name        String
+  streamUrl   String?      @map("stream_url") // rtsp:// or http(s):// endpoint (no userinfo)
+  floorPlanId Int?         @map("floor_plan_id")
+  floorPlan   FloorPlan?   @relation(fields: [floorPlanId], references: [id])
+  status      String       @default("offline") // 'online' | 'offline' | 'error' | 'disabled'
+  lastSeenAt  DateTime?    @map("last_seen_at")
+  lastError   String?      @map("last_error")
+  active      Boolean      @default(true)
+  zones       VisionZone[]
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  @@index([floorPlanId])
+  @@map("vision_cameras")
+}
+
+// A drawn polygon on a camera frame, associated with a dining area entity
+// (most zones map to one table). Coordinates are normalized 0..1.
+model VisionZone {
+  id        Int              @id @default(autoincrement())
+  cameraId  Int              @map("camera_id")
+  camera    VisionCamera     @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  name      String
+  kind      String           @default("table") // 'table'|'entrance'|'bar'|'waiting'|'other'
+  tableId   Int?             @map("table_id")
+  table     RestaurantTable? @relation(fields: [tableId], references: [id])
+  polygon   String // JSON [{x,y},…] normalized 0..1 camera-frame coords
+  seats     Int?
+  active    Boolean          @default(true)
+  version   Int              @default(1) // optimistic concurrency on config edits
+  createdBy String?          @map("created_by")
+  updatedBy String?          @map("updated_by")
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  @@index([cameraId])
+  @@index([tableId])
+  @@map("vision_zones")
+}
+
+// Every structured event received from an edge vision processor.
+// eventId is the edge-generated idempotency key — duplicates are recorded
+// (outcome 'duplicate') but never re-applied.
+model VisionEvent {
+  id            Int      @id @default(autoincrement())
+  eventId       String   @unique @map("event_id")
+  type          String // 'OCCUPANCY_CHANGED' | 'CAMERA_STATUS' | 'MOVEMENT_DETECTED'
+  cameraCode    String   @map("camera_code")
+  cameraId      Int?     @map("camera_id")
+  zoneId        Int?     @map("zone_id")
+  tableId       Int?     @map("table_id")
+  peopleCount   Int?     @map("people_count")
+  confidence    Float?
+  detectedAt    DateTime @map("detected_at")
+  outcome       String // 'applied'|'duplicate'|'stale'|'out_of_order'|'low_confidence'|'unknown_camera'|'unknown_zone'|'rejected'|'cooldown_suppressed'
+  outcomeDetail String?  @map("outcome_detail")
+  payload       String? // raw JSON snapshot for audit/evidence
+  model         String?
+  modelVersion  String?  @map("model_version")
+  receivedAt    DateTime @default(now()) @map("received_at")
+
+  @@index([detectedAt])
+  @@index([tableId])
+  @@index([cameraCode])
+  @@map("vision_events")
+}
+
+// Current observational occupancy state per table (one row per table).
+// Deliberately separate from `tables.status` (operational POS state).
+model VisionTableState {
+  tableId           Int              @id @map("table_id")
+  table             RestaurantTable  @relation(fields: [tableId], references: [id])
+  state             String           @default("unknown") // 'unknown'|'empty'|'occupied'
+  peopleCount       Int              @default(0)
+  confidence        Float            @default(0)
+  stateSince        DateTime         @default(now()) @map("state_since")
+  lastEventAt       DateTime?        @map("last_event_at")
+  // vacancy debounce: sustained-absence window before occupied → empty
+  pendingEmptySince DateTime?        @map("pending_empty_since")
+  // human override freeze: vision events recorded but display state held
+  manualHoldUntil   DateTime?        @map("manual_hold_until")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  @@map("vision_table_states")
+}
+
+// AI-detected possible customer movement between tables. NEVER applied
+// operationally without explicit human confirmation. correlationKey makes
+// ingestion idempotent and blocks duplicate/looping candidates.
+model MovementCandidate {
+  id             Int              @id @default(autoincrement())
+  correlationKey String           @unique @map("correlation_key")
+  fromTableId    Int              @map("from_table_id")
+  fromTable      RestaurantTable  @relation("MovementFrom", fields: [fromTableId], references: [id])
+  toTableId      Int              @map("to_table_id")
+  toTable        RestaurantTable  @relation("MovementTo", fields: [toTableId], references: [id])
+  orderId        Int?             @map("order_id")
+  peopleCount    Int              @default(0)
+  confidence     Float            @default(0)
+  status         String           @default("pending") // 'pending'|'confirmed'|'rejected'|'conflict'|'expired'
+  detectedAt     DateTime         @map("detected_at")
+  evidence       String? // JSON {cameraCode, eventIds, peopleCount, confidence}
+  decidedBy      Int?             @map("decided_by")
+  decidedByName  String?          @map("decided_by_name")
+  decidedAt      DateTime?        @map("decided_at")
+  decisionReason String?          @map("decision_reason")
+  appliedAt      DateTime?        @map("applied_at") // when the operational move actually committed
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([fromTableId])
+  @@index([toTableId])
+  @@map("movement_candidates")
+}
+
+// ─── Inventory transactions (stock movements) ────────────────────────
+model InventoryTransaction {
+  id             Int      @id @default(autoincrement())
+  productId      Int      @map("product_id")
+  product        Product  @relation(fields: [productId], references: [id])
+  quantityChange Float    @map("quantity_change") // + purchase / - deduction
+  reason         String? // 'sale' | 'purchase' | 'adjustment' | 'waste'
+  orderId        Int?     @map("order_id")
+  order          Order?   @relation(fields: [orderId], references: [id])
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([orderId])
+  @@map("inventory_transactions")
+}
+
+// ─── R11: Table reservations (booking board) ─────────────────────────
+// Phone/walk-in bookings ahead of service. 'pending' → 'seated' (an open
+// order is created at the chosen table and linked) → 'completed' (derived:
+// the linked order closed). 'cancelled' / 'no_show' are terminal too.
+// This table NEVER touches POS order data directly — seating reuses the
+// same order-creation path as the POS floor.
+model Reservation {
+  id            Int       @id @default(autoincrement())
+  customerName  String    @map("customer_name")
+  customerPhone String?   @map("customer_phone")
+  partySize     Int       @default(2) @map("party_size")
+  floorPlanId   Int?      @map("floor_plan_id")
+  floorPlan     FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  tableId       Int?      @map("table_id")
+  table         RestaurantTable? @relation(fields: [tableId], references: [id])
+  reservedAt    DateTime  @map("reserved_at")
+  status        String    @default("pending") // 'pending'|'seated'|'completed'|'cancelled'|'no_show'
+  notes         String?
+  // R13: optional loyalty link (auto-matched by phone when booking)
+  customerId    Int?      @map("customer_id")
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  orderId       Int?      @unique @map("order_id")
+  order         Order?    @relation(fields: [orderId], references: [id])
+  createdBy     String?   @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([reservedAt])
+  @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// R17: Foodics/Odoo-level operations — purchasing, stock counts,
+// waste management, promotions engine, payroll. All models are
+// ADDITIVE: nothing existing was modified except two optional,
+// nullable fields on User (hourlyRate) — zero data loss by design.
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── R17: Suppliers (Odoo Purchasing) ──────────────────────────────
+model Supplier {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  // R21: sync mutation tracking (contact edits ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
+
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+// Lifecycle: draft → ordered (confirmed with the supplier) → received
+// (stock landed, InventoryTransaction 'purchase' rows written, last
+// purchase cost applied) / cancelled. Partial receiving supported via
+// line-level receivedQuantity.
+model PurchaseOrder {
+  id          Int       @id @default(autoincrement())
+  number      String    @unique // "PO-0001"
+  supplierId  Int       @map("supplier_id")
+  supplier    Supplier  @relation(fields: [supplierId], references: [id])
+  status      String    @default("draft") // 'draft' | 'ordered' | 'received' | 'cancelled'
+  note        String?
+  expectedAt  DateTime? @map("expected_at")
+  orderedAt   DateTime?
+  receivedAt  DateTime?
+  createdById Int?      @map("created_by_id")
+  createdBy   User?     @relation("PurchaseOrderCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+  // R21: sync mutation tracking (draft→ordered→received/cancelled lifecycle)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+
+  lines PurchaseOrderItem[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               Int           @id @default(autoincrement())
+  purchaseOrderId  Int           @map("purchase_order_id")
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId        Int           @map("product_id")
+  product          Product       @relation("PurchaseOrderLines", fields: [productId], references: [id])
+  quantity         Float // ordered quantity
+  receivedQuantity Float         @default(0) @map("received_quantity")
+  unitCost         Float         @map("unit_cost") // EGP per unit — revalued product cost on receive
+  // R21: sync tracking — line had no timestamps at all; createdAt feeds the
+  // delta watermark, updatedAt catches partial-receiving mutations.
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime?     @updatedAt @map("updated_at")
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+// ─── R17: Physical stock counts (Foodics Stock Count) ───────────────
+// Open a count sheet → system qty snapshotted per line → staff counts →
+// post (variance ≠ 0 lines create InventoryTransaction 'adjustment'
+// rows and restock product.stock) / cancel.
+model StockCount {
+  id          Int       @id @default(autoincrement())
+  number      String    @unique // "SC-0001"
+  status      String    @default("open") // 'open' | 'posted' | 'cancelled'
+  note        String?
+  createdById Int?      @map("created_by_id")
+  createdBy   User?     @relation("StockCountCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+  postedAt    DateTime? @map("posted_at")
+  // R21: sync mutation tracking (open→posted/cancelled lifecycle)
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+
+  lines StockCountLine[]
+
+  @@index([status])
+  @@map("stock_counts")
+}
+
+model StockCountLine {
+  id           Int        @id @default(autoincrement())
+  stockCountId Int        @map("stock_count_id")
+  stockCount   StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  productId    Int        @map("product_id")
+  product      Product    @relation("StockCountLines", fields: [productId], references: [id])
+  systemQty    Float      @map("system_qty") // snapshot at open time
+  countedQty   Float?     @map("counted_qty") // null = not counted yet
+  // R21: sync tracking — line had no timestamps at all; createdAt feeds the
+  // delta watermark, updatedAt catches counted-qty mutations.
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime?  @updatedAt @map("updated_at")
+
+  @@index([stockCountId])
+  @@map("stock_count_lines")
+}
+
+// ─── R17: Waste log (Foodics Waste) ────────────────────────────────
+// Every waste entry deducts stock (InventoryTransaction 'waste') and
+// records cost value at the moment of loss for the waste report.
+model WasteLog {
+  id        Int      @id @default(autoincrement())
+  productId Int      @map("product_id")
+  product   Product  @relation("WasteLogEntries", fields: [productId], references: [id])
+  quantity  Float
+  costValue Float    @map("cost_value") // quantity × product cost at log time
+  reason    String   // 'spoilage'|'expired'|'breakage'|'overproduction'|'complimentary'|'other'
+  note      String?
+  userId    Int?     @map("user_id")
+  user      User?    @relation("WasteLogEntries", fields: [userId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([createdAt])
+  @@map("waste_logs")
+}
+
+// ─── R17: Promotions engine (Foodics) ──────────────────────────────
+// Time-windowed automatic rules (happy hour, category days). Applied
+// automatically in the POS cart when active AND matching; the best
+// (largest) discount wins and stacks with nothing (one promo per
+// order). Manual manager discounts remain a separate, audited path.
+model Promotion {
+  id        Int       @id @default(autoincrement())
+  name      String
+  nameAr    String?   @map("name_ar")
+  type      String    @default("percent") // 'percent' | 'fixed'
+  value     Float // percent 1-100, or fixed EGP off the matched scope
+  scope     String    @default("order") // 'order' | 'category' | 'product'
+  categoryId Int?     @map("category_id")
+  category  Category? @relation("PromotionScopes", fields: [categoryId], references: [id])
+  productId Int?      @map("product_id")
+  product   Product?  @relation("PromotionScopes", fields: [productId], references: [id])
+  daysOfWeek String   @default("0,1,2,3,4,5,6") // CSV of JS getDay() digits
+  startTime String?   @map("start_time") // "HH:MM" 24h; null = start of day
+  endTime   String?   @map("end_time") // "HH:MM" 24h; may wrap past midnight
+  startDate DateTime? @map("start_date") // inclusive; null = always
+  endDate   DateTime? @map("end_date") // inclusive; null = always
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+  // R21: sync mutation tracking (rule edits/toggles ride delta bundles)
+  updatedAt DateTime? @updatedAt @map("updated_at")
+
+  @@index([active])
+  @@map("promotions")
+}

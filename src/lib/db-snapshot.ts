@@ -160,6 +160,11 @@ function rotate(): void {
  * recovery point.
  */
 export async function takeSnapshot(reason = 'manual'): Promise<SnapshotResult> {
+  // R23: SQLite-only engine — on the cloud deployment (Neon Postgres) there
+  // is no file to VACUUM INTO; backups there are Neon PITR + Turso replica.
+  if (!process.env.DATABASE_URL?.startsWith('file:')) {
+    throw new Error('Snapshots are only supported on SQLite deployments (local / Windows app)');
+  }
   const db = new PrismaClient();
   try {
     const integrityRows = await db.$queryRawUnsafe(`PRAGMA integrity_check`) as Array<{ integrity_check: string }>;

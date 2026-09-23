@@ -46,7 +46,9 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
 }, {
   // Task 22-c: desktop/ is a separate npm project (Electron shell, CommonJS
   // by design) — not part of the Next.js lint surface.
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "desktop/**"]
+  // R23: pgtmp-client/ is the generated one-shot Postgres migration client
+  // (scripts/migrate-neon.ts) — generated code, never hand-edited.
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "desktop/**", "pgtmp-client/**"]
 }];
 
 export default eslintConfig;

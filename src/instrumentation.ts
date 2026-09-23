@@ -9,6 +9,10 @@
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   if (process.env.RMS_SNAPSHOT_WATCHER === '0') return;
+  // R23: the snapshot engine is SQLite-only — on the cloud deployment
+  // (DATABASE_URL = postgres://…) there is no db file to watch. Backups
+  // there are Neon's PITR + the Turso replica instead.
+  if (!process.env.DATABASE_URL?.startsWith('file:')) return;
   try {
     await import('./lib/snapshot-watch-init');
   } catch (e) {

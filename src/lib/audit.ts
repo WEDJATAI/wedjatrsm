@@ -93,6 +93,10 @@ export const AUDIT_ACTIONS = [
   'promotion.update',
   'promotion.delete',
   'payroll.rateUpdate',
+  // R23: cloud ops — scheduled jobs (Inngest / Vercel cron)
+  'report.dailyDigest',
+  'alert.staleOrders',
+  'replication.tursoSync',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -124,6 +128,8 @@ export type AuditInput = {
     | 'waste'
     | 'promotion'
     | 'payroll'
+    // R23: scheduled reports (daily digest)
+    | 'report'
   entityId?: number | null
   /** short human-readable EN summary shown in the Activity log */
   details?: string | null

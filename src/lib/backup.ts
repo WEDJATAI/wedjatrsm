@@ -16,6 +16,7 @@ import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 
 import { db } from '@/lib/db'
+import { ApiError } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import type { BackupInfo } from '@/lib/types'
 
@@ -60,7 +61,12 @@ export function resolveDatabaseFile(): string | null {
 export async function createBackupFile(kind: 'auto' | 'manual'): Promise<BackupInfo> {
   const dbFile = resolveDatabaseFile()
   if (dbFile === null) {
-    throw new Error('File backups are unavailable in this deployment (remote database)')
+    // R23: on the cloud deployment (Neon Postgres) backups are covered by
+    // Neon point-in-time restore + the Turso replica — there is no local file.
+    throw new ApiError(
+      'File backups are unavailable on the cloud deployment (Neon PITR + the Turso replica cover backups)',
+      501,
+    )
   }
   const dbStat = await stat(dbFile).catch(() => null)
   if (!dbStat?.isFile()) throw new Error('Database file not found')
@@ -120,6 +126,8 @@ export async function maybeAutoBackup(): Promise<void> {
   if (autoInFlight) return
   autoInFlight = true
   try {
+    // R23: SQLite-only housekeeping — never attempt on the cloud deployment.
+    if (resolveDatabaseFile() === null) return
     const setting = await db.appSetting.findUnique({ where: { key: SETTING_LAST_AUTO } })
     const lastMs = setting ? Date.parse(setting.value) : Number.NaN
     if (Number.isFinite(lastMs) && Date.now() - lastMs < AUTO_INTERVAL_MS) return

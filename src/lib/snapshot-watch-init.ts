@@ -21,6 +21,10 @@ export function ensureSnapshotWatcher(): void {
   if (g.__rmsSnapshotWatchInit) return;
   g.__rmsSnapshotWatchInit = true;
   try {
+    // R23: SQLite-only feature — never start on the cloud deployment
+    // (DATABASE_URL = postgres://…); tickIfChanged would no-op anyway, but
+    // there is no reason to run a 10-minute timer there at all.
+    if (!process.env.DATABASE_URL?.startsWith('file:')) return;
     // first pass immediately: refresh the recovery point as early as possible
     void tickIfChanged('lazy-init');
     const timer = setInterval(() => void tickIfChanged('auto-watch'), INTERVAL_MS);
