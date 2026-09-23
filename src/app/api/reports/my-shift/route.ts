@@ -8,6 +8,8 @@
 // Orders considered: created by the user today with status in
 // ('open','paid','deferred') — cancelled checks and merged-away sources are
 // excluded. Tips are attributed from the payment rows on those orders.
+// R26: cash to hand over = cash collected − change given back (payment rows
+// with method 'cash').
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
@@ -59,7 +61,7 @@ export async function GET(req: NextRequest) {
       select: {
         status: true,
         totalAmount: true,
-        payments: { select: { method: true, amount: true, tip: true } },
+        payments: { select: { method: true, amount: true, tip: true, changeGiven: true } },
       },
       orderBy: { createdAt: 'asc' },
     })
@@ -70,6 +72,10 @@ export async function GET(req: NextRequest) {
     let openChecksCount = 0
     let openValueRaw = 0
     let tipsTotalRaw = 0
+    // R26: cash handover math — what the server collected in cash minus the
+    // change they handed back to guests
+    let cashCollectedRaw = 0
+    let cashChangeGivenRaw = 0
     const methodAgg = new Map<string, { amount: number; count: number; tip: number }>()
 
     for (const order of orders) {
@@ -88,6 +94,10 @@ export async function GET(req: NextRequest) {
       for (const payment of order.payments) {
         const tip = payment.tip ?? 0
         tipsTotalRaw += tip
+        if (payment.method === 'cash') {
+          cashCollectedRaw += payment.amount
+          cashChangeGivenRaw += payment.changeGiven
+        }
         const agg = methodAgg.get(payment.method) ?? { amount: 0, count: 0, tip: 0 }
         agg.amount += payment.amount
         agg.count += 1
@@ -97,6 +107,8 @@ export async function GET(req: NextRequest) {
     }
 
     const ordersCount = orders.length
+    const cashCollected = round2(cashCollectedRaw)
+    const cashChangeGiven = round2(cashChangeGivenRaw)
 
     const report: MyShiftReport = {
       userId,
@@ -117,6 +129,10 @@ export async function GET(req: NextRequest) {
           tip: round2(v.tip),
         }))
         .sort((a, b) => b.amount - a.amount),
+      // R26 Payment Pro: cash the server should hand over at shift end
+      cashCollected,
+      cashChangeGiven,
+      netCash: round2(cashCollected - cashChangeGiven),
     }
 
     return NextResponse.json({ report })

@@ -44,7 +44,17 @@ type ReceiptModel = {
   /** 12% service tax (in addition to the VAT) */
   serviceTax: number
   total: number
-  payments: { label: string; amount: number; tip: number }[]
+  payments: {
+    label: string
+    amount: number
+    tip: number
+    /** R26: auto timestamp+method reference (every POS payment has one) */
+    reference: string | null
+    /** R26: what the guest handed over (0 = not recorded / exact) */
+    received: number
+    /** R26: change handed back to the guest */
+    change: number
+  }[]
   paid: number
   /** R8: Σ payment tips — gratuity is on top of the bill */
   tipsTotal: number
@@ -93,9 +103,12 @@ function buildReceiptModel(order: Order): ReceiptModel {
     serviceTax: round2(order.serviceTaxAmount),
     total: round2(order.totalAmount),
     payments: order.payments.map((p) => ({
-      label: `${bilingualLabel(`status.payment.${p.method}`)}${p.reference ? ` (${p.reference})` : ''}`,
+      label: bilingualLabel(`status.payment.${p.method}`),
       amount: round2(p.amount),
       tip: round2(p.tip ?? 0),
+      reference: p.reference ?? null,
+      received: round2(p.amountTendered ?? 0),
+      change: round2(p.changeGiven ?? 0),
     })),
     paid: round2(order.paidAmount),
     tipsTotal: round2(order.payments.reduce((sum, p) => sum + (p.tip ?? 0), 0)),
@@ -159,6 +172,16 @@ function buildReceiptHtml(
     lines.push(dashed)
     for (const p of m.payments) {
       lines.push(row(`- ${p.label}`, formatCurrency(p.amount)))
+      // R26: auto reference — timestamp + payment-type code
+      if (p.reference) {
+        lines.push(`<p class="note">${escapeHtml(`${bilingualLabel('pos.receiptRef')}: ${p.reference}`)}</p>`)
+      }
+      if (p.received > 0) {
+        lines.push(row(`  ${bilingualLabel('pos.receiptReceived')}`, formatCurrency(p.received)))
+      }
+      if (p.change > 0) {
+        lines.push(row(`  ${bilingualLabel('pos.receiptChange')}`, formatCurrency(p.change)))
+      }
       if (p.tip > 0) lines.push(row(`  + ${bilingualLabel('money.tip')}`, formatCurrency(p.tip)))
     }
     lines.push(row(bilingualLabel('money.paid'), formatCurrency(m.paid), 'bold'))
@@ -282,6 +305,24 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
               {model.payments.map((p, i) => (
                 <div key={i}>
                   <ReceiptRow left={`- ${p.label}`} right={formatCurrency(p.amount)} />
+                  {/* R26: auto reference + cash received / change transparency */}
+                  {p.reference && (
+                    <p className="text-left rtl:text-right text-[10px] uppercase tracking-wide text-stone-500">
+                      {bilingualLabel('pos.receiptRef')}: {p.reference}
+                    </p>
+                  )}
+                  {p.received > 0 && (
+                    <ReceiptRow
+                      left={`  ${bilingualLabel('pos.receiptReceived')}`}
+                      right={formatCurrency(p.received)}
+                    />
+                  )}
+                  {p.change > 0 && (
+                    <ReceiptRow
+                      left={`  ${bilingualLabel('pos.receiptChange')}`}
+                      right={formatCurrency(p.change)}
+                    />
+                  )}
                   {p.tip > 0 && (
                     <ReceiptRow
                       left={`+ ${bilingualLabel('money.tip')}`}

@@ -375,6 +375,12 @@ export default function CashDrawerView() {
                   </span>
                 </div>
                 <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{t('admin.drawerChangeGiven')}</span>
+                  <span className="tabular-nums text-rose-600 dark:text-rose-400">
+                    −{formatCurrency(expected?.changeGiven ?? 0)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">{t('admin.paidIn')}</span>
                   <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
                     +{formatCurrency(expected?.paidIn ?? 0)}

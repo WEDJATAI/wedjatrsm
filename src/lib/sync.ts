@@ -478,6 +478,9 @@ function normalizePayment(row: Record<string, unknown>): PaymentRow | null {
     amount: toNumOr(row.amount, 0),
     tip: toNumOr(row.tip, 0),
     reference: toStr(row.reference),
+    // R26 Payment Pro tender/change fields (absent on pre-R26 bundles → 0)
+    amountTendered: toNumOr(row.amountTendered, 0),
+    changeGiven: toNumOr(row.changeGiven, 0),
     createdAt: toDate(row.createdAt) ?? new Date(),
   }
 }

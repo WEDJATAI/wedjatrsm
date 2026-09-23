@@ -153,6 +153,10 @@ export type Payment = {
   /** R8: gratuity on top of the billed amount (not counted in paidAmount) */
   tip?: number
   reference: string | null
+  /** R26: what the guest handed over (0 = not recorded / exact). */
+  amountTendered?: number
+  /** R26: change handed back to the guest (drawer math subtracts it). */
+  changeGiven?: number
   createdAt: string
 }
 
@@ -335,6 +339,8 @@ export type CashDrawerStatus = {
     openingFloat: number
     cashSales: number
     cashTips: number
+    /** R26: change handed back to guests (cash payments) — leaves the drawer */
+    changeGiven: number
     paidIn: number
     paidOut: number
     total: number
@@ -358,6 +364,10 @@ export type MyShiftReport = {
   tipsTotal: number
   avgCheck: number
   byMethod: { method: string; amount: number; count: number; tip: number }[]
+  /** R26 Payment Pro: the cash the server should hand over at shift end. */
+  cashCollected: number
+  cashChangeGiven: number
+  netCash: number
 }
 
 // ─── R8: menu engineering (reports) ─────────────────
@@ -402,6 +412,10 @@ export type NewPaymentPayload = {
   /** R8: gratuity on top of the billed amount */
   tip?: number
   reference?: string
+  /** R26: what the guest handed over (cash received). */
+  amountTendered?: number
+  /** R26: change handed back (only when tendered > amount). */
+  changeGiven?: number
 }
 
 // ─── Audit log ──────────────────────────────────────
@@ -446,6 +460,15 @@ export type ZReport = {
   tips: { total: number; cash: number; card: number; other: number }
   /** R17: refunds issued this day (negative payments) — net value */
   refunds: { total: number; count: number }
+  /** R26 Payment Pro: cash-drawer reconciliation for the day. */
+  cashDrawer: {
+    /** Σ cash payments (bill portions, refunds netted by their sign) */
+    cashPayments: number
+    /** Σ change handed back to guests on cash payments */
+    changeGiven: number
+    /** cashPayments − changeGiven: what the drawer should hold (excl. float/tips) */
+    expectedInDrawer: number
+  }
 }
 
 // ─── Backups ────────────────────────────────────────

@@ -6,6 +6,7 @@ import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { MONEY_EPSILON, PAYMENT_METHODS } from '@/lib/constants'
 import { redeemLoyaltyPoints } from '@/lib/loyalty'
+import { paymentReference } from '@/lib/payment'
 import {
   closeOrderIfFullyPaid,
   getOrderOr404,
@@ -42,7 +43,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError('payments must be a non-empty array', 400)
     }
 
-    const rows: { method: string; amount: number; tip: number; reference: string | null }[] = []
+    type ParsedRow = {
+      method: string
+      amount: number
+      tip: number
+      reference: string | null
+      amountTendered: number
+      changeGiven: number
+    }
+    const rows: ParsedRow[] = []
+    const now = new Date()
     for (const raw of payments) {
       const method = String(raw?.method ?? '')
       if (!(PAYMENT_METHODS as readonly string[]).includes(method)) {
@@ -59,11 +69,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       if (!Number.isFinite(tip) || tip < 0) {
         throw new ApiError('Payment tips must be zero or greater', 400)
       }
+      // ── R26 Payment Pro: cash-received / change-back flow ──
+      // `amount` stays the BILL portion (never over the remaining balance);
+      // `amountTendered` records what the guest handed over and `changeGiven`
+      // what went back out of the drawer (the difference may instead flow
+      // into `tip` when the waiter taps "add to tip").
+      const amountTendered = raw?.amountTendered == null ? 0 : Number(raw.amountTendered)
+      if (!Number.isFinite(amountTendered) || amountTendered < 0) {
+        throw new ApiError('Amount received must be zero or greater', 400)
+      }
+      const changeGiven = raw?.changeGiven == null ? 0 : Number(raw.changeGiven)
+      if (!Number.isFinite(changeGiven) || changeGiven < 0) {
+        throw new ApiError('Change given must be zero or greater', 400)
+      }
+      if (amountTendered > 0 && amountTendered + MONEY_EPSILON < amount) {
+        throw new ApiError('Amount received cannot be less than the payment amount', 400)
+      }
+      if (changeGiven > 0 && changeGiven > round2(amountTendered - amount) + MONEY_EPSILON) {
+        throw new ApiError('Change given cannot exceed the amount received over the bill', 400)
+      }
       rows.push({
         method,
         amount,
         tip: round2(tip),
-        reference: raw?.reference == null ? null : String(raw.reference),
+        // R26: every POS payment gets an automatic reference — timestamp +
+        // payment-type code (e.g. CASH-20260215-143205-K7M). Printed on the
+        // receipt; the audit trail and drawer ledger key off it.
+        reference: paymentReference(method, now),
+        amountTendered: round2(amountTendered),
+        changeGiven: round2(changeGiven),
       })
     }
 
@@ -121,6 +155,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         amount: p.amount,
         tip: p.tip,
         reference: p.reference,
+        amountTendered: p.amountTendered,
+        changeGiven: p.changeGiven,
       })),
     })
 
@@ -134,8 +170,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       details: `EGP ${round2(rows.reduce((sum, p) => sum + p.amount, 0)).toFixed(2)} (${rows
         .map(
           (p) =>
-            `${p.method} ${round2(p.amount).toFixed(2)}${
+            `${p.method} ${round2(p.amount).toFixed(2)} [${p.reference}]${
               p.tip > 0 ? ` (tip EGP ${round2(p.tip).toFixed(2)})` : ''
+            }${
+              p.amountTendered > 0
+                ? ` (received EGP ${round2(p.amountTendered).toFixed(2)}` +
+                  (p.changeGiven > 0 ? `, change EGP ${round2(p.changeGiven).toFixed(2)}` : '') +
+                  ')'
+                : ''
             }`,
         )
         .join(', ')}) on order #${orderId}${closed ? ' — closed' : ''}`,

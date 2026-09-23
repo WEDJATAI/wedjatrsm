@@ -122,6 +122,7 @@ export async function GET(req: NextRequest) {
         method: true,
         amount: true,
         tip: true,
+        changeGiven: true,
         order: {
           select: { clientName: true, userId: true, user: { select: { name: true } } },
         },
@@ -138,6 +139,10 @@ export async function GET(req: NextRequest) {
     let tipsCashRaw = 0
     let tipsCardRaw = 0
     let tipsOtherRaw = 0
+    // R26: cash-drawer reconciliation — cash bill portions and the change
+    // handed back on them (refunds are negative amounts and net automatically)
+    let cashPaymentsRaw = 0
+    let changeGivenRaw = 0
     const waiterTipAgg = new Map<number | null, number>()
     const waiterTipName = new Map<number | null, string>()
     for (const payment of payments) {
@@ -160,9 +165,15 @@ export async function GET(req: NextRequest) {
       // R8: gratuity (never part of `amount`) — tips by method + per server
       const tip = payment.tip ?? 0
       tipsTotalRaw += tip
-      if (payment.method === 'cash') tipsCashRaw += tip
-      else if (payment.method === 'card') tipsCardRaw += tip
-      else tipsOtherRaw += tip
+      if (payment.method === 'cash') {
+        tipsCashRaw += tip
+        cashPaymentsRaw += payment.amount
+        changeGivenRaw += payment.changeGiven
+      } else if (payment.method === 'card') {
+        tipsCardRaw += tip
+      } else {
+        tipsOtherRaw += tip
+      }
       const waiterId = payment.order.userId
       waiterTipAgg.set(waiterId, (waiterTipAgg.get(waiterId) ?? 0) + tip)
       if (payment.order.user?.name) waiterTipName.set(waiterId, payment.order.user.name)
@@ -236,6 +247,14 @@ export async function GET(req: NextRequest) {
       refunds: {
         total: round2(refundsTotalRaw),
         count: refundsCount,
+      },
+      // R26 Payment Pro: cash-drawer reconciliation for the day — bill
+      // portions only (float/tips are reconciled on the cash-drawer screen);
+      // expected in drawer = cash payments − change given.
+      cashDrawer: {
+        cashPayments: round2(cashPaymentsRaw),
+        changeGiven: round2(changeGivenRaw),
+        expectedInDrawer: round2(cashPaymentsRaw - changeGivenRaw),
       },
     }
 

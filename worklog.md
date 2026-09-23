@@ -1840,3 +1840,27 @@ Work Log:
 
 Stage Summary:
 - Launcher Home + POS visual tiles confirmed end-to-end on production (Neon writes, Vercel edge). PAT used as one-time push URL only.
+
+---
+Task ID: 26-b
+Agent: general-purpose (reports & drawer integration)
+Task: R26 Payment Pro — wire changeGiven through the three reporting/drawer surfaces (drawer expected math, my-shift cash handover, Z-report cash drawer) with UI + i18n.
+
+Work Log:
+- Read worklog conventions + the 7 target files; confirmed Payment.changeGiven/amountTendered columns live in DB (fixtures: order 127 cash 443.52 tendered 500 changeGiven 56.48; order 128 cash 144.90 tip 45.10) and types.ts already carries the new fields.
+- API cash-drawer/route.ts + [id]/route.ts (duplicated computeExpected, kept in sync): payment aggregate _sum now includes changeGiven; expected object returns changeGiven round2; total = openingFloat + cashSales + cashTips − changeGiven + paidIn − paidOut. [id] close flow inherits the corrected math (persists expectedCash). Header/doc comments updated to the new formula.
+- API reports/my-shift/route.ts: payments select + changeGiven; accumulates cashCollected (Σ amount, method='cash'), cashChangeGiven (Σ changeGiven, method='cash'), returns them + netCash = round2(cashCollected − cashChangeGiven) in the report (satisfies MyShiftReport).
+- API reports/zreport/route.ts: same payments set now selects changeGiven; cash method branch accumulates cashPayments/changeGiven (negative refunds net by sign); report gains cashDrawer { cashPayments, changeGiven, expectedInDrawer = round2(cashPayments − changeGiven) } (bill portions only — float/tips stay on the drawer screen).
+- UI cash-drawer-view.tsx: "Change given −EGP X" row (rose, dark variant) in the expected breakdown between the cash-sales+tips line and paid-ins — same markup pattern as the paid-out row.
+- UI reports-view.tsx: compact "Cash drawer" block appended to the Z-report payments card (amber Banknote chip Cash payments / rose ArrowUpFromLine chip −Change given / bold emerald CircleDollarSign chip Expected in drawer, mirroring the deferred-chips pattern); buildZReportHtml prints a dedicated Cash drawer section (3 rows, expected bold) between deferred and by-waiter; +Banknote/ArrowUpFromLine imports.
+- UI my-shift-sheet.tsx: "Cash to hand over" hero card next to the tips card (amber border-2 like tips' emerald), big netCash + sub-line "Cash collected: X − change given: Y".
+- i18n EN+AR: admin.ts (drawerChangeGiven, zreportCashDrawer, zreportCashPayments, zreportChangeGiven, zreportExpectedDrawer) + pos.ts (shift.cashCollected, shift.changeGiven, shift.netCash) — all verified present in both languages via dict import.
+- VERIFY (curl, admin PIN 123456): zreport?date=2026-09-23 → cashDrawer {588.42, 56.48, 531.94} ✓. my-shift?userId=2 with a temp seeded cash payment (100, changeGiven 20) on today's open order 315 → cashCollected 100 / cashChangeGiven 20 / netCash 80 ✓. Drawer: seeded a session opened 09:00 float 500 (before the 10:35 fixture payments) → GET expected {500, 688.42, 45.10, changeGiven 76.48, 0, 0, total 1157.04} ✓; POST close countedCash 1157.04 → expectedCash 1157.04, variance 0 persisted ✓. Seeded payment deleted after verification (order 315 back to open/unpaid).
+- VERIFY (agent-browser E2E): Z-report loads + chips show 588.42 / −56.48 / 531.94; print window text includes the Cash drawer section with all three numbers; drawer view breakdown shows Change given −EGP 56.48 with total EGP 1,077.04 (500+588.42+45.10−56.48) and closed via the UI dialog (variance toast EGP 0.00); Omar's My shift card shows CASH TO HAND OVER EGP 80.00 with the collected−change sub-line; Arabic toggle renders النقدية للتسليم / النقدية المُحصّلة / الباقي المُردود.
+- GATES: bunx tsc → 0 errors in touched files (26 pre-existing errors are in untouched files: login-view, inngest, print.ts, turso-sync); bun run lint → exit 0, zero findings project-wide.
+
+Stage Summary:
+- Files touched (7): src/app/api/cash-drawer/route.ts, src/app/api/cash-drawer/[id]/route.ts, src/app/api/reports/my-shift/route.ts, src/app/api/reports/zreport/route.ts, src/components/admin/cash-drawer-view.tsx, src/components/admin/reports-view.tsx, src/components/pos/my-shift-sheet.tsx, src/lib/i18n/dict/admin.ts, src/lib/i18n/dict/pos.ts (9 with dicts).
+- Verified numbers: drawer expected = float + cashSales + cashTips − changeGiven + paidIn − paidOut (1157.04 and 1077.04 scenarios, both closed variance 0); zreport cashDrawer = 588.42 / 56.48 / 531.94; my-shift netCash = collected − change (80.00 demo). All money round2; no API contract changes beyond the pre-agreed type fields.
+- Decisions: zreport cashDrawer is bill-portions only (matches binding type comment — float/tips reconcile on the drawer screen); Z-report cash-drawer UI lives as a third bordered block inside the payments card (chip pattern) rather than a new sibling card, keeping the lg:2-col grid intact; test data left behind: two cleanly closed drawer sessions (ids 3, 4, float 500, variance 0 — one noted "r26b verification close") in drawer history; the temp verification payment was deleted.
+- Untouched as instructed: payment-modal.tsx, receipt-modal.tsx, orders/[id]/payments route, schema.prisma, types.ts.

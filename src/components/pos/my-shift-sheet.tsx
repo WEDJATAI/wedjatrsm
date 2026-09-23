@@ -116,6 +116,21 @@ export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) 
                     {formatCurrency(report.tipsTotal)}
                   </p>
                 </div>
+                {/* R26: cash to hand over — collected minus change given back */}
+                <div className="col-span-2 flex flex-col justify-center gap-1 rounded-xl border-2 border-amber-600 bg-amber-50 p-3 sm:col-span-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                      {t('shift.netCash')}
+                    </p>
+                    <p className="text-2xl font-bold tabular-nums text-amber-700">
+                      {formatCurrency(report.netCash)}
+                    </p>
+                  </div>
+                  <p className="text-xs tabular-nums text-amber-700">
+                    {t('shift.cashCollected')} {formatCurrency(report.cashCollected)} −{' '}
+                    {t('shift.changeGiven')} {formatCurrency(report.cashChangeGiven)}
+                  </p>
+                </div>
                 <StatCell label={t('shift.sales')} value={formatCurrency(report.salesTotal)} />
                 <StatCell label={t('shift.orders')} value={String(report.ordersCount)} />
                 <StatCell label={t('shift.avgCheck')} value={formatCurrency(report.avgCheck)} />

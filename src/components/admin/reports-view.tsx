@@ -5,7 +5,9 @@ import type { ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  ArrowUpFromLine,
   Ban,
+  Banknote,
   BarChart3,
   Boxes,
   CalendarDays,
@@ -268,6 +270,20 @@ function buildZReportHtml(
   lines.push(dashed)
   lines.push(row(t('admin.zreportDeferredSettled'), formatCurrency(report.deferredSettled)))
   lines.push(row(t('admin.zreportDeferredOutstanding'), formatCurrency(report.deferredOutstanding)))
+  lines.push(dashed)
+  // R26: cash drawer reconciliation — cash bill portions − change given
+  lines.push(section(t('admin.zreportCashDrawer')))
+  lines.push(
+    row(t('admin.zreportCashPayments'), formatCurrency(report.cashDrawer.cashPayments)),
+  )
+  lines.push(row(t('admin.zreportChangeGiven'), formatCurrency(report.cashDrawer.changeGiven)))
+  lines.push(
+    row(
+      t('admin.zreportExpectedDrawer'),
+      formatCurrency(report.cashDrawer.expectedInDrawer),
+      'bold',
+    ),
+  )
   lines.push(dashed)
   lines.push(section(t('admin.zreportByWaiter')))
   for (const w of report.byWaiter) {
@@ -803,6 +819,56 @@ function ZReportSection() {
                       ))}
                     </div>
                   ) : null}
+                </div>
+
+                {/* R26: cash drawer reconciliation — what the till should hold
+                    (bill portions only; float/tips live on the drawer screen) */}
+                <div className="space-y-1.5 border-t pt-4">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {t('admin.zreportCashDrawer')}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400">
+                      <Banknote
+                        className="size-4 shrink-0 text-amber-600 dark:text-amber-400"
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="text-xs font-medium">
+                          {t('admin.zreportCashPayments')}
+                        </p>
+                        <p className="text-sm font-bold tabular-nums">
+                          {formatCurrency(report.cashDrawer.cashPayments)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-400">
+                      <ArrowUpFromLine
+                        className="size-4 shrink-0 text-rose-600 dark:text-rose-400"
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="text-xs font-medium">{t('admin.zreportChangeGiven')}</p>
+                        <p className="text-sm font-bold tabular-nums">
+                          −{formatCurrency(report.cashDrawer.changeGiven)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-400">
+                      <CircleDollarSign
+                        className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="text-xs font-medium">
+                          {t('admin.zreportExpectedDrawer')}
+                        </p>
+                        <p className="text-sm font-bold tabular-nums">
+                          {formatCurrency(report.cashDrawer.expectedInDrawer)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </Card>
 

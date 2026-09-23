@@ -2,8 +2,9 @@
 // GET  → { status: CashDrawerStatus }  (active session + live expected math +
 //        last 10 closed sessions) — permission 'cashdrawer'
 // POST → { action: 'open', openingFloat } | { action: 'paid_in'|'paid_out', amount, note? }
-// Expected cash = openingFloat + cash sales + cash tips (payments with method
-// 'cash' created inside the session window) + paid-ins − paid-outs, round2.
+// Expected cash = openingFloat + cash sales + cash tips − change given
+// (payments with method 'cash' created inside the session window) +
+// paid-ins − paid-outs, round2.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
@@ -76,9 +77,10 @@ function serializeSession(row: SessionRow): CashDrawerSessionDTO {
 
 /**
  * Live expected-cash math for an OPEN session. Window [openedAt, now]:
- * openingFloat + cash sales + cash tips + paid-ins − paid-outs, round2.
- * KEEP IN SYNC with the identical helper in [id]/route.ts (route files may
- * only export handlers, so the logic is duplicated in both routes).
+ * openingFloat + cash sales + cash tips − change given + paid-ins −
+ * paid-outs, round2. KEEP IN SYNC with the identical helper in [id]/route.ts
+ * (route files may only export handlers, so the logic is duplicated in both
+ * routes).
  */
 async function computeExpected(
   session: Pick<SessionRow, 'id' | 'openingFloat' | 'openedAt'>,
@@ -86,15 +88,17 @@ async function computeExpected(
   openingFloat: number
   cashSales: number
   cashTips: number
+  changeGiven: number
   paidIn: number
   paidOut: number
   total: number
 }> {
   const now = new Date()
-  // cash payments (amount + tip on top) received while the drawer is open
+  // cash payments (amount + tip on top, minus change handed back) received
+  // while the drawer is open
   const cashPayments = await db.payment.aggregate({
     where: { method: 'cash', createdAt: { gte: session.openedAt, lte: now } },
-    _sum: { amount: true, tip: true },
+    _sum: { amount: true, tip: true, changeGiven: true },
   })
   // manual entries recorded on this session
   const entries = await db.cashDrawerEntry.findMany({
@@ -105,14 +109,15 @@ async function computeExpected(
   const openingFloat = round2(session.openingFloat)
   const cashSales = round2(cashPayments._sum.amount ?? 0)
   const cashTips = round2(cashPayments._sum.tip ?? 0)
+  const changeGiven = round2(cashPayments._sum.changeGiven ?? 0)
   const paidIn = round2(
     entries.filter((e) => e.type === 'paid_in').reduce((sum, e) => sum + e.amount, 0),
   )
   const paidOut = round2(
     entries.filter((e) => e.type === 'paid_out').reduce((sum, e) => sum + e.amount, 0),
   )
-  const total = round2(openingFloat + cashSales + cashTips + paidIn - paidOut)
-  return { openingFloat, cashSales, cashTips, paidIn, paidOut, total }
+  const total = round2(openingFloat + cashSales + cashTips - changeGiven + paidIn - paidOut)
+  return { openingFloat, cashSales, cashTips, changeGiven, paidIn, paidOut, total }
 }
 
 /**

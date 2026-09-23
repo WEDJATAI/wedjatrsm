@@ -92,6 +92,8 @@ export type PaymentRow = {
   amount: number
   tip?: number | null
   reference: string | null
+  amountTendered?: number | null
+  changeGiven?: number | null
   createdAt: Date
 }
 
@@ -103,6 +105,8 @@ export function serializePayment(payment: PaymentRow): Payment {
     amount: round2(payment.amount),
     tip: round2(payment.tip ?? 0),
     reference: payment.reference,
+    amountTendered: round2(payment.amountTendered ?? 0),
+    changeGiven: round2(payment.changeGiven ?? 0),
     createdAt: payment.createdAt.toISOString(),
   }
 }

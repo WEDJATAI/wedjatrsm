@@ -18,7 +18,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { getTursoClient, isTursoConfigured } from '@/lib/turso'
-import { TURSO_DDL } from '@/lib/turso-schema'
+import { TURSO_DDL, TURSO_DDL_MIGRATIONS } from '@/lib/turso-schema'
 
 export type TursoSyncTableReport = {
   table: string
@@ -138,6 +138,15 @@ export async function syncAllToTurso(): Promise<TursoSyncReport> {
     for (const ddl of TURSO_DDL) {
       await client.execute(ddl)
     }
+    // 1b) column evolution on existing tables (R26) — duplicate-column
+    //     errors mean the column is already there, which is success.
+    for (const ddl of TURSO_DDL_MIGRATIONS) {
+      try {
+        await client.execute(ddl)
+      } catch {
+        // ALTER TABLE ADD COLUMN re-run → column exists → fine
+      }
+    }
 
     // 2) full refresh, FK-safe on RE-runs:
     //    a) read all source rows first (a read error aborts before any mutation)
@@ -148,8 +157,13 @@ export async function syncAllToTurso(): Promise<TursoSyncReport> {
     //    c) INSERT parents-first (forward topo order), one batch per table
     const infos = orderedModels()
     const rowsByTable = new Map<string, Array<Record<string, unknown>>>()
+    // R26: via `unknown` — the delegate cast is intentional (dynamic model walk)
+    const delegates = db as unknown as Record<
+      string,
+      { findMany: () => Promise<Array<Record<string, unknown>>>; count: () => Promise<number> }
+    >
     for (const info of infos) {
-      const delegate = (db as Record<string, { findMany: () => Promise<Array<Record<string, unknown>>>; count: () => Promise<number> }>)[info.accessor]
+      const delegate = delegates[info.accessor]
       if (!delegate) throw new Error(`missing prisma delegate ${info.accessor}`)
       rowsByTable.set(info.table, await delegate.findMany())
     }
@@ -177,7 +191,7 @@ export async function syncAllToTurso(): Promise<TursoSyncReport> {
     // 3) verify counts
     let mismatches = 0
     for (const info of infos) {
-      const delegate = (db as Record<string, { findMany: () => Promise<Array<Record<string, unknown>>>; count: () => Promise<number> }>)[info.accessor]
+      const delegate = delegates[info.accessor]
       const sourceRows = await delegate.count()
       const res = await client.execute(`SELECT COUNT(*) AS c FROM "${info.table}"`)
       const replicaRows = Number(res.rows[0]?.c ?? 0)

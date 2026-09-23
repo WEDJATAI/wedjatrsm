@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlertCircle,
@@ -8,6 +8,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Coins,
   CreditCard,
   HandCoins,
   Hourglass,
@@ -35,6 +36,7 @@ import { PAYMENT_METHODS, TIP_PRESETS } from '@/lib/constants'
 import { formatCurrency, formatQty } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { normalizePersonName } from '@/lib/names'
+import { breakdownChange, denomLabel, quickTenderChips } from '@/lib/payment'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import CheckModal, { type CheckSplitRow } from './check-modal'
@@ -61,10 +63,9 @@ type EditableRow = {
   id: string
   method: string
   amount: string
-  reference: string
 }
 
-type SubmitRow = { method: string; amount: number; reference?: string }
+type SubmitRow = { method: string; amount: number }
 
 type SplitTab = 'single' | 'equal' | 'items' | 'custom'
 
@@ -132,7 +133,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const [tipSel, setTipSel] = useState<Record<string, number | 'custom'>>({})
   const [tipCustom, setTipCustom] = useState<Record<string, string>>({})
 
-  const [singleRow, setSingleRow] = useState<EditableRow>({ id: 'single', method: 'cash', amount: '', reference: '' })
+  const [singleRow, setSingleRow] = useState<EditableRow>({ id: 'single', method: 'cash', amount: '' })
   const [customRows, setCustomRows] = useState<EditableRow[]>([])
 
   const [eqPayers, setEqPayers] = useState(2)
@@ -146,7 +147,39 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const [redeemInput, setRedeemInput] = useState('')
   const [redeeming, setRedeeming] = useState(false)
 
+  // ── R26 Payment Pro: cash tender flow (single tab, cash method) ──
+  // The waiter types what the guest HANDED OVER ("Cash received"). The bill
+  // portion charged is min(tendered, remaining); the difference becomes
+  // either a tip ("keep the change") or change to hand back — with a note
+  // & coin breakdown so nobody has to do math at the table.
+  const [tender, setTender] = useState('')
+  const [overageMode, setOverageMode] = useState<'tip' | 'change'>('change')
+  // Success state: after a paid check with change due, the modal transforms
+  // into a big "give back EGP X" screen (breakdown included) until Done.
+  const [changeDueResult, setChangeDueResult] = useState<{ order: Order; amount: number } | null>(null)
+  // R26: scroll the overage choice into view the moment it appears — the
+  // waiter MUST see the tip-vs-change decision, never hunt for it.
+  const overageRef = useRef<HTMLDivElement | null>(null)
+  const lastOverageRef = useRef(0)
+
   const remaining = round2(Math.max(0, order.remainingAmount))
+
+  // ── R26: single-tab cash tender math ──
+  const singleCash = tab === 'single' && singleRow.method === 'cash'
+  const tendered = parseAmount(tender)
+  const cashCharge = round2(Math.min(tendered, remaining))
+  const tenderDiff = round2(tendered - remaining)
+  const overage = tenderDiff > 0.01 ? tenderDiff : 0
+  const tipFromChange = singleCash && overage > 0 && overageMode === 'tip' ? overage : 0
+  const changeFromTender = singleCash && overage > 0 && overageMode === 'change' ? overage : 0
+
+  // R26: overage appeared (0 → >0)? Bring the choice panel into view.
+  useEffect(() => {
+    if (overage > 0 && lastOverageRef.current === 0 && open) {
+      overageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+    lastOverageRef.current = overage
+  }, [overage, open])
 
   // Reset state whenever the modal opens for (a new) order.
   // R13: keyed to [open, order.id] only — the previous remainingAmount dep
@@ -158,8 +191,8 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     // R13: restore the terminal's last-used split configuration
     const prefs = readPaymentPrefs()
     setTab(prefs?.tab ?? 'single')
-    setSingleRow({ id: 'single', method: 'cash', amount: String(rem), reference: '' })
-    setCustomRows([{ id: newDraftKey(), method: 'cash', amount: String(rem), reference: '' }])
+    setSingleRow({ id: 'single', method: 'cash', amount: String(rem) })
+    setCustomRows([{ id: newDraftKey(), method: 'cash', amount: String(rem) }])
     setEqPayers(prefs?.eqPayers ?? 2)
     setEqMethods({})
     setItPayers(prefs?.itPayers ?? 2)
@@ -175,6 +208,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     setDeferSubmitting(false)
     setRedeemInput('')
     setRedeeming(false)
+    // R26: tender starts at the exact remaining; change is the safe default
+    setTender(String(rem))
+    setOverageMode('change')
+    setChangeDueResult(null)
      
   }, [open, order.id])
 
@@ -222,7 +259,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
   const submitRows: SubmitRow[] = useMemo(() => {
     if (tab === 'single') {
-      return [toSubmitRow(singleRow)]
+      // R26: cash single charges min(tendered, remaining) — never over the bill
+      const row = toSubmitRow(singleRow)
+      return [singleCash ? { method: row.method, amount: cashCharge } : row]
     }
     if (tab === 'equal') {
       return eqAmounts.map((amount, i) => ({
@@ -270,23 +309,40 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     [submitRows, safeActiveIdx],
   )
 
-  /** Tip for a submit-row index: {value, invalid} — presets are % of that row's amount. */
+  /** Tip for a submit-row index: {value, invalid} — presets are % of that row's amount.
+   *  R26: the single-tab "add to tip" overage lands on top of any preset. */
   const rowTip = (index: number): { value: number; invalid: boolean } => {
     const key = tipKeyFor(index)
     const sel = tipSel[key]
-    if (sel == null || sel === 0) return { value: 0, invalid: false }
-    if (sel === 'custom') {
-      const parsed = parseTipInput(tipCustom[key] ?? '')
-      return parsed == null ? { value: 0, invalid: true } : { value: parsed, invalid: false }
+    let value = 0
+    let invalid = false
+    if (sel != null && sel !== 0) {
+      if (sel === 'custom') {
+        const parsed = parseTipInput(tipCustom[key] ?? '')
+        if (parsed == null) {
+          invalid = true
+        } else {
+          value = parsed
+        }
+      } else {
+        value = round2((submitRows[index]?.amount ?? 0) * (sel / 100))
+      }
     }
-    return { value: round2((submitRows[index]?.amount ?? 0) * (sel / 100)), invalid: false }
+    if (index === 0 && tipFromChange > 0) value = round2(value + tipFromChange)
+    return { value, invalid }
   }
 
   const activeTip = rowTip(safeActiveIdx)
   const tipsTotal = round2(submitRows.reduce((s, _r, i) => s + rowTip(i).value, 0))
   const tipInvalid = submitRows.some((_r, i) => rowTip(i).invalid)
 
-  const canSubmit = !submitting && remaining > 0 && sum > 0 && !exceeds && !tipInvalid
+  const canSubmit =
+    !submitting &&
+    remaining > 0 &&
+    sum > 0 &&
+    !exceeds &&
+    !tipInvalid &&
+    (!singleCash || tendered > 0)
 
   const activeRowLabel =
     tab === 'single'
@@ -324,7 +380,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   // ── Guest check rows mirroring the current split configuration ────
   const checkRows: CheckSplitRow[] = useMemo(() => {
     if (tab === 'single') {
-      const amount = parseAmount(singleRow.amount) || remaining
+      // R26: cash single mirrors the charged portion (≤ remaining)
+      const amount = singleCash
+        ? cashCharge
+        : parseAmount(singleRow.amount) || remaining
       return [{ label: t('pos.fullBill'), amount, method: singleRow.method }]
     }
     if (tab === 'equal') {
@@ -360,20 +419,24 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const addCustomRow = () => {
     const current = round2(customRows.reduce((s, r) => s + parseAmount(r.amount), 0))
     const next = round2(Math.max(0, remaining - current))
-    setCustomRows((rows) => [...rows, { id: newDraftKey(), method: 'cash', amount: String(next), reference: '' }])
+    setCustomRows((rows) => [...rows, { id: newDraftKey(), method: 'cash', amount: String(next) }])
   }
 
   const handleSubmit = async () => {
     // R8: each payment row carries its own tip (≥ 0, round2) on top of the
     // amount — the API persists it but never counts it toward paidAmount.
+    // R26: the single cash row additionally carries what the guest handed
+    // over (amountTendered) and the change going back (changeGiven); the
+    // auto timestamp+method reference is generated server-side.
     const payments = submitRows
       .map((r, i) => ({ ...r, amount: round2(r.amount), tip: Math.max(0, round2(rowTip(i).value)) }))
       .filter((r) => r.amount > 0)
-      .map((r) => ({
+      .map((r, i) => ({
         method: r.method,
         amount: r.amount,
         tip: r.tip,
-        ...(r.method === 'card' && r.reference?.trim() ? { reference: r.reference.trim() } : {}),
+        ...(singleCash && i === 0 && tendered > 0 ? { amountTendered: round2(tendered) } : {}),
+        ...(singleCash && i === 0 && changeFromTender > 0 ? { changeGiven: round2(changeFromTender) } : {}),
       }))
     if (payments.length === 0) return
     setSubmitting(true)
@@ -385,6 +448,13 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
         body: { payments },
       })
       if (result.closed) {
+        if (changeFromTender > 0) {
+          // R26: don't close yet — the waiter still owes the guest change.
+          // Big give-back screen first; Done hands over to the receipt.
+          toast.success(t('pos.changeGivenToast', { amount: formatCurrency(changeFromTender) }))
+          setChangeDueResult({ order: result.order, amount: round2(changeFromTender) })
+          return
+        }
         toast.success(t('pos.paidClosedToast'))
         onSuccess(result.order, true)
         onOpenChange(false)
@@ -398,6 +468,17 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     } finally {
       setSubmitting(false)
     }
+  }
+
+  // R26: closing the dialog (X / esc / backdrop) while the give-back screen
+  // is up must still advance the parent — the payment DID land.
+  const handleDialogChange = (o: boolean) => {
+    if (!o && changeDueResult) {
+      const { order: paidOrder } = changeDueResult
+      setChangeDueResult(null)
+      onSuccess(paidOrder, true)
+    }
+    onOpenChange(o)
   }
 
   // ── R13: loyalty redemption (points → tender, capped at remaining) ──
@@ -423,6 +504,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       setCustomRows((rows) =>
         rows.map((r, i) => (i === 0 ? { ...r, amount: String(newRemaining) } : r)),
       )
+      // R26: the cash-received input follows the new remaining too
+      setTender(String(newRemaining))
+      setOverageMode('change')
       onSuccess(result.order, result.closed)
       if (result.closed) onOpenChange(false)
     } catch (err) {
@@ -460,11 +544,45 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     }
   }
 
-  const singleExceeds = tab === 'single' && parseAmount(singleRow.amount) > round2(remaining + 0.01)
+  const singleExceeds =
+    tab === 'single' && !singleCash && parseAmount(singleRow.amount) > round2(remaining + 0.01)
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleDialogChange}>
+        {changeDueResult ? (
+          /* ── R26: give-back screen — the payment landed, the waiter still
+           *  owes the guest change. Big amount + note/coin breakdown. */
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader className="sr-only">
+              <DialogTitle>{t('pos.changeDue')}</DialogTitle>
+              <DialogDescription>{t('pos.changeDueSub')}</DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-amber-500 bg-amber-50 p-6 text-center">
+              <span className="grid size-16 place-items-center rounded-full bg-amber-100" aria-hidden>
+                <Coins className="size-9 text-amber-600" />
+              </span>
+              <p className="text-sm font-semibold uppercase tracking-wide text-amber-700">
+                {t('pos.changeDue')} · {t('pos.changeDueSub')}
+              </p>
+              <p className="text-5xl font-black tabular-nums text-amber-700">
+                {formatCurrency(changeDueResult.amount)}
+              </p>
+              <ChangeBreakdown change={changeDueResult.amount} />
+            </div>
+            <Button
+              className="h-14 w-full rounded-xl bg-emerald-600 text-lg font-bold text-white hover:bg-emerald-700"
+              onClick={() => {
+                const { order: paidOrder } = changeDueResult
+                setChangeDueResult(null)
+                onSuccess(paidOrder, true)
+                onOpenChange(false)
+              }}
+            >
+              <Check className="size-5" /> {t('pos.changeDone')}
+            </Button>
+          </DialogContent>
+        ) : (
         <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -606,23 +724,139 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
             {/* ── Single ── */}
             <TabsContent value="single" className="space-y-2 pt-3">
-              <PayRow
-                label={t('pos.payment')}
-                method={singleRow.method}
-                active
-                amountStr={singleRow.amount}
-                onAmountChange={(v) => setSingleRow((r) => ({ ...r, amount: v }))}
-                reference={singleRow.reference}
-                onReferenceChange={(v) => setSingleRow((r) => ({ ...r, reference: v }))}
-                editable
-                error={
-                  singleExceeds
-                    ? t('pos.exceedsBy', {
-                        amount: formatCurrency(round2(parseAmount(singleRow.amount) - remaining)),
-                      })
-                    : undefined
-                }
-              />
+              {singleCash ? (
+                /* R26 Payment Pro: cash tender flow — enter what the guest
+                 * handed over; overage becomes a tip or change (with a
+                 * denomination breakdown). No math, no overpay errors. */
+                <div className="space-y-2 rounded-xl border-2 border-primary/30 bg-primary/[0.04] p-3">
+                  <label
+                    htmlFor="r26-tender"
+                    className="flex items-center gap-1.5 text-sm font-semibold text-primary"
+                  >
+                    <Banknote className="size-4 shrink-0" aria-hidden /> {t('pos.cashReceived')}
+                  </label>
+                  <Input
+                    id="r26-tender"
+                    type="number"
+                    min={0}
+                    step={0.25}
+                    inputMode="decimal"
+                    value={tender}
+                    onChange={(e) => setTender(e.target.value)}
+                    aria-label={t('pos.cashReceivedAria')}
+                    className="h-14 rounded-xl border-2 border-primary/40 text-right text-2xl font-bold tabular-nums"
+                  />
+                  {/* Quick chips: exact + smart round-ups guests actually hand over */}
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      aria-pressed={Math.abs(tendered - remaining) <= 0.01}
+                      onClick={() => setTender(String(remaining))}
+                      className={cn(
+                        'h-11 min-w-16 rounded-xl border-2 px-3 text-sm font-bold tabular-nums transition active:scale-95',
+                        Math.abs(tendered - remaining) <= 0.01
+                          ? 'border-primary bg-primary text-white'
+                          : 'border-border bg-white text-stone-600 hover:border-primary/40',
+                      )}
+                    >
+                      {t('pos.tenderExact')} · {formatCurrency(remaining)}
+                    </button>
+                    {quickTenderChips(remaining).map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        aria-pressed={tendered === chip}
+                        onClick={() => setTender(String(chip))}
+                        className={cn(
+                          'h-11 min-w-16 rounded-xl border-2 px-3 text-sm font-bold tabular-nums transition active:scale-95',
+                          tendered === chip
+                            ? 'border-primary bg-primary text-white'
+                            : 'border-border bg-white text-stone-600 hover:border-primary/40',
+                        )}
+                      >
+                        {formatCurrency(chip)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Partial (cash < remaining) — plain info line */}
+                  {tendered > 0 && tendered + 0.01 < remaining && (
+                    <p className="rounded-md bg-amber-50 px-3 py-2 text-center text-xs font-medium text-amber-700">
+                      {t('pos.tenderPartial')} · {t('pos.charging')}{' '}
+                      <span className="font-bold tabular-nums">{formatCurrency(cashCharge)}</span> ·{' '}
+                      {t('pos.remainingAfter', {
+                        amount: formatCurrency(round2(remaining - cashCharge)),
+                      })}
+                    </p>
+                  )}
+
+                  {/* Overage — the guest paid more than the bill: keep as tip
+                      or hand change back. Two big choice cards. */}
+                  {overage > 0 && (
+                    <div ref={overageRef} className="space-y-2 rounded-xl border border-amber-300 bg-amber-50/70 p-2.5">
+                      <p className="text-center text-xs font-semibold text-amber-700">
+                        {t('pos.overageTitle', { amount: formatCurrency(overage) })}
+                      </p>
+                      <p className="text-center text-[11px] leading-tight text-amber-700/80">
+                        {t('pos.overageHint')}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          aria-pressed={overageMode === 'tip'}
+                          onClick={() => setOverageMode('tip')}
+                          className={cn(
+                            'flex h-20 flex-col items-center justify-center gap-1 rounded-xl border-2 px-2 text-center transition active:scale-95',
+                            overageMode === 'tip'
+                              ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                              : 'border-border bg-white text-stone-600 hover:border-emerald-600/40',
+                          )}
+                        >
+                          <HandCoins className="size-6 shrink-0" aria-hidden />
+                          <span className="text-sm font-bold leading-tight">{t('pos.overageTip')}</span>
+                          <span className="text-[11px] leading-tight opacity-80">
+                            {t('pos.overageTipSub')}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={overageMode === 'change'}
+                          onClick={() => setOverageMode('change')}
+                          className={cn(
+                            'flex h-20 flex-col items-center justify-center gap-1 rounded-xl border-2 px-2 text-center transition active:scale-95',
+                            overageMode === 'change'
+                              ? 'border-amber-600 bg-amber-100 text-amber-800'
+                              : 'border-border bg-white text-stone-600 hover:border-amber-600/40',
+                          )}
+                        >
+                          <Coins className="size-6 shrink-0" aria-hidden />
+                          <span className="text-sm font-bold leading-tight">{t('pos.overageChange')}</span>
+                          <span className="text-[11px] leading-tight opacity-80">
+                            {t('pos.overageChangeSub', { amount: formatCurrency(overage) })}
+                          </span>
+                        </button>
+                      </div>
+                      {overageMode === 'change' && <ChangeBreakdown change={overage} />}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <PayRow
+                  label={t('pos.payment')}
+                  method={singleRow.method}
+                  active
+                  amountStr={singleRow.amount}
+                  onAmountChange={(v) => setSingleRow((r) => ({ ...r, amount: v }))}
+                  editable
+                  error={
+                    singleExceeds
+                      ? t('pos.exceedsBy', {
+                          amount: formatCurrency(round2(parseAmount(singleRow.amount) - remaining)),
+                        })
+                      : undefined
+                  }
+                />
+              )}
             </TabsContent>
 
             {/* ── Equal Split ── */}
@@ -753,10 +987,6 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   onAmountChange={(v) =>
                     setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, amount: v } : r)))
                   }
-                  reference={row.reference}
-                  onReferenceChange={(v) =>
-                    setCustomRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, reference: v } : r)))
-                  }
                   onRemove={
                     customRows.length > 1
                       ? () => setCustomRows((rows) => rows.filter((r) => r.id !== row.id))
@@ -849,6 +1079,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                 )}
               </div>
             )}
+            {/* R26: keep-the-change overage landing on the single tip */}
+            {tipFromChange > 0 && (
+              <p className="rounded-md bg-emerald-50 px-2.5 py-1.5 text-center text-xs font-semibold text-emerald-700">
+                {t('pos.tipFromChange', { amount: formatCurrency(tipFromChange) })}
+              </p>
+            )}
           </div>
 
           {/* Live total + submit */}
@@ -870,12 +1106,22 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                 'flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium',
                 exceeds
                   ? 'bg-rose-50 text-rose-700'
-                  : exact
+                  : exact || (singleCash && overage > 0)
                     ? 'bg-emerald-50 text-emerald-700'
                     : 'bg-amber-50 text-amber-700',
               )}
             >
-              {exceeds ? (
+              {singleCash && overage > 0 ? (
+                overageMode === 'change' ? (
+                  <>
+                    <Coins className="size-4" aria-hidden /> {t('pos.changeDue')}: {formatCurrency(overage)}
+                  </>
+                ) : (
+                  <>
+                    <HandCoins className="size-4" aria-hidden /> {t('pos.tip')}: +{formatCurrency(overage)}
+                  </>
+                )
+              ) : exceeds ? (
                 <>
                   <AlertCircle className="size-4" /> {t('pos.exceedsBy', { amount: formatCurrency(Math.abs(diff)) })}
                 </>
@@ -923,6 +1169,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
 
           {/* Receipt is rendered by the parent (pos-view) after full payment */}
         </DialogContent>
+        )}
       </Dialog>
 
       {/* Guest check for the CURRENT split configuration — printing does NOT
@@ -982,7 +1229,6 @@ function toSubmitRow(r: EditableRow): SubmitRow {
   return {
     method: r.method,
     amount: parseAmount(r.amount),
-    ...(r.method === 'card' && r.reference.trim() ? { reference: r.reference.trim() } : {}),
   }
 }
 
@@ -1066,8 +1312,6 @@ function PayRow({
   amount,
   amountStr,
   onAmountChange,
-  reference,
-  onReferenceChange,
   onRemove,
   editable,
   error,
@@ -1080,8 +1324,6 @@ function PayRow({
   amount?: number
   amountStr?: string
   onAmountChange?: (v: string) => void
-  reference?: string
-  onReferenceChange?: (v: string) => void
   onRemove?: () => void
   editable?: boolean
   error?: string
@@ -1149,15 +1391,36 @@ function PayRow({
           </div>
         )}
       </div>
-      {method === 'card' && onReferenceChange && (
-        <Input
-          value={reference ?? ''}
-          onChange={(e) => onReferenceChange(e.target.value)}
-          placeholder={t('pos.refOptional')}
-          className="mt-1.5 h-10"
-        />
-      )}
       {error && <p className="mt-1.5 text-xs font-medium text-destructive">{error}</p>}
+    </div>
+  )
+}
+
+/**
+ * R26: note & coin breakdown for a change amount — the waiter counts the
+ * exact notes/coins back to the guest without doing any math.
+ * e.g. 67.50 → EGP 50 ×1 · EGP 10 ×1 · EGP 5 ×1 · EGP 1 ×2 · 50pt ×1
+ */
+function ChangeBreakdown({ change }: { change: number }) {
+  const { t } = useI18n()
+  const parts = breakdownChange(change)
+  if (parts.length === 0) return null
+  return (
+    <div className="space-y-1.5">
+      <p className="text-center text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+        {t('pos.changeBreakdown')} · {t('pos.changeBreakdownHint')}
+      </p>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        {parts.map((p) => (
+          <span
+            key={p.denom}
+            className="inline-flex h-11 items-center gap-1.5 rounded-xl border-2 border-amber-400 bg-white px-3 text-sm font-bold tabular-nums text-amber-800"
+          >
+            {denomLabel(p.denom)}
+            <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">×{p.count}</span>
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

@@ -44,9 +44,10 @@ function serializeSession(row: SessionRow): CashDrawerSessionDTO {
 
 /**
  * Expected cash at close time — identical math to GET /api/cash-drawer
- * (window [openedAt, now]): openingFloat + cash sales + cash tips +
- * paid-ins − paid-outs, round2. KEEP IN SYNC with the sibling route
- * (route files may only export handlers, hence the duplication).
+ * (window [openedAt, now]): openingFloat + cash sales + cash tips −
+ * change given + paid-ins − paid-outs, round2. KEEP IN SYNC with the
+ * sibling route (route files may only export handlers, hence the
+ * duplication).
  */
 async function computeExpected(
   session: Pick<SessionRow, 'id' | 'openingFloat' | 'openedAt'>,
@@ -54,7 +55,7 @@ async function computeExpected(
   const now = new Date()
   const cashPayments = await db.payment.aggregate({
     where: { method: 'cash', createdAt: { gte: session.openedAt, lte: now } },
-    _sum: { amount: true, tip: true },
+    _sum: { amount: true, tip: true, changeGiven: true },
   })
   const entries = await db.cashDrawerEntry.findMany({
     where: { sessionId: session.id },
@@ -62,13 +63,16 @@ async function computeExpected(
   })
   const cashSales = cashPayments._sum.amount ?? 0
   const cashTips = cashPayments._sum.tip ?? 0
+  const changeGiven = cashPayments._sum.changeGiven ?? 0
   const paidIn = entries
     .filter((e) => e.type === 'paid_in')
     .reduce((sum, e) => sum + e.amount, 0)
   const paidOut = entries
     .filter((e) => e.type === 'paid_out')
     .reduce((sum, e) => sum + e.amount, 0)
-  return round2(session.openingFloat + cashSales + cashTips + paidIn - paidOut)
+  return round2(
+    session.openingFloat + cashSales + cashTips - changeGiven + paidIn - paidOut,
+  )
 }
 
 /** Fire-and-forget audit row ('drawer.*' is not in lib/audit's union and
