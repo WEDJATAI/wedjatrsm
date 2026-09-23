@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiFetch } from '@/lib/api'
+import { haptic, sndTap } from '@/lib/feedback'
 import { formatCurrency } from '@/lib/format'
 import { localizedName, useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -21,6 +22,18 @@ const COURSE_ICONS: Record<CourseKey, LucideIcon> = {
   main: UtensilsCrossed,
   dessert: IceCreamCone,
   drink: Coffee,
+}
+
+/**
+ * R25: warm per-course medallion tints — the COLOR is the category label for
+ * staff who don't read (starter=green, main=amber, dessert=pink, drink=teal).
+ * Kept as full literal class strings so Tailwind's scanner can see them.
+ */
+const COURSE_MEDALLIONS: Record<CourseKey, string> = {
+  starter: 'bg-emerald-100 text-emerald-700',
+  main: 'bg-amber-100 text-amber-700',
+  dessert: 'bg-fuchsia-100 text-fuchsia-700',
+  drink: 'bg-teal-100 text-teal-700',
 }
 
 /** localStorage key holding the waiter's favorite product ids (R8). */
@@ -312,6 +325,10 @@ function ProductTile({
   soldOutPending?: boolean
 } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
   const { t, lang } = useI18n()
+  // R25: per-tile photo failure flag — a broken/absent image silently
+  // degrades to the icon-medallion layout instead of a broken-image glyph.
+  const [imgFailed, setImgFailed] = useState(false)
+  const showPhoto = Boolean(product.imageUrl) && !imgFailed
   const course = guessCourse(product)
   const Icon = COURSE_ICONS[course]
   // R13: manual 86 flag OR stock-tracked exhaustion both disable the tile
@@ -332,6 +349,90 @@ function ProductTile({
     (g) => g.active && g.modifiers.some((m) => m.active),
   )
 
+  // R8: allergen/dietary chips — shared by both tile layouts (centered on
+  // medallion tiles, start-aligned under a photo band).
+  const chipsRow =
+    (allergens.length > 0 || dietary.length > 0) && (
+      <span
+        className={cn('flex w-full flex-wrap items-center gap-1', !showPhoto && 'justify-center')}
+      >
+        {allergens.slice(0, 2).map((a) => (
+          <span
+            key={`al-${a}`}
+            title={allergenTitle}
+            className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+          >
+            {t(`allergen.${a}`)}
+          </span>
+        ))}
+        {allergens.length > 2 && (
+          <span
+            title={allergenTitle}
+            className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+          >
+            +{allergens.length - 2}
+          </span>
+        )}
+        {dietary.slice(0, 2).map((d) => (
+          <span
+            key={`dt-${d}`}
+            title={dietaryTitle}
+            className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
+          >
+            {t(`dietary.${d}`)}
+          </span>
+        ))}
+        {dietary.length > 2 && (
+          <span
+            title={dietaryTitle}
+            className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
+          >
+            +{dietary.length - 2}
+          </span>
+        )}
+      </span>
+    )
+
+  // R8/R13: status badges — manual 86 flag, options affordance, stock
+  // counters. Inline in the footer row on medallion tiles; right-aligned
+  // under the name row on photo tiles (where the price moved up a row).
+  const badges = (
+    <>
+      {manualSoldOut && (
+        <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
+          {t('pos.86')}
+        </Badge>
+      )}
+      {hasOptions && (
+        <Badge
+          variant="outline"
+          className="gap-1 border-primary/40 px-1.5 text-[10px] text-primary"
+          title={t('pos.options')}
+        >
+          <SlidersHorizontal className="size-3" aria-hidden />
+          {t('pos.options')}
+        </Badge>
+      )}
+      {product.isStockable && (
+        <span>
+          {soldOut ? (
+            <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
+              {t('pos.soldOut')}
+            </Badge>
+          ) : lowStock ? (
+            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+              {t('pos.lowStock', { qty: product.stock })}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-muted-foreground">
+              {t('pos.left', { qty: product.stock })}
+            </Badge>
+          )}
+        </span>
+      )}
+    </>
+  )
+
   return (
     <div className="relative">
       <Button
@@ -339,108 +440,102 @@ function ProductTile({
         variant="outline"
         disabled={soldOut}
         aria-disabled={soldOut}
-        onClick={() => onAdd(product)}
+        onClick={() => {
+          // R25: instant ear + touch confirmation the moment the tile goes
+          // down — staff who can't read fluently still feel the press.
+          sndTap()
+          haptic(8)
+          onAdd(product)
+        }}
         className={cn(
-          'h-auto min-h-[96px] w-full flex-col items-start justify-between gap-1.5 rounded-xl border-border bg-white p-3 text-start shadow-sm transition active:scale-95',
-          'hover:border-primary/50 hover:bg-primary/[0.04] hover:shadow',
+          // h-full equalizes tiles inside a grid row (photo tiles run taller
+          // than medallion tiles); min-h keeps the comfortable tap floor;
+          // whitespace-normal lets the bigger text-base names wrap to the
+          // line clamp (the Button base ships whitespace-nowrap).
+          'h-full min-h-[116px] w-full flex-col rounded-xl border-border bg-white text-start shadow-sm transition active:scale-95',
+          'whitespace-normal hover:border-primary/50 hover:bg-primary/[0.04] hover:shadow',
           soldOut && 'pointer-events-none cursor-not-allowed opacity-50',
+          showPhoto
+            ? // photo tile: the 4:3 band sits flush against the tile border
+              'justify-start gap-0 p-0'
+            : // medallion tile: header top / price footer bottom (like before)
+              'justify-between gap-1.5 p-3 pt-4',
         )}
         {...rest}
       >
-        <span className="flex w-full items-start justify-between gap-1 pe-9">
-          <span className="min-w-0 flex-1">
-            <span className="line-clamp-2 text-sm font-medium leading-tight">{label}</span>
-            {showEnglishHint && (
-              <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400 line-clamp-1">
-                {product.name}
-              </span>
-            )}
-          </span>
-          <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground/70" aria-hidden />
-        </span>
-
-        {(allergens.length > 0 || dietary.length > 0) && (
-          <span className="flex w-full flex-wrap items-center gap-1">
-            {allergens.slice(0, 2).map((a) => (
-              <span
-                key={`al-${a}`}
-                title={allergenTitle}
-                className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
-              >
-                {t(`allergen.${a}`)}
-              </span>
-            ))}
-            {allergens.length > 2 && (
-              <span
-                title={allergenTitle}
-                className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
-              >
-                +{allergens.length - 2}
-              </span>
-            )}
-            {dietary.slice(0, 2).map((d) => (
-              <span
-                key={`dt-${d}`}
-                title={dietaryTitle}
-                className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
-              >
-                {t(`dietary.${d}`)}
-              </span>
-            ))}
-            {dietary.length > 2 && (
-              <span
-                title={dietaryTitle}
-                className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
-              >
-                +{dietary.length - 2}
-              </span>
-            )}
-          </span>
+        {showPhoto && (
+          // R25 photo band — recognition by PICTURE. Full-width 4:3 header;
+          // onError flips the tile to the icon-medallion layout below.
+          <img
+            src={product.imageUrl ?? ''}
+            alt={label}
+            onError={() => setImgFailed(true)}
+            loading="lazy"
+            decoding="async"
+            className="aspect-[4/3] w-full rounded-t-xl object-cover"
+          />
         )}
 
-        <span className="flex w-full items-center justify-between gap-1">
-          <span className="text-sm font-semibold tabular-nums text-primary">
-            {formatCurrency(product.price)}
-          </span>
-          <span className="flex min-w-0 items-center gap-1">
-            {manualSoldOut && (
-              <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
-                {t('pos.86')}
-              </Badge>
-            )}
-            {hasOptions && (
-              <Badge
-                variant="outline"
-                className="gap-1 border-primary/40 px-1.5 text-[10px] text-primary"
-                title={t('pos.options')}
-              >
-                <SlidersHorizontal className="size-3" aria-hidden />
-                {t('pos.options')}
-              </Badge>
-            )}
-            {product.isStockable && (
-              <span>
-                {soldOut ? (
-                  <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
-                    {t('pos.soldOut')}
-                  </Badge>
-                ) : lowStock ? (
-                  <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
-                    {t('pos.lowStock', { qty: product.stock })}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-muted-foreground">
-                    {t('pos.left', { qty: product.stock })}
-                  </Badge>
+        {showPhoto ? (
+          // ── photo body: compact — name + price share one row ──────────
+          <span className="flex w-full flex-1 flex-col justify-between gap-1.5 p-3 pt-2.5">
+            <span className="flex w-full items-start justify-between gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="line-clamp-2 text-base font-semibold leading-tight">{label}</span>
+                {showEnglishHint && (
+                  <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
+                    {product.name}
+                  </span>
                 )}
               </span>
-            )}
+              <span className="shrink-0 pt-0.5 text-lg font-bold tabular-nums text-primary">
+                {formatCurrency(product.price)}
+              </span>
+            </span>
+            {chipsRow}
+            <span className="flex w-full flex-wrap items-center justify-end gap-1">{badges}</span>
           </span>
-        </span>
+        ) : (
+          // ── medallion body: the R24 team-wall language — one BIG colorful
+          //    icon as the hero, the name centered beneath it, the price as
+          //    the bottom anchor. The centered column also keeps the icon
+          //    clear of both corner toggles on every grid width. ──────────
+          <>
+            <span className="flex w-full flex-col items-center gap-1.5 text-center">
+              <span
+                className={cn(
+                  'grid size-12 shrink-0 place-items-center rounded-xl',
+                  COURSE_MEDALLIONS[course],
+                )}
+                aria-hidden
+              >
+                <Icon className="size-6" />
+              </span>
+              <span className="flex w-full flex-col items-center gap-0.5">
+                <span className="w-full text-center text-base font-semibold leading-tight line-clamp-2">
+                  {label}
+                </span>
+                {showEnglishHint && (
+                  <span className="w-full truncate text-center text-[11px] leading-tight text-stone-400">
+                    {product.name}
+                  </span>
+                )}
+              </span>
+            </span>
+            {chipsRow}
+            <span className="flex w-full items-center justify-between gap-1">
+              <span className="text-lg font-bold tabular-nums text-primary">
+                {formatCurrency(product.price)}
+              </span>
+              <span className="flex min-w-0 items-center gap-1">{badges}</span>
+            </span>
+          </>
+        )}
       </Button>
 
       {/* R8: favorite star — sibling of the tile button (valid HTML), top-end
-          corner. stopPropagation keeps the tap from adding the item. */}
+          corner. stopPropagation keeps the tap from adding the item. Over a
+          photo band it gets a soft white pill so the glyph stays visible. */}
       <button
         type="button"
         aria-pressed={favorite}
@@ -454,6 +549,7 @@ function ProductTile({
           favorite
             ? 'text-amber-500 hover:bg-amber-100'
             : 'text-stone-300 hover:bg-primary/10 hover:text-amber-400',
+          showPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
         )}
       >
         <Star className={cn('size-5', favorite && 'fill-amber-400 text-amber-500')} aria-hidden />
@@ -481,6 +577,7 @@ function ProductTile({
               ? 'text-rose-600 hover:bg-rose-100'
               : 'text-stone-300 hover:bg-rose-100 hover:text-rose-500',
           soldOut && !manualSoldOut && 'opacity-30 cursor-not-allowed',
+          showPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
         )}
       >
         {manualSoldOut ? (

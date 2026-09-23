@@ -102,6 +102,11 @@ type KitchenOrderCardProps = {
   stationFilter: StationFilter
   pendingItemId: number | null
   onUpdateItemStatus: (itemId: number, status: ItemStatus) => void
+  /** R25: true for 12s after this order first appears on the board —
+   *  paints an unmistakable amber attention ring while the parent plays
+   *  the new-order chime (kitchen staff who can't read fluently still
+   *  SEE that fresh work arrived). */
+  highlight?: boolean
 }
 
 export function KitchenOrderCard({
@@ -111,6 +116,7 @@ export function KitchenOrderCard({
   stationFilter,
   pendingItemId,
   onUpdateItemStatus,
+  highlight = false,
 }: KitchenOrderCardProps) {
   const { t, lang } = useI18n()
   const minutes = elapsedMinutes(order.createdAt)
@@ -132,6 +138,13 @@ export function KitchenOrderCard({
         'flex flex-col gap-3 rounded-xl border bg-zinc-900 p-4',
         urgencyBorder(minutes),
         completed && 'opacity-50',
+        // R25: new-order attention treatment — thick amber ring + glow +
+        // a gentle pulse. Listed LAST so twMerge lets it win cleanly over
+        // the calm urgency border; `relative z-10` (grid items honour
+        // z-index without position) lifts the glow above neighbouring
+        // cards so it can't be painted over.
+        highlight &&
+          'relative z-10 animate-pulse border-amber-400 ring-4 ring-amber-400 shadow-[0_0_32px_rgba(251,191,36,0.35)]',
       )}
     >
       {/* Table + order meta + elapsed timer */}

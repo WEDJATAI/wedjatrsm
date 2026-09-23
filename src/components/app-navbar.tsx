@@ -12,6 +12,7 @@ import {
   CircleHelp,
   CircleDollarSign,
   ClipboardCheck,
+  House,
   Languages,
   LayoutDashboard,
   LogOut,
@@ -50,12 +51,14 @@ import { startTour } from '@/components/tour/tour-bus'
 import { PersonSwitcher } from '@/components/person-switcher'
 import { cn } from '@/lib/utils'
 
-type NavItem = { view: string; permission: string; icon: LucideIcon }
+type NavItem = { view: string; permission: string; icon: LucideIcon; always?: boolean }
 
 type LocalNavItem = { view: string; label: string; icon: LucideIcon }
 
-/** first-class tabs (shown directly on the bar) */
+/** first-class tabs (shown directly on the bar) — R25: the Launcher Home
+ *  leads on every device (always visible, no permission gate) */
 const MAIN_ITEMS: NavItem[] = [
+  { view: 'home', permission: 'home', icon: House, always: true },
   { view: 'pos', permission: 'pos', icon: Utensils },
   { view: 'kitchen', permission: 'kitchen', icon: ChefHat },
   { view: 'dashboard', permission: 'dashboard', icon: LayoutDashboard },
@@ -110,12 +113,13 @@ export default function AppNavbar({
 
   const isAdmin = user.role === 'admin'
   const perms = user.permissions ?? []
-  const mainNav = MAIN_ITEMS.filter((item) => isAdmin || perms.includes(item.permission))
+  const mainNav = MAIN_ITEMS.filter(
+    (item) => isAdmin || item.always || perms.includes(item.permission),
+  )
   const adminMenu = ADMIN_MENU.filter((item) => isAdmin || perms.includes(item.permission))
   const hasMenu = adminMenu.length > 0
-  const homeView = isAdmin
-    ? 'dashboard'
-    : (mainNav[0]?.view ?? adminMenu[0]?.view ?? 'pos')
+  // R25: the brand button goes to the Launcher Home (the in-app Team Wall)
+  const homeView = 'home'
 
   const roleLabel = user.role === 'custom' ? (user.roleName ?? t('role.custom')) : t(`role.${user.role}`)
   const initials =

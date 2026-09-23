@@ -36,6 +36,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { apiFetch, fetcher, setSessionToken } from '@/lib/api'
+import { sndDigit, sndError, sndIn, sndOut, haptic } from '@/lib/feedback'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import type { SessionUser } from '@/lib/types'
@@ -129,51 +130,10 @@ function formatWorked(minutes: number): string {
   return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
 }
 
-// ── WebAudio feedback (no assets — pure oscillators) ─────────────────
+// ── WebAudio feedback — R25: moved verbatim to the shared lib ────────
+// (@/lib/feedback) so every screen speaks the same sound language.
 // Green chime for clock-in, lower tone for clock-out, buzz for errors:
 // staff who can't read still get instant confirmation by EAR.
-let audioCtx: AudioContext | null = null
-
-function tone(freqs: number[], duration = 0.09, type: OscillatorType = 'sine', gain = 0.1) {
-  try {
-    if (!audioCtx) {
-      const Ctor =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!Ctor) return
-      audioCtx = new Ctor()
-    }
-    void audioCtx.resume()
-    let t = audioCtx.currentTime
-    for (const f of freqs) {
-      const osc = audioCtx.createOscillator()
-      const g = audioCtx.createGain()
-      osc.type = type
-      osc.frequency.value = f
-      g.gain.setValueAtTime(gain, t)
-      g.gain.exponentialRampToValueAtTime(0.0001, t + duration)
-      osc.connect(g).connect(audioCtx.destination)
-      osc.start(t)
-      osc.stop(t + duration)
-      t += duration * 0.85
-    }
-  } catch {
-    // audio is a bonus — never break the flow over it
-  }
-}
-
-const sndDigit = () => tone([660], 0.06, 'sine', 0.06)
-const sndError = () => tone([170, 140], 0.14, 'sawtooth', 0.08)
-const sndIn = () => tone([523.25, 783.99], 0.12, 'sine', 0.12) // C5 → G5 up
-const sndOut = () => tone([783.99, 523.25], 0.12, 'sine', 0.12) // G5 → C5 down
-
-function haptic(pattern: number | number[]) {
-  try {
-    navigator.vibrate?.(pattern)
-  } catch {
-    // ignore
-  }
-}
 
 // ─── Component ───────────────────────────────────────────────────────
 export default function TeamWall({ onLogin }: { onLogin: () => void }) {

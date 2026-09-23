@@ -15,6 +15,7 @@ import { useAppSettings } from '@/lib/use-settings'
 import TeamWall from '@/components/auth/team-wall'
 import AppNavbar from '@/components/app-navbar'
 import MobileShell from '@/components/mobile/mobile-shell'
+import LauncherView from '@/components/home/launcher-view'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { IdleLogoutWatcher } from '@/components/idle-logout-watcher'
 import GuidedTour from '@/components/tour/guided-tour'
@@ -47,6 +48,7 @@ import IntegrationsView from '@/components/admin/integrations-view'
 import SettingsView from '@/components/admin/settings-view'
 
 type View =
+  | 'home'
   | 'pos'
   | 'kitchen'
   | 'dashboard'
@@ -72,8 +74,9 @@ type View =
   | 'integrations'
   | 'settings'
 
-/** which module permission each view requires */
+/** which module permission each view requires ('home' is special-cased — always allowed) */
 const VIEW_PERMISSION: Record<View, string> = {
+  home: 'home',
   pos: 'pos',
   kitchen: 'kitchen',
   dashboard: 'dashboard',
@@ -125,8 +128,11 @@ const ADMIN_VIEWS: View[] = [
   'settings',
 ]
 
-/** priority order used to pick the default view from the user's permissions */
+/** priority order used to pick the default view from the user's permissions
+ * (R25: 'home' — the Launcher — is the landing screen for everyone; this
+ * list now only feeds deep-link fallbacks) */
 const VIEW_PRIORITY: View[] = [
+  'home',
   'pos',
   'kitchen',
   'dashboard',
@@ -160,6 +166,8 @@ function defaultView(user: SessionUser): View {
 }
 
 function isViewAllowed(user: SessionUser, view: View): boolean {
+  // R25: the Launcher Home is everyone's landing screen — no permission gate.
+  if (view === 'home') return true
   if (user.role === 'admin') return true
   const perms = user.permissions ?? []
   return perms.includes(VIEW_PERMISSION[view])
@@ -215,7 +223,9 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
   // #/reports… — the POS appends sub-hashes like #/pos/order/12, owned by
   // PosView). A deep-linked/refreshed hash is honored when the user is
   // allowed to see it, otherwise we fall back to their default view.
-  const [view, setViewState] = useState<View>(() => viewFromHash(user) ?? defaultView(user))
+  // R25: sign-in lands on the Launcher Home (the Team Wall's in-app twin)
+  // unless a valid deep-link hash says otherwise.
+  const [view, setViewState] = useState<View>(() => viewFromHash(user) ?? 'home')
 
   // First-load URL normalization ONLY (the view state itself was already
   // resolved in the lazy initializer — this effect never calls setState
@@ -265,6 +275,8 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
 
   const content = useMemo(() => {
     switch (allowed) {
+      case 'home':
+        return <LauncherView user={user} onNavigate={setView} />
       case 'kitchen':
         return <KitchenView />
       case 'dashboard':
@@ -314,7 +326,7 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
       default:
         return null
     }
-  }, [allowed, setView])
+  }, [allowed, setView, user])
 
   // ── R15: mobile branch — role-adaptive portal shell ──
   // The Waiter Portal is the mobile POS surface and owns its own state

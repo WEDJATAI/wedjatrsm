@@ -1767,3 +1767,64 @@ Work Log:
 
 Stage Summary:
 - Team Wall is LIVE on production end-to-end (UI + APIs + Neon attendance writes). Cloud Demo left clocked-in intentionally as a live demo of the green badge.
+---
+Task ID: 25-d
+Agent: subagent (full-stack) — KDS new-order sound + highlight
+Task: KDS speaks the R24 Team Wall sound language — new orders ring (sndAlert), buzz (haptic) and glow (12s amber ring); header sound toggle persisted in localStorage.
+
+Work Log:
+- Read worklog (global conventions + Task 24), r25 dict (keys already present: kds.soundOn/soundOff/newOrderAlert), @/lib/feedback (sndAlert triple chime, sndTap, haptic), src/lib/i18n (t is useCallback-stable per lang), src/lib/utils (cn = clsx + twMerge).
+- kitchen-view.tsx — NEW-ORDER DETECTION: seenOrderIdsRef (Set<number> | null) primes on the FIRST data snapshot (no chime for pre-existing orders); afterwards every snapshot is diffed by order id — unseen ids = new orders → sndAlert() (only when soundOn) + toast(t('kds.newOrderAlert')) (max 1 per batch) + haptic([30,50,30]) (silent, fires even muted) + 12s entry in highlightedIds state. Per-id removal timers tracked in highlightTimersRef Map, all cancelled on unmount. Effect deps [data, soundOn, t] — re-runs from sound/lang toggles are no-ops (id diff is empty). Detection reads the raw query `data`, NOT the course/station-filtered view, so client-side filters can never fake a "new" order; ids are only ever ADDED to the seen-set so re-appearing ids can't re-fire either.
+- kitchen-view.tsx — SOUND TOGGLE: size-11 pill-styled button (Volume2/VolumeX, aria-pressed, title+aria-label from kds.soundOn/kds.soundOff) between clock and course pills; active state mirrors the amber course pill exactly (border-amber-500 bg-amber-500 text-zinc-950), muted state mirrors inactive pills (border-zinc-700 …). Persisted to localStorage 'rms-kds-sound' ('1' on / '0' muted, default ON) via SSR-safe lazy useState initializer (typeof window + try/catch). Re-enabling plays a sndTap so staff can audibly confirm sound is back; disabling is silent by definition.
+- kitchen-order-card.tsx — optional `highlight?: boolean` prop (default false) worn by the root <article>: `relative z-10 animate-pulse border-amber-400 ring-4 ring-amber-400 shadow-[0_0_32px_rgba(251,191,36,0.35)]` listed LAST in cn() so twMerge wins over the urgency border; relative z-10 keeps the glow above neighbouring grid cards. Everything else in the card untouched (status buttons, course/station dimming, timers, tick).
+- Regression check: 3s polling, optimistic status mutations (setQueryData writes carry unchanged ids → empty diff → no chime), course/station filters, oldest-first sort + served sink all untouched — detection is purely additive.
+- Verified: `bun run lint` → 0 findings (exit 0); `bunx tsc --noEmit` → 0 errors in kitchen files (remaining repo errors are pre-existing in unrelated scripts/API files owned by other tasks); dev.log shows clean compiles, no errors.
+
+Stage Summary:
+- Files touched: src/components/kitchen/kitchen-view.tsx (+~80 lines), src/components/kitchen/kitchen-order-card.tsx (+7 lines). No other files, no dict edits, no page.tsx, no packages.
+- Kitchen staff now HEAR new work (triple WebAudio chime + one toast, only when sound on), FEEL it (haptic [30,50,30]) and SEE it (12s amber ring+glow+pulse on the new card) — the R24 zero-reading promise extended to the kitchen.
+- Mute is one tap away, persists across reloads, and mutes only the chime/toast — the amber ring and haptics stay so muted ≠ invisible.
+- Lint: 0 findings. TypeScript: strict-clean for both touched files.
+
+---
+Task ID: 25-c
+Agent: subagent (full-stack) — POS tile visual upgrade
+Task: R25 — make the POS product grid recognizable by IMAGE, COLOR and SIZE (R24 Team-Wall design language) instead of by reading.
+
+Work Log:
+- Read worklog global conventions + Task 24 (Team Wall design language), src/components/pos/product-grid.tsx, pos-utils (guessCourse/CourseKey), lib/types (Product.imageUrl), lib/feedback (sndTap/haptic — already built), team-wall.tsx card patterns (centered hero icon, rounded-2xl, active:scale, corner badges overlay).
+- API CHECK (no change needed): GET /api/products uses `include` + serializeProduct spreading the full row → `imageUrl` is ALREADY returned to the POS; pos-view queries `/api/products?sellable=1` and passes products straight into ProductGrid. Verified against prisma schema (imageUrl @map("image_url") exists).
+- DB CHECK: `SELECT name, COALESCE(image_url,'') FROM products` (via bun:sqlite — sqlite3 CLI absent; column is snake_case `image_url`) → 0 of all products have an imageUrl. Per instructions: did NOT seed; the medallion fallback carries the design. (Note: orphan public/dishes/*.png exist from an old experiment, unreferenced in src.)
+- ProductTile rewrite (only component touched in the file; ProductGrid/search/pills/favorites/86-mutation untouched):
+  · PHOTO TILES: when imageUrl is set and hasn't failed → `aspect-[4/3] w-full rounded-t-xl object-cover` header band (plain <img> — @next/next/no-img-element is OFF in eslint.config.mjs, and next/image can't take arbitrary admin URLs without remotePatterns), alt = localized product name, loading="lazy" decoding="async"; compact body below: name (text-base font-semibold) + price (text-lg font-bold tabular-nums text-primary) on ONE row, chips, right-aligned badges. Button goes p-0 gap-0 so the band sits flush under the border.
+  · GRACEFUL FALLBACK: per-tile `useState(false)` + onError → showPhoto flips false and the tile re-renders as the icon-medallion layout (no broken-image glyph ever).
+  · NO-PHOTO TILES (the common case): small gray corner icon replaced by a BIG `size-12 rounded-xl` medallion with literal per-course tint classes in `COURSE_MEDALLIONS: Record<CourseKey,string>` (starter=emerald-100/emerald-700, main=amber, dessert=fuchsia, drink=teal) holding the course icon at size-6. Medallion+name centered like the R24 team-wall faces — the centered column also stays clear of both 44px corner toggles (star top-end / 86 top-start) on every grid width down to 2-col 320px, and gives the name the FULL tile width (old layout lost 36px to the star's pe-9). Name text-sm→text-base font-semibold, price text-sm→text-lg font-bold.
+  · KEPT EVERYTHING: favorites star toggle (top-end), "86" sold-out toggle (top-start, optimistic mutation + undo), allergen/dietary chips (max 2 + "+n", titles), options badge, stock badges (sold-out/low/left), sold-out disabled+pointer-events-none+opacity-50, active:scale-95, Arabic secondary name line, bilingual search/category/favorites pills, grid-cols-2 sm:grid-cols-3 xl:grid-cols-4.
+  · FEEDBACK: tile onClick now calls sndTap() + haptic(8) from '@/lib/feedback' before onAdd(product) — instant ear+touch confirmation for non-reading staff.
+  · Visual polish (additive only): h-full on the tile button so tiles equalize per grid row (photo tiles are taller — no ragged bottoms), whitespace-normal (Button base ships nowrap; needed for 2-line clamped names at text-base), soft white/85 backdrop-blur pill on the corner toggles WHEN a photo is showing so the glyphs stay visible over arbitrary photos.
+- VERIFICATION: `bun run lint` → 0 findings (exit 0). `bunx tsc --noEmit` → 0 errors in product-grid.tsx/pos-view.tsx (remaining repo errors are pre-existing in other agents' files). dev.log: clean `✓ Compiled` after both edits, no errors. No API/schema/page.tsx changes; no packages; no tests; no git.
+
+Stage Summary:
+- Files changed: src/components/pos/product-grid.tsx ONLY (imports + COURSE_MEDALLIONS constant + ProductTile component).
+- imageUrl was ALREADY in the products API payload (serializeProduct spreads the full row) — no API change required; seeded products have ZERO images (medallion layout is the live design; photo band activates the moment an admin sets an image URL, with onError fallback to the medallion).
+- POS menu is now recognition-first: picture > colored medallion > big price, with tap sound + haptic on every add; lint 0 findings.
+---
+Task ID: 25
+Agent: main (Z.ai Code) — COO / CTO / Creative Solutions Expert
+Task: R25 — user instruction: "proceed implementing and high scaling and upgrading UI as we did with the authentication" — scale the R24 Team Wall zero-reading design language platform-wide.
+
+Work Log:
+- 25-prep: round-start snapshot refresh (35 tables, 1,645 rows, integrity ok) + dev health check (stale "Failed to start server" on dev.log line 1 is pre-round; server served 200s throughout).
+- COO AUDIT: post-wall gaps — (1) sign-in dropped staff straight into dense screens (POS/dashboard) with no recognition-style bridge; (2) POS product tiles were text-first (small names, tiny corner icons); (3) KDS was silent — kitchen staff had to NOTICE new orders visually; (4) feedback sounds were private to the wall component.
+- 25-a SHARED FEEDBACK LIB: src/lib/feedback.ts — Team Wall's WebAudio synth extracted verbatim + new platform cues (sndTap, sndSuccess, sndAlert triple-chime for new work). team-wall.tsx refactored to import it (zero behavior change; regression: wall PIN/celebration flows E2E-green).
+- 25-b LAUNCHER HOME (flagship): src/components/home/launcher-view.tsx + i18n dict/r25.ts (EN/AR). Sign-in now lands on a colorful icon-tile launcher — the in-app Team Wall: warm deterministic gradient tiles (no blue/indigo), giant icons, bilingual plain-words sub-labels ("Take orders"/"خد الطلبات"), LIVE badges (open orders, items to prepare, low stock, on-shift team count — shared TanStack query keys so they dedupe with the views), greeting hero with wall-style initials avatar + live clock + green on-shift badge, tap feedback tick + haptic. Waiter = one giant POS tile; admin = 3 groups (Work / Manage / Team & System). WIRING: page.tsx 'home' view (always allowed, landing unless deep-linked hash), navbar permanent Home tab + brand→home, mobile-shell Home tab leads every role's bottom bar (waiter: Home·Tables·My Orders·More).
+- 25-c POS PRODUCT TILES (subagent, full-stack): visual-first redesign — per-course color medallions (starter emerald/main amber/dessert fuchsia/drink teal, size-12), name text-base semibold, price text-lg bold; photo band support (imageUrl already flows from API; 0 seeded products have images today — medallion layout is the live design, photo tiles auto-activate when an admin sets a URL; per-tile onError fallback); sndTap+haptic on add; ALL existing features kept (favorites star, 86 toggle, allergen chips, options badge, stock badges, Arabic hint, sold-out disabling).
+- 25-d KDS ATTENTION SYSTEM (subagent, full-stack): new-order detection in kitchen-view (first snapshot primes seen-ids; later diffs fire sndAlert + haptic + one "New order!" toast + 12s amber ring on the card; 3-layer false-positive guards: raw-data effect, add-only seen-set, unchanged-id optimistic mutations), sound toggle in header (Volume2/VolumeX, persisted localStorage rms-kds-sound, default ON), kitchen-order-card optional highlight prop (amber ring-4 + glow, twMerge-clean).
+- E2E (agent-browser, 11 screenshots r25-01..11 + 4 VLM verifications): wall PIN → person picker → waiter launcher (giant POS tile) → POS → new tiles VLM-verified (medallions + big typography) → add + send to kitchen (0 console errors) → admin launcher VLM-verified (3 groups + live badges POS 5 / Inventory 1 / Attendance 2) → two-tab KDS test: order sent from tab B rang tab A (toast + amber ring VLM-verified) → sound toggle + localStorage persistence (0↔1) → mobile 390px admin launcher EN + AR RTL VLM-verified (2-col grid, mirrored) → mobile waiter AR flow end-to-end (wall → PIN → شاشتك → person → launcher, tabs الرئيسية·الطاولات·طلباتي·المزيد).
+- GATES: ESLint 0 findings; dev.log clean this round; snapshot refreshed post-E2E (1,649 rows — +4 from E2E orders).
+
+Stage Summary:
+- The app now speaks the Team Wall language end-to-end: recognition-tile navigation (Launcher Home), visual-first menu (POS medallion/photo tiles), and ears-open operations (KDS new-order chime + glow). One shared feedback lib (@/lib/feedback) is the platform sound standard.
+- No schema changes, no new packages, no API contract changes (works on SQLite local + Neon cloud + desktop unchanged).
+- Landing behavior change (deliberate, per instruction): sign-in lands on Launcher Home instead of the role's default module; deep links (#/pos, #/kitchen…) still work; navbar brand + permanent Home tab return there.
+- Evidence: screenshots/r25-01..11.png (tracked, r24 policy); subagent mirrors agent-ctx/25-c-subagent.md + agent-ctx/25-d-subagent-full-stack.md.

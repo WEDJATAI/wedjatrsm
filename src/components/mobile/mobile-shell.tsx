@@ -28,6 +28,7 @@ import {
   Check,
   CircleDollarSign,
   ClipboardList,
+  House,
   Languages,
   LayoutDashboard,
   LogOut,
@@ -71,6 +72,7 @@ import WaiterPortal, { type WaiterPortalTab } from '@/components/mobile/waiter-p
 
 /** view name → nav icon (mirrors app-navbar's MAIN_ITEMS + ADMIN_MENU). */
 const VIEW_ICONS: Record<string, LucideIcon> = {
+  home: House,
   pos: Utensils,
   kitchen: ChefHat,
   dashboard: LayoutDashboard,
@@ -189,24 +191,35 @@ export default function MobileShell({
     [openOrdersData, user.id],
   )
 
-  // Role-adaptive tab set.
+  // Role-adaptive tab set — R25: every set leads with the Launcher Home
+  // (the in-app Team Wall: tap a big tile to start working).
   const tabs = useMemo<MobileTab[]>(() => {
+    const home: MobileTab = { kind: 'view', view: 'home', label: t('nav.home'), icon: House }
     const more: MobileTab = { kind: 'more', label: t('m.more'), icon: Settings2 }
     if (waiterLike) {
       return [
+        home,
         { kind: 'waiter-tab', key: 'tables', label: t('m.tables'), icon: UtensilsCrossed },
         { kind: 'waiter-tab', key: 'orders', label: t('m.myOrders'), icon: ClipboardList, badge: myOpenCount },
         more,
       ]
     }
     if (defaultViewName === 'kitchen') {
-      return [{ kind: 'view', view: 'kitchen', label: t('m.tickets'), icon: ChefHat }, more]
+      return [home, { kind: 'view', view: 'kitchen', label: t('m.tickets'), icon: ChefHat }, more]
     }
     if (defaultViewName === 'dashboard') {
-      return [{ kind: 'view', view: 'dashboard', label: t('m.home'), icon: LayoutDashboard }, more]
+      return [
+        home,
+        { kind: 'view', view: 'dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
+        more,
+      ]
     }
     const icon = VIEW_ICONS[defaultViewName] ?? LayoutDashboard
-    return [{ kind: 'view', view: defaultViewName, label: t(`nav.${defaultViewName}`), icon }, more]
+    return [
+      home,
+      { kind: 'view', view: defaultViewName, label: t(`nav.${defaultViewName}`), icon },
+      more,
+    ]
   }, [waiterLike, defaultViewName, myOpenCount, t])
 
   // More sheet groups (allowed views only, navbar grouping).
