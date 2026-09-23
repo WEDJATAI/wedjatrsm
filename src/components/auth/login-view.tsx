@@ -99,7 +99,14 @@ const REGISTER_ROLES_FALLBACK: RegisterRoleOption[] = [
   { value: 'kitchen', label: 'Kitchen' },
 ]
 
-export default function LoginView({ onLogin }: { onLogin: () => void }) {
+export default function LoginView({
+  onLogin,
+  onBackToWall,
+}: {
+  onLogin: () => void
+  /** R24: shown when rendered as the Team Wall's manager corner — a way back to the wall */
+  onBackToWall?: () => void
+}) {
   const { t } = useI18n()
   const { restaurantName } = useAppSettings()
 
@@ -580,6 +587,17 @@ export default function LoginView({ onLogin }: { onLogin: () => void }) {
 
       <div className="w-full max-w-md">
         <div className="bg-card flex w-full flex-col gap-6 rounded-xl border p-6 shadow-lg sm:p-8">
+          {/* R24: back to the Team Wall (manager corner escape hatch) */}
+          {onBackToWall && (
+            <button
+              type="button"
+              onClick={onBackToWall}
+              className="flex min-h-8 w-fit items-center gap-1.5 self-start rounded text-xs font-semibold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <LogIn className="h-3.5 w-3.5 rotate-180 rtl:rotate-0" aria-hidden />
+              {t('wall.backToWall')}
+            </button>
+          )}
           {/* Brand header — Odoo plum logo mark */}
           <div className="flex flex-col items-center gap-3 text-center">
             <span className="bg-primary text-primary-foreground grid h-12 w-12 place-items-center rounded-lg shadow-sm">

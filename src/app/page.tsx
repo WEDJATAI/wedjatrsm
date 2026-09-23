@@ -12,7 +12,7 @@ import { clearNav, currentNav, onNav, pushNav, replaceNav } from '@/lib/nav'
 import type { SessionUser } from '@/lib/types'
 import { useAppSettings } from '@/lib/use-settings'
 
-import LoginView from '@/components/auth/login-view'
+import TeamWall from '@/components/auth/team-wall'
 import AppNavbar from '@/components/app-navbar'
 import MobileShell from '@/components/mobile/mobile-shell'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -450,7 +450,7 @@ function RmsApp() {
 
   const user = session?.user
   if (isError || !user) {
-    return <LoginView onLogin={handleLogin} />
+    return <TeamWall onLogin={handleLogin} />
   }
 
   return <AppShell user={user} onLogout={handleLogout} />
