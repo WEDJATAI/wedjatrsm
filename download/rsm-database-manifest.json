@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-23T10:55:13.408Z",
+  "generatedAt": "2026-09-23T11:35:46.001Z",
   "round": "R17 — Foodics/Odoo-level upgrade: purchasing (suppliers + POs + receiving), stock counts, waste management, promotions engine w/ live POS integration, payroll + forecast, refunds restored, R9 AI copilot/briefing re-wired",
   "database": {
     "file": "rsm-platform-database.db",
@@ -97,23 +97,23 @@
   "reason": "auto-watch",
   "bytes": 614400,
   "tableCount": 35,
-  "totalRows": 1675,
+  "totalRows": 1699,
   "tables": {
     "app_settings": 12,
     "attendance": 5,
-    "audit_logs": 687,
+    "audit_logs": 692,
     "cash_drawer_entries": 2,
     "cash_drawer_sessions": 4,
     "categories": 6,
     "customers": 1,
     "floor_plans": 2,
-    "inventory_transactions": 165,
+    "inventory_transactions": 178,
     "modifier_groups": 7,
     "modifiers": 24,
     "movement_candidates": 20,
-    "order_items": 299,
-    "orders": 132,
-    "payments": 79,
+    "order_items": 300,
+    "orders": 133,
+    "payments": 83,
     "persons": 4,
     "product_modifier_groups": 14,
     "products": 49,
@@ -134,5 +134,15 @@
     "vision_table_states": 6,
     "vision_zones": 6,
     "waste_logs": 0
-  }
+  },
+  "note": "R26: Payment Pro — payments.amount_tendered + change_given (additive); snapshot includes 6 tender-carrying payments E2E-verified (change + keep-the-change flows, auto CASH-YYYYMMDD-HHMMSS-TAG references)",
+  "snapshots": [
+    {
+      "file": "rsm-platform-database.db",
+      "sizeBytes": 614400,
+      "sha256": "70ee564381c0629f41e34688cfc0947b5e367a28d00dca543b31f100c6d00c07",
+      "generatedAt": "2026-09-23T11:35:46.001Z",
+      "round": "R26"
+    }
+  ]
 }

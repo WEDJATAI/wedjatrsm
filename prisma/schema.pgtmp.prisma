@@ -318,12 +318,19 @@ model Payment {
   id        Int      @id @default(autoincrement())
   orderId   Int      @map("order_id")
   order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  method    String // 'cash' | 'card' | 'other'
+  method    String // 'cash' | 'card' | 'other' | 'loyalty'
   amount    Float
   // R8: gratuity on top of the billed amount — does NOT count toward
   // paidAmount / order closure; aggregated per server + Z-report.
   tip       Float    @default(0)
   reference String?
+  // R26 Payment Pro: what the guest actually handed over (0 = not recorded /
+  // exact). amount stays the BILL portion, so paidAmount math is untouched.
+  amountTendered Float @default(0) @map("amount_tendered")
+  // R26: change handed back to the guest from the drawer (tendered − amount
+  // when the waiter chose "give change"). Subtracted from the cash-drawer
+  // expected-cash math; printed on the receipt.
+  changeGiven    Float @default(0) @map("change_given")
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([orderId])
