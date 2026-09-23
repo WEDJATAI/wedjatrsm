@@ -1828,3 +1828,15 @@ Stage Summary:
 - No schema changes, no new packages, no API contract changes (works on SQLite local + Neon cloud + desktop unchanged).
 - Landing behavior change (deliberate, per instruction): sign-in lands on Launcher Home instead of the role's default module; deep links (#/pos, #/kitchen…) still work; navbar brand + permanent Home tab return there.
 - Evidence: screenshots/r25-01..11.png (tracked, r24 policy); subagent mirrors agent-ctx/25-c-subagent.md + agent-ctx/25-d-subagent-full-stack.md.
+
+---
+Task ID: 25 (appendix)
+Agent: main (Z.ai Code)
+Task: R25 cloud verification + publish
+
+Work Log:
+- git push d49c37c → GitHub main → Vercel deploy dpl_8x44dkHuftGoHafs9ob9cUoWHypg READY (~95s).
+- PRODUCTION E2E on https://wedjatrsm.vercel.app (Neon Postgres): Team Wall roster 6 members · Cloud Demo PIN 888888 → FINISH WORK (still on shift from r24b) → MY SCREEN → Launcher Home live on cloud ("Good morning, Cloud 👋", WORK section, giant POS tile) → POS tile → new product tiles render with EGP prices · VLM-verified polished, no glitches · 0 console errors. Screenshots r25-12..13.
+
+Stage Summary:
+- Launcher Home + POS visual tiles confirmed end-to-end on production (Neon writes, Vercel edge). PAT used as one-time push URL only.
