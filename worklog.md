@@ -1754,3 +1754,16 @@ Stage Summary:
 - No schema changes (works on SQLite local + Neon cloud + desktop unchanged); new public endpoints expose no PII and are rate-limited like the existing ones.
 - Legacy check-in/out + login endpoints untouched in behavior (refactor verified by regression).
 - Evidence: screenshots/r24-01..16.png; incident #4 fully recovered with zero data loss vs r23c HEAD.
+
+---
+Task ID: 24 (appendix)
+Agent: main (Z.ai Code)
+Task: R24 cloud verification + publish
+
+Work Log:
+- git push 18f4858 → GitHub main → Vercel auto-deploy READY/PROMOTED in ~54s (dpl_DbbzmiSx9ztJUUpuQpfmuPgbAeCF).
+- PRODUCTION E2E on https://wedjatrsm.vercel.app (Neon Postgres): roster 6 members (waiters → kitchen → admin ordering) · wall status PIN verify 200 · Cloud Demo (888888) → START WORK → "Have a great shift, Cloud!" celebration → wall now shows green ON SHIFT badge + "1 on shift now" (live invalidation on cloud). Screenshots r24-17..20.
+- Secrets scan after push: 0 matches (PAT used as one-time URL only, never stored).
+
+Stage Summary:
+- Team Wall is LIVE on production end-to-end (UI + APIs + Neon attendance writes). Cloud Demo left clocked-in intentionally as a live demo of the green badge.
