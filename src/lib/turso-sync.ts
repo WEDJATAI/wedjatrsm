@@ -139,27 +139,37 @@ export async function syncAllToTurso(): Promise<TursoSyncReport> {
       await client.execute(ddl)
     }
 
-    // 2) per table: transactional DELETE + INSERT batch, parents first
+    // 2) full refresh, FK-safe on RE-runs:
+    //    a) read all source rows first (a read error aborts before any mutation)
+    //    b) DELETE children-first (REVERSE topo order) — the schema has 10
+    //       ON DELETE RESTRICT FKs, so deleting a parent while children still
+    //       reference it would fail (this bit the very first implementation:
+    //       run #1 succeeded only because every table was still empty)
+    //    c) INSERT parents-first (forward topo order), one batch per table
     const infos = orderedModels()
+    const rowsByTable = new Map<string, Array<Record<string, unknown>>>()
     for (const info of infos) {
       const delegate = (db as Record<string, { findMany: () => Promise<Array<Record<string, unknown>>>; count: () => Promise<number> }>)[info.accessor]
       if (!delegate) throw new Error(`missing prisma delegate ${info.accessor}`)
-      const rows = await delegate.findMany()
+      rowsByTable.set(info.table, await delegate.findMany())
+    }
 
-      const statements: Array<{ sql: string; args: Array<string | number | boolean | null> }> = [
-        { sql: `DELETE FROM "${info.table}"`, args: [] },
-      ]
-      if (rows.length > 0) {
-        const colList = info.columns.map((c) => `"${c}"`).join(', ')
-        const placeholders = `(${info.columns.map(() => '?').join(', ')})`
-        for (const row of rows) {
-          const args = info.columns.map((col) => {
-            const prismaField = info.model.fields.find((f) => (f.dbName ?? f.name) === col)
-            return toSqlValue(prismaField ? row[prismaField.name] : row[col])
-          })
-          statements.push({ sql: `INSERT INTO "${info.table}" (${colList}) VALUES ${placeholders}`, args })
-        }
-      }
+    for (const info of [...infos].reverse()) {
+      await client.execute(`DELETE FROM "${info.table}"`)
+    }
+
+    for (const info of infos) {
+      const rows = rowsByTable.get(info.table) ?? []
+      if (rows.length === 0) continue
+      const colList = info.columns.map((c) => `"${c}"`).join(', ')
+      const placeholders = `(${info.columns.map(() => '?').join(', ')})`
+      const statements = rows.map((row) => ({
+        sql: `INSERT INTO "${info.table}" (${colList}) VALUES ${placeholders}`,
+        args: info.columns.map((col) => {
+          const prismaField = info.model.fields.find((f) => (f.dbName ?? f.name) === col)
+          return toSqlValue(prismaField ? row[prismaField.name] : row[col])
+        }),
+      }))
       await client.batch(statements, 'write')
       report.totalRows += rows.length
     }
