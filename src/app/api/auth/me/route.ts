@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
         roleName: user.roleName,
         personId: user.personId,
         personName: user.personName,
+        // R27: the manager (super admin) — powers his private PIN tools
+        isSuperAdmin: user.isSuperAdmin ?? false,
       },
       people: row?.people ?? [],
     })

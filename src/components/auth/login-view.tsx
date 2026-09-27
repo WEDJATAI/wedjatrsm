@@ -43,16 +43,17 @@ import { cn } from '@/lib/utils'
 
 const PIN_LENGTH = 6
 
-type DemoRole = 'admin' | 'waiter' | 'kitchen'
+type DemoRole = 'waiter' | 'kitchen'
 
+// R27: the admin account (Dr Ihab, the one super admin) is deliberately
+// NOT in the one-click demo list — his only door is the Manager corner
+// (Welcome → PIN). Staff demo accounts stay for development convenience.
 const DEMO_ACCOUNTS: [role: DemoRole, email: string, password: string, pin: string][] = [
-  ['admin', 'admin@rms.com', 'admin123', '123456'],
   ['waiter', 'waiter@rms.com', 'waiter123', '111111'],
   ['kitchen', 'kitchen@rms.com', 'kitchen123', '222222'],
 ]
 
 const DEMO_ROLE_ICONS: Record<DemoRole, typeof ShieldCheck> = {
-  admin: ShieldCheck,
   waiter: ConciergeBell,
   kitchen: ChefHat,
 }
@@ -636,7 +637,7 @@ export default function LoginView({
                     setRegName(e.target.value)
                     if (regError) setRegError(null)
                   }}
-                  aria-invalid={regError || undefined}
+                  aria-invalid={regError ? true : undefined}
                   disabled={regLoading}
                 />
               </div>
@@ -674,7 +675,7 @@ export default function LoginView({
                       setRegPin(e.target.value.replace(/\D/g, '').slice(0, 6))
                       if (regError) setRegError(null)
                     }}
-                    aria-invalid={regError || undefined}
+                    aria-invalid={regError ? true : undefined}
                     disabled={regLoading}
                   />
                 </div>
@@ -694,7 +695,7 @@ export default function LoginView({
                       setRegPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 6))
                       if (regError) setRegError(null)
                     }}
-                    aria-invalid={regError || undefined}
+                    aria-invalid={regError ? true : undefined}
                     disabled={regLoading}
                   />
                 </div>
@@ -1113,8 +1114,10 @@ export default function LoginView({
   )
 }
 
-// ── Shared 6-digit PIN keypad (login PIN tab + employee check-in) ────
-function PinKeypad({
+// ── Shared 6-digit PIN keypad (login PIN tab + employee check-in + the
+//    R27 manager sign-in corner) — exported for the manager screen ──
+export const MANAGER_PIN_LENGTH = PIN_LENGTH
+export function PinKeypad({
   value,
   loading,
   error,

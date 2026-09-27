@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Eye, EyeOff, MoreHorizontal, Pencil, Plus, TriangleAlert, UsersRound } from 'lucide-react'
+import { Eye, EyeOff, MoreHorizontal, Pencil, Plus, ShieldCheck, TriangleAlert, UsersRound } from 'lucide-react'
 
 import { PeopleRoster } from '@/components/admin/people-roster'
 import { apiFetch, fetcher } from '@/lib/api'
@@ -62,6 +62,8 @@ type AdminUser = {
   roleName: string | null
   pin: string | null
   active: boolean
+  /** R27: the manager's account — the one super admin */
+  isSuperAdmin?: boolean
   createdAt: string
   /** R19: actual people operating this account */
   people?: { id: number; name: string; active: boolean }[]
@@ -406,10 +408,20 @@ export default function UsersView() {
                             </AvatarFallback>
                           </Avatar>
                           <div className="min-w-0">
-                            <div className="font-medium">
+                            <div className="flex flex-wrap items-center gap-1.5 font-medium">
                               {u.name}
                               {isSelf ? (
                                 <span className="text-muted-foreground text-xs"> {t('admin.youTag')}</span>
+                              ) : null}
+                              {u.isSuperAdmin ? (
+                                <Badge
+                                  variant="outline"
+                                  className="gap-1 border-amber-300 bg-amber-50 text-[10px] font-semibold text-amber-800"
+                                  title={t('manager.superAdmin')}
+                                >
+                                  <ShieldCheck className="size-3" aria-hidden />
+                                  {t('manager.superAdmin')}
+                                </Badge>
                               ) : null}
                             </div>
                             <div className="text-muted-foreground text-xs">{u.email}</div>

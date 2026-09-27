@@ -34,13 +34,17 @@ async function main() {
   await db.user.deleteMany()
 
   // ── Users ─────────────────────────────────────────────────────────
+  // R27: the admin account IS the manager — Dr Ihab, the one and only
+  // super admin. He signs in through the Manager corner (Welcome + PIN
+  // only; first-time PIN 123456, changed in-app). Staff use the wall.
   const admin = await db.user.create({
     data: {
       email: 'admin@rms.com',
       passwordHash: await bcrypt.hash('admin123', 10),
-      name: 'Amina Hassan',
+      name: 'Dr Ihab',
       role: 'admin',
-      pin: '1234',
+      pin: '123456',
+      isSuperAdmin: true,
     },
   })
   const waiter = await db.user.create({
@@ -49,7 +53,7 @@ async function main() {
       passwordHash: await bcrypt.hash('waiter123', 10),
       name: 'Omar Khaled',
       role: 'waiter',
-      pin: '1111',
+      pin: '111111',
     },
   })
   await db.user.create({
@@ -58,10 +62,10 @@ async function main() {
       passwordHash: await bcrypt.hash('kitchen123', 10),
       name: 'Chef Layla',
       role: 'kitchen',
-      pin: '2222',
+      pin: '222222',
     },
   })
-  console.log('✓ users:', [admin.email, waiter.email, 'kitchen@rms.com'])
+  console.log('✓ users:', [`${admin.email} (Dr Ihab · super admin · PIN 123456)`, waiter.email, 'kitchen@rms.com'])
 
   // ── Categories (visible POS categories + a hidden ingredients group) ──
   const catStarter = await db.category.create({ data: { name: 'Starters', displayOrder: 1, prepDestination: 'kitchen' } })
@@ -402,7 +406,8 @@ async function main() {
   console.log(`✓ journal_mode=${wal[0]?.journal_mode} enabled`)
 
   console.log('Seed complete!')
-  console.log('Logins: admin@rms.com/admin123 (PIN 1234) · waiter@rms.com/waiter123 (PIN 1111) · kitchen@rms.com/kitchen123 (PIN 2222)')
+  console.log('Manager (super admin): Manager sign-in → PIN 123456 (first time) · recovery email admin@rms.com/admin123')
+  console.log('Staff: waiter@rms.com/waiter123 (PIN 111111) · kitchen@rms.com/kitchen123 (PIN 222222)')
 }
 
 main()

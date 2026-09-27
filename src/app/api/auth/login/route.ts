@@ -77,9 +77,12 @@ export async function POST(req: NextRequest) {
     let user: LoginUser | null = null
 
     if (pin) {
-      // PIN quick-login: exact match on an active user
+      // PIN quick-login: exact match on an active user.
+      // R27: the manager's PIN is NOT accepted here — the super admin
+      // signs in exclusively through the Manager corner
+      // (POST /api/auth/manager-login), never the generic doors.
       user = await db.user.findFirst({
-        where: { pin, active: true },
+        where: { pin, active: true, isSuperAdmin: false },
         include: {
           roleRecord: { select: { name: true, permissions: true, active: true } },
           people: { where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } },

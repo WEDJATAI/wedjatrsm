@@ -100,6 +100,28 @@ export const authDict: DictPair = {
     'wall.offShift': 'Off shift',
     'wall.changePerson': 'Not you? Go back',
     'wall.retry': 'Try again',
+
+    // R27 Manager sign-in — the ONE super admin's private PIN door
+    'wall.welcomeManager': 'Welcome, {name} 👋',
+    'wall.managerPinOnly': 'Enter your PIN to open your desk',
+    'manager.superAdmin': 'Super Admin',
+    'manager.defaultPinHint':
+      'First time? Your starting PIN is 123456 — you will set your own right after signing in.',
+    'manager.moreOptions': 'More sign-in options',
+    'manager.changePinTitle': 'Change my PIN',
+    'manager.changePinShort': 'My PIN',
+    'manager.changePinSub': 'Pick a 6-digit number only you know — staff PINs stay unchanged.',
+    'manager.currentPin': 'Current PIN',
+    'manager.currentPinInvalid': 'Enter your current 6-digit PIN',
+    'manager.newPin': 'New PIN',
+    'manager.savePin': 'Save PIN',
+    'manager.savingPin': 'Saving…',
+    'manager.later': 'Later',
+    'manager.pinChanged': 'PIN updated — use your new number next time',
+    'manager.sameAsOld': 'New PIN must be different from the current one',
+    'manager.defaultPinBanner':
+      'You are still using the starting PIN 123456 — set your own number now.',
+    'manager.setPinNow': 'Set my PIN',
   },
   ar: {
     'auth.title': 'تسجيل الدخول',
@@ -191,5 +213,27 @@ export const authDict: DictPair = {
     'wall.offShift': 'مش في الشغل',
     'wall.changePerson': 'مش أنت؟ ارجع',
     'wall.retry': 'حاول تاني',
+
+    // R27 دخول المدير — باب المدير العام الوحيد (الرمز السري فقط)
+    'wall.welcomeManager': 'أهلاً بيك يا {name} 👋',
+    'wall.managerPinOnly': 'اكتب رقمك السري لفتح شاشتك',
+    'manager.superAdmin': 'المدير العام',
+    'manager.defaultPinHint':
+      'أول مرة؟ الرمز الافتتاحي هو 123456 — هتحدد رقمك الخاص بعد الدخول مباشرة.',
+    'manager.moreOptions': 'طرق دخول تانية',
+    'manager.changePinTitle': 'غيّر رقمي السري',
+    'manager.changePinShort': 'رقمي السري',
+    'manager.changePinSub': 'اختار رقم من 6 أرقام انت بس اللي تعرفه — أرقام الموظفين هتفضل زي ما هي.',
+    'manager.currentPin': 'الرقم السري الحالي',
+    'manager.currentPinInvalid': 'أدخل رقمك السري الحالي (6 أرقام)',
+    'manager.newPin': 'الرقم السري الجديد',
+    'manager.savePin': 'احفظ الرقم',
+    'manager.savingPin': 'جارٍ الحفظ…',
+    'manager.later': 'لاحقاً',
+    'manager.pinChanged': 'تم تحديث الرقم — استخدم رقمك الجديد المرة الجاية',
+    'manager.sameAsOld': 'لازم الرقم الجديد يختلف عن الحالي',
+    'manager.defaultPinBanner':
+      'لسه بتستخدم الرقم الافتتاحي 123456 — حدد رقمك الخاص دلوقتي.',
+    'manager.setPinNow': 'حدد رقمي',
   },
 }

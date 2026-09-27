@@ -10,6 +10,8 @@ import { resolveRoleLabel } from '@/lib/attendance'
 // and live on-shift status. NEVER emails, password hashes or PINs.
 // Public by design: the wall is a kiosk screen; PIN verification (and its
 // rate limiting) happens on POST /api/attendance/wall.
+// R27: the super admin (the manager) is EXCLUDED — his door is the
+// Manager corner, not the staff wall.
 
 export type WallUser = {
   id: number
@@ -32,7 +34,7 @@ export async function GET() {
   try {
     const [users, openRecords] = await Promise.all([
       db.user.findMany({
-        where: { active: true, pin: { not: null } },
+        where: { active: true, pin: { not: null }, isSuperAdmin: false },
         select: {
           id: true,
           name: true,

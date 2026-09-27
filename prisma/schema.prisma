@@ -18,6 +18,10 @@ model User {
   roleRecord   CustomRole? @relation(fields: [roleId], references: [id])
   pin          String? // 6-digit quick-login / check-in PIN
   active       Boolean   @default(true)
+  // R27: the ONE super admin (the manager, Dr Ihab). Exactly one user row
+  // should ever carry this — he signs in exclusively through the Manager
+  // corner (Welcome + PIN only), never via the generic wall/PIN doors.
+  isSuperAdmin Boolean   @default(false) @map("is_super_admin")
   // R17: payroll — hourly wage (EGP) used by the payroll report (attendance
   // hours × rate). Nullable: users without a rate are excluded from payroll.
   hourlyRate   Float?    @map("hourly_rate")

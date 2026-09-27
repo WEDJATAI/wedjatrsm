@@ -55,6 +55,10 @@ export type SessionPayload = {
    *  no people registered. */
   personId: number | null
   personName: string | null
+  /** R27: set in the token when the account is the ONE super admin
+   *  (the manager). getSessionUser always refreshes it from the DB row
+   *  so promotions/demotions apply on the next request. */
+  isSuperAdmin?: boolean
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -130,6 +134,8 @@ export type SessionUserRow = {
   roleId: number | null
   roleName: string | null
   permissions: string[]
+  /** R27: the manager's account — the one super admin */
+  isSuperAdmin: boolean
   /** R19: active people registered under this account */
   people: { id: number; name: string }[]
 }
@@ -156,6 +162,7 @@ export async function loadSessionUser(userId: number): Promise<SessionUserRow | 
       user.role,
       roleRecord?.active ? roleRecord.permissions : null,
     ),
+    isSuperAdmin: user.isSuperAdmin,
     people: user.people,
   }
 }
@@ -199,6 +206,8 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
     roleName: user.roleName,
     personId,
     personName,
+    // R27: always fresh from the DB row (never trusted from the token)
+    isSuperAdmin: user.isSuperAdmin,
   }
 }
 
@@ -289,4 +298,54 @@ export function errorResponse(err: unknown): NextResponse {
   // internals) to clients. The details stay in the server log only.
   console.error('[api-error]', err)
   return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+}
+
+/**
+ * R27: the manager sign-in invariant — exactly ONE super admin (Dr Ihab).
+ *
+ * Self-healing, idempotent, safe to call on every manager-corner request:
+ *  1. a user with isSuperAdmin exists → return them as-is;
+ *  2. else the classic admin@rms.com account exists → adopt it: flag set,
+ *     renamed to the manager's name, PIN set to the first-time default
+ *     ONLY when it has no PIN yet (never overwrite a live PIN);
+ *  3. else provision a fresh manager account (Dr Ihab, PIN 123456,
+ *     random password — email/password stays as a recovery path only).
+ *
+ * A second super admin can never appear from here, and an existing PIN is
+ * never reset (that would advertise a known credential on a public GET).
+ */
+export const MANAGER_NAME = 'Dr Ihab'
+export const MANAGER_DEFAULT_PIN = '123456'
+
+export async function ensureSuperAdmin() {
+  const existing = await db.user.findFirst({
+    where: { isSuperAdmin: true },
+    orderBy: { id: 'asc' },
+  })
+  if (existing) return existing
+
+  const adopt = await db.user.findUnique({ where: { email: 'admin@rms.com' } })
+  if (adopt) {
+    return db.user.update({
+      where: { id: adopt.id },
+      data: {
+        isSuperAdmin: true,
+        role: 'admin',
+        name: MANAGER_NAME,
+        active: true,
+        ...(adopt.pin == null ? { pin: MANAGER_DEFAULT_PIN } : {}),
+      },
+    })
+  }
+
+  return db.user.create({
+    data: {
+      email: 'admin@rms.com',
+      passwordHash: await hashPassword(randomBytes(24).toString('hex')),
+      name: MANAGER_NAME,
+      role: 'admin',
+      pin: MANAGER_DEFAULT_PIN,
+      isSuperAdmin: true,
+    },
+  })
 }

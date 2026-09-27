@@ -15,6 +15,8 @@ const USER_SAFE_SELECT = {
   roleRecord: { select: { name: true, permissions: true, active: true } },
   pin: true,
   active: true,
+  // R27: the manager's account — the one super admin
+  isSuperAdmin: true,
   // R17: payroll — hourly wage (EGP/h, null = not in payroll)
   hourlyRate: true,
   createdAt: true,
@@ -31,6 +33,7 @@ type UserRowWithRole = {
   roleRecord: { name: string; permissions: string; active: boolean } | null
   pin: string | null
   active: boolean
+  isSuperAdmin: boolean
   hourlyRate: number | null
   createdAt: Date
   people: { id: number; name: string; active: boolean }[]
@@ -52,6 +55,7 @@ function serializeUser(user: UserRowWithRole) {
     ),
     pin: user.pin,
     active: user.active,
+    isSuperAdmin: user.isSuperAdmin,
     hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
     // R19: people registered under this account
@@ -114,9 +118,19 @@ export async function PUT(
 
     const existing = await db.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, roleId: true, hourlyRate: true },
+      select: { id: true, role: true, roleId: true, hourlyRate: true, isSuperAdmin: true },
     })
     if (!existing) throw new ApiError('User not found', 404)
+
+    // R27: the manager's account belongs to the manager alone — no other
+    // admin (or anyone else) may edit, re-pin, demote or deactivate the
+    // one super admin. He manages his account through his own tools.
+    if (existing.isSuperAdmin && userId !== sessionUserId) {
+      throw new ApiError(
+        'The manager account can only be modified by the manager himself',
+        403,
+      )
+    }
 
     const body = await readBody(req)
     const data: Prisma.UserUncheckedUpdateInput = {}

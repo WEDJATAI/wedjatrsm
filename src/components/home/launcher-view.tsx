@@ -26,6 +26,7 @@ import {
   CircleDollarSign,
   ClipboardCheck,
   Hand,
+  KeyRound,
   LayoutDashboard,
   Map,
   Package,
@@ -34,6 +35,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Tags,
   Truck,
   UserRound,
@@ -50,6 +52,7 @@ import { useI18n } from '@/lib/i18n'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order, SessionUser } from '@/lib/types'
+import { ManagerPinDialog } from '@/components/auth/manager-pin-dialog'
 
 // ── warm palette (deterministic per module; literals so Tailwind sees them)
 type TileDef = {
@@ -164,6 +167,7 @@ export default function LauncherView({
   const { restaurantName } = useAppSettings()
 
   const isAdmin = user.role === 'admin'
+  const isManager = user.isSuperAdmin === true
   const perms = user.permissions ?? []
   const can = useMemo(
     () => (view: string) => isAdmin || perms.includes(VIEW_PERMISSION[view] ?? ''),
@@ -222,6 +226,33 @@ export default function LauncherView({
   const me = roster?.team.find((m) => m.id === user.id)
   const onShiftCount = roster?.onShiftCount ?? 0
 
+  // ── R27: the manager's PIN status (shared key → dedupes with the
+  // sign-in screen). While he is on the starting PIN (123456) the dialog
+  // auto-opens (pure derived state — no effect) and, once dismissed, a
+  // banner stays on his home until he sets his own number. ──
+  const [manualPinOpen, setManualPinOpen] = useState(false)
+  const [autoPinDismissed, setAutoPinDismissed] = useState(false)
+  const { data: managerStatus } = useQuery({
+    queryKey: ['manager-status'],
+    queryFn: () => fetcher<{ name: string | null; usingDefaultPin: boolean }>(
+      '/api/auth/manager-login',
+    ),
+    staleTime: 30_000,
+    enabled: isManager,
+  })
+  const onDefaultPin = isManager && (managerStatus?.usingDefaultPin ?? false)
+  const pinDialogOpen = manualPinOpen || (onDefaultPin && !autoPinDismissed)
+  const openPinDialog = () => setManualPinOpen(true)
+  const handlePinDialogChange = (open: boolean) => {
+    if (open) {
+      openPinDialog()
+    } else {
+      setManualPinOpen(false)
+      setAutoPinDismissed(true) // closing the first-time dialog → banner
+    }
+  }
+  const showPinBanner = onDefaultPin && !pinDialogOpen
+
   const badges: Record<string, number> = {
     openOrders: openOrdersCount,
     pendingItems: pendingItemsCount,
@@ -277,11 +308,69 @@ export default function LauncherView({
               )}
             </p>
           </div>
-          <div className="ms-auto text-end">
-            <div className="text-3xl font-bold tabular-nums leading-none sm:text-4xl">{clockText}</div>
-            <p className="mt-1 text-xs text-muted-foreground">{t('home.tapToStart')}</p>
+          <div className="ms-auto flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              <div className="text-end">
+                <div className="text-3xl font-bold tabular-nums leading-none sm:text-4xl">{clockText}</div>
+                <p className="mt-1 text-xs text-muted-foreground">{t('home.tapToStart')}</p>
+              </div>
+              {/* R27: the manager's own PIN tool — always one tap away */}
+              {isManager && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sndTap()
+                    haptic(8)
+                    openPinDialog()
+                  }}
+                  aria-label={t('manager.changePinTitle')}
+                  title={t('manager.changePinTitle')}
+                  className={cn(
+                    'flex min-h-11 items-center gap-1.5 rounded-xl border px-3 text-sm font-semibold transition active:scale-95',
+                    onDefaultPin
+                      ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                      : 'border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  )}
+                >
+                  <KeyRound className="size-4" aria-hidden />
+                  <span className="hidden sm:inline">{t('manager.changePinShort')}</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* R27: first-time banner — still on the starting PIN 123456 */}
+        {showPinBanner && (
+          <div
+            className="flex flex-wrap items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 sm:px-6"
+            role="status"
+          >
+            <Sparkles className="size-5 shrink-0" aria-hidden />
+            <p className="min-w-0 flex-1 text-sm font-medium leading-relaxed">
+              {t('manager.defaultPinBanner')}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                sndTap()
+                haptic(8)
+                openPinDialog()
+              }}
+              className="min-h-11 shrink-0 rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+            >
+              {t('manager.setPinNow')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoPinDismissed(true)}
+              className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-medium text-amber-800/80 transition hover:text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+            >
+              {t('manager.later')}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Tile groups ── */}
@@ -321,6 +410,12 @@ export default function LauncherView({
           {t('home.tapToStart')}
         </p>
       </div>
+
+      {/* R27: the manager's change-PIN dialog (auto-opens on first visit
+          while he is still on the starting PIN) */}
+      {isManager && (
+        <ManagerPinDialog open={pinDialogOpen} onOpenChange={handlePinDialogChange} />
+      )}
     </section>
   )
 }

@@ -97,6 +97,8 @@ export const AUDIT_ACTIONS = [
   'report.dailyDigest',
   'alert.staleOrders',
   'replication.tursoSync',
+  // R27: manager sign-in — the super admin changed his own PIN
+  'manager.pinChange',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 

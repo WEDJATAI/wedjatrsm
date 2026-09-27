@@ -11,6 +11,8 @@ export type SessionUser = {
   /** R19: the actual person operating this account, else null */
   personId?: number | null
   personName?: string | null
+  /** R27: true only for the manager's account (the one super admin) */
+  isSuperAdmin?: boolean
 }
 
 /** R19: an actual staff member operating a user account. */

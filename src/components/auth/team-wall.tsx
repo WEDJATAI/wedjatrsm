@@ -10,7 +10,8 @@
 //                  FINISH WORK (red) with a live ticking hours counter.
 //   4. CELEBRATE — full-screen success (chime), auto-returns to the wall.
 // Plus “MY SCREEN” for POS/KDS roles (reuses the already-verified PIN)
-// and a tucked-away Manager corner that renders the classic LoginView.
+// and a tucked-away Manager corner that opens the manager's private PIN
+// door (R27: Welcome, Dr Ihab → PIN only).
 // All labels are bilingual (EN + Egyptian Arabic) and icon-led.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -42,7 +43,7 @@ import { useI18n } from '@/lib/i18n'
 import type { SessionUser } from '@/lib/types'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
-import LoginView from '@/components/auth/login-view'
+import ManagerSignIn from '@/components/auth/manager-sign-in'
 
 const PIN_LENGTH = 6
 
@@ -386,9 +387,11 @@ export default function TeamWall({ onLogin }: { onLogin: () => void }) {
     [appLoading, onLogin, t],
   )
 
-  // ── Manager corner renders the classic sign-in card unchanged ─────
+  // ── Manager corner → Dr Ihab's private PIN door (R27). The classic
+  // sign-in card (email / demo / registration) still lives one tap deeper
+  // inside the manager screen (“More options”).
   if (managerMode) {
-    return <LoginView onLogin={onLogin} onBackToWall={() => setManagerMode(false)} />
+    return <ManagerSignIn onLogin={onLogin} onBackToWall={() => setManagerMode(false)} />
   }
 
   // ── Person picker (shared account, MY SCREEN) ─────────────────────
