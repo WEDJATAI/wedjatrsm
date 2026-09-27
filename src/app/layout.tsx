@@ -1,24 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono, Cairo } from "next/font/google";
+// R30/P5: fonts are SELF-HOSTED (public/fonts + fonts.css) — deterministic
+// offline builds; next/font/google's build-time Google Fonts fetch broke the
+// Windows CI runner (run 36346239172). Same files, same subsets, same vars.
+import "./fonts.css";
 import "./globals.css";
 // R21: in-app auto-snapshot watcher (side-effect import — do not remove)
 import "@/lib/snapshot-watch-init";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-const cairo = Cairo({
-  variable: "--font-cairo",
-  subsets: ["arabic", "latin"],
-  weight: ["400", "500", "600", "700"],
-});
 
 export const metadata: Metadata = {
   title: "Lilo Cafe and Restaurant — Restaurant Management System",
@@ -50,7 +37,7 @@ export default function RootLayout({
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${cairo.variable} antialiased bg-background text-foreground font-[family-name:var(--font-geist-sans)] rtl:font-[family-name:var(--font-cairo)]`}
+        className={`antialiased bg-background text-foreground font-[family-name:var(--font-geist-sans)] rtl:font-[family-name:var(--font-cairo)]`}
       >
         {children}
       </body>
