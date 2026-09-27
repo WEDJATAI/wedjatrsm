@@ -256,8 +256,18 @@ async function processRemoteEvent(
       break
     }
     case 'revision-aware': {
+      // P6 fix: when RETRYING a previously-failed in-event, the row being
+      // retried must NOT count as the "latest known revision" of itself —
+      // otherwise a same-rev/same-hash retry resolves to the no-op branch
+      // and the business write is silently lost (found by P6 failure
+      // testing: a malformed-payload apply failure, payload repaired, retry
+      // marked the row 'applied' without ever writing the data).
       const latest = await db.hybridEvent.findFirst({
-        where: { entity: evt.entity, entityId: evt.entityId },
+        where: {
+          entity: evt.entity,
+          entityId: evt.entityId,
+          ...(retryRowId !== null ? { id: { not: retryRowId } } : {}),
+        },
         orderBy: [{ revision: 'desc' }, { id: 'desc' }],
       })
       const localRev = latest?.revision ?? 0
