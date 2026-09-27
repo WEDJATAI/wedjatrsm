@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useSyncExternalStore, type ComponentProps } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { type LucideIcon, CircleCheck, CircleSlash, Coffee, IceCreamCone, Salad, Search, SlidersHorizontal, Star, UtensilsCrossed } from 'lucide-react'
+import { type LucideIcon, CircleCheck, CircleSlash, Coffee, IceCreamCone, LayoutGrid, Rows3, Salad, Search, SlidersHorizontal, Star, UtensilsCrossed } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -106,6 +106,64 @@ function toggleFavoriteId(current: ReadonlySet<number>, id: number): boolean {
   return added
 }
 
+// ── POS menu view mode: compact cards vs visual tiles (R28) ──────────
+// The waiter's density preference lives in localStorage behind the same
+// external-store pattern as favorites (SSR-safe, cross-tab aware).
+// Compact is the default — the dense, text-first card from the reference
+// design; the photo/medallion tiles stay one tap away.
+export type PosViewMode = 'compact' | 'tiles'
+const VIEW_KEY = 'rms-pos-viewmode'
+const VIEW_EVENT = 'rms-pos-viewmode-change'
+
+function readViewMode(): PosViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_KEY) === 'tiles' ? 'tiles' : 'compact'
+  } catch {
+    return 'compact'
+  }
+}
+
+function writeViewMode(mode: PosViewMode): void {
+  try {
+    window.localStorage.setItem(VIEW_KEY, mode)
+  } catch {
+    // storage unavailable — the preference lasts for the session only
+  }
+}
+
+let viewCache: PosViewMode | null = null
+
+function viewSnapshot(): PosViewMode {
+  if (viewCache == null) viewCache = readViewMode()
+  return viewCache
+}
+
+function viewServerSnapshot(): PosViewMode {
+  return 'compact'
+}
+
+function subscribeView(onChange: () => void): () => void {
+  const handler = () => {
+    // drop the cache so the next snapshot re-reads localStorage (covers
+    // changes made in another tab through the 'storage' event)
+    viewCache = null
+    onChange()
+  }
+  window.addEventListener(VIEW_EVENT, handler)
+  window.addEventListener('storage', handler)
+  return () => {
+    window.removeEventListener(VIEW_EVENT, handler)
+    window.removeEventListener('storage', handler)
+  }
+}
+
+/** Switch the menu layout and notify every mounted grid. */
+function setViewMode(mode: PosViewMode): void {
+  writeViewMode(mode)
+  viewCache = mode
+  window.dispatchEvent(new Event(VIEW_EVENT))
+}
+
 type ProductGridProps = {
   products: Product[]
   onAdd: (product: Product) => void
@@ -126,6 +184,8 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
     favoritesSnapshot,
     favoritesServerSnapshot,
   )
+  // R28: menu density preference (compact cards ⇄ visual tiles).
+  const viewMode = useSyncExternalStore(subscribeView, viewSnapshot, viewServerSnapshot)
 
   const toggleFavorite = (id: number) => {
     const added = toggleFavoriteId(favorites, id)
@@ -209,16 +269,60 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
 
   return (
     <div className={cn('flex min-h-0 flex-col', className)}>
-      {/* Search */}
-      <div className="relative shrink-0 px-3 pb-3 pt-3 sm:px-4">
-        <Search className="pointer-events-none absolute start-6 top-1/2 size-4 -translate-y-1/2 text-muted-foreground sm:start-7" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('pos.searchDishes')}
-          className="h-11 rounded-xl border-border bg-white ps-9 text-base"
-          inputMode="search"
-        />
+      {/* Search + R28 view-mode toggle (compact list ⇄ photo tiles) */}
+      <div className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-3 sm:px-4">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('pos.searchDishes')}
+            className="h-11 rounded-xl border-border bg-white ps-9 text-base"
+            inputMode="search"
+          />
+        </div>
+        <div
+          role="group"
+          aria-label={t('pos.viewMode')}
+          className="flex h-11 shrink-0 items-center gap-0.5 rounded-xl border border-border bg-white p-1 shadow-sm"
+        >
+          <button
+            type="button"
+            aria-pressed={viewMode === 'compact'}
+            title={t('pos.viewCompact')}
+            onClick={() => {
+              sndTap()
+              setViewMode('compact')
+            }}
+            className={cn(
+              'grid size-9 place-items-center rounded-lg transition-colors',
+              viewMode === 'compact'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+            )}
+          >
+            <Rows3 className="size-4" aria-hidden />
+            <span className="sr-only">{t('pos.viewCompact')}</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={viewMode === 'tiles'}
+            title={t('pos.viewTiles')}
+            onClick={() => {
+              sndTap()
+              setViewMode('tiles')
+            }}
+            className={cn(
+              'grid size-9 place-items-center rounded-lg transition-colors',
+              viewMode === 'tiles'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-muted-foreground hover:bg-primary/10 hover:text-primary',
+            )}
+          >
+            <LayoutGrid className="size-4" aria-hidden />
+            <span className="sr-only">{t('pos.viewTiles')}</span>
+          </button>
+        </div>
       </div>
 
       {/* R8: favorites pill — own row BEFORE the category pills (reachable on mobile) */}
@@ -290,17 +394,29 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-            {filtered.map((p) => (
-              <ProductTile
-                key={p.id}
-                product={p}
-                favorite={favorites.has(p.id)}
-                onToggleFavorite={() => toggleFavorite(p.id)}
-                onAdd={onAdd}
-                onToggleSoldOut={() => toggleSoldOut(p)}
-                soldOutPending={soldOutMutation.isPending && soldOutMutation.variables?.id === p.id}
-              />
-            ))}
+            {filtered.map((p) =>
+              viewMode === 'compact' ? (
+                <CompactCard
+                  key={p.id}
+                  product={p}
+                  favorite={favorites.has(p.id)}
+                  onToggleFavorite={() => toggleFavorite(p.id)}
+                  onAdd={onAdd}
+                  onToggleSoldOut={() => toggleSoldOut(p)}
+                  soldOutPending={soldOutMutation.isPending && soldOutMutation.variables?.id === p.id}
+                />
+              ) : (
+                <ProductTile
+                  key={p.id}
+                  product={p}
+                  favorite={favorites.has(p.id)}
+                  onToggleFavorite={() => toggleFavorite(p.id)}
+                  onAdd={onAdd}
+                  onToggleSoldOut={() => toggleSoldOut(p)}
+                  soldOutPending={soldOutMutation.isPending && soldOutMutation.variables?.id === p.id}
+                />
+              ),
+            )}
           </div>
         )}
       </div>
@@ -324,7 +440,7 @@ function ProductTile({
   onToggleSoldOut: () => void
   soldOutPending?: boolean
 } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
-  const { t, lang } = useI18n()
+  const { lang } = useI18n()
   // R25: per-tile photo failure flag — a broken/absent image silently
   // degrades to the icon-medallion layout instead of a broken-image glyph.
   const [imgFailed, setImgFailed] = useState(false)
@@ -339,98 +455,18 @@ function ProductTile({
   // Arabic mode cross-reference: keep the English name visible as a tiny
   // secondary line (only when a distinct Arabic name exists).
   const showEnglishHint = lang === 'ar' && label !== product.name
-  // R8: allergen/dietary tag chips (max 2 each + "+n", title = full list).
+  // R8: allergen/dietary tag data (max 2 each + "+n" — rendered by the
+  // shared ChipsRow, also used by the R28 compact card).
   const allergens = (product.allergens ?? []).slice()
   const dietary = (product.dietary ?? []).slice()
-  const allergenTitle = allergens.map((a) => t(`allergen.${a}`)).join(', ')
-  const dietaryTitle = dietary.map((d) => t(`dietary.${d}`)).join(', ')
   // R8: "has options" affordance — tapping opens the customize sheet.
   const hasOptions = (product.modifierGroups ?? []).some(
     (g) => g.active && g.modifiers.some((m) => m.active),
   )
-
-  // R8: allergen/dietary chips — shared by both tile layouts (centered on
-  // medallion tiles, start-aligned under a photo band).
-  const chipsRow =
-    (allergens.length > 0 || dietary.length > 0) && (
-      <span
-        className={cn('flex w-full flex-wrap items-center gap-1', !showPhoto && 'justify-center')}
-      >
-        {allergens.slice(0, 2).map((a) => (
-          <span
-            key={`al-${a}`}
-            title={allergenTitle}
-            className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
-          >
-            {t(`allergen.${a}`)}
-          </span>
-        ))}
-        {allergens.length > 2 && (
-          <span
-            title={allergenTitle}
-            className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
-          >
-            +{allergens.length - 2}
-          </span>
-        )}
-        {dietary.slice(0, 2).map((d) => (
-          <span
-            key={`dt-${d}`}
-            title={dietaryTitle}
-            className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
-          >
-            {t(`dietary.${d}`)}
-          </span>
-        ))}
-        {dietary.length > 2 && (
-          <span
-            title={dietaryTitle}
-            className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
-          >
-            +{dietary.length - 2}
-          </span>
-        )}
-      </span>
-    )
-
-  // R8/R13: status badges — manual 86 flag, options affordance, stock
-  // counters. Inline in the footer row on medallion tiles; right-aligned
-  // under the name row on photo tiles (where the price moved up a row).
-  const badges = (
-    <>
-      {manualSoldOut && (
-        <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
-          {t('pos.86')}
-        </Badge>
-      )}
-      {hasOptions && (
-        <Badge
-          variant="outline"
-          className="gap-1 border-primary/40 px-1.5 text-[10px] text-primary"
-          title={t('pos.options')}
-        >
-          <SlidersHorizontal className="size-3" aria-hidden />
-          {t('pos.options')}
-        </Badge>
-      )}
-      {product.isStockable && (
-        <span>
-          {soldOut ? (
-            <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
-              {t('pos.soldOut')}
-            </Badge>
-          ) : lowStock ? (
-            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
-              {t('pos.lowStock', { qty: product.stock })}
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="text-muted-foreground">
-              {t('pos.left', { qty: product.stock })}
-            </Badge>
-          )}
-        </span>
-      )}
-    </>
+  // R8/R28: tag chips — shared renderer (centered on medallion tiles,
+  // start-aligned under a photo band and on compact cards).
+  const chips = (
+    <ChipsRow allergens={allergens} dietary={dietary} align={showPhoto ? 'start' : 'center'} />
   )
 
   return (
@@ -492,8 +528,16 @@ function ProductTile({
                 {formatCurrency(product.price)}
               </span>
             </span>
-            {chipsRow}
-            <span className="flex w-full flex-wrap items-center justify-end gap-1">{badges}</span>
+            {chips}
+            <span className="flex w-full flex-wrap items-center justify-end gap-1">
+              <StatusBadges
+                product={product}
+                manualSoldOut={manualSoldOut}
+                soldOut={soldOut}
+                lowStock={lowStock}
+                hasOptions={hasOptions}
+              />
+            </span>
           </span>
         ) : (
           // ── medallion body: the R24 team-wall language — one BIG colorful
@@ -522,20 +566,180 @@ function ProductTile({
                 )}
               </span>
             </span>
-            {chipsRow}
+            {chips}
             <span className="flex w-full items-center justify-between gap-1">
               <span className="text-lg font-bold tabular-nums text-primary">
                 {formatCurrency(product.price)}
               </span>
-              <span className="flex min-w-0 items-center gap-1">{badges}</span>
+              <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+                <StatusBadges
+                  product={product}
+                  manualSoldOut={manualSoldOut}
+                  soldOut={soldOut}
+                  lowStock={lowStock}
+                  hasOptions={hasOptions}
+                />
+              </span>
             </span>
           </>
         )}
       </Button>
 
-      {/* R8: favorite star — sibling of the tile button (valid HTML), top-end
-          corner. stopPropagation keeps the tap from adding the item. Over a
-          photo band it gets a soft white pill so the glyph stays visible. */}
+      <CardCorners
+        favorite={favorite}
+        onToggleFavorite={onToggleFavorite}
+        manualSoldOut={manualSoldOut}
+        soldOut={soldOut}
+        soldOutPending={soldOutPending}
+        onToggleSoldOut={onToggleSoldOut}
+        overPhoto={showPhoto}
+      />
+    </div>
+  )
+}
+
+/**
+ * R8/R28: allergen (rose) + dietary (emerald) tag chips — shared by the
+ * visual tiles and the compact cards. Max 2 of each, "+n" overflow,
+ * title = full localized list.
+ */
+function ChipsRow({
+  allergens,
+  dietary,
+  align,
+}: {
+  allergens: string[]
+  dietary: string[]
+  align: 'center' | 'start'
+}) {
+  const { t } = useI18n()
+  if (allergens.length === 0 && dietary.length === 0) return null
+  const allergenTitle = allergens.map((a) => t(`allergen.${a}`)).join(', ')
+  const dietaryTitle = dietary.map((d) => t(`dietary.${d}`)).join(', ')
+  return (
+    <span
+      className={cn('flex w-full flex-wrap items-center gap-1', align === 'center' && 'justify-center')}
+    >
+      {allergens.slice(0, 2).map((a) => (
+        <span
+          key={`al-${a}`}
+          title={allergenTitle}
+          className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+        >
+          {t(`allergen.${a}`)}
+        </span>
+      ))}
+      {allergens.length > 2 && (
+        <span
+          title={allergenTitle}
+          className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+        >
+          +{allergens.length - 2}
+        </span>
+      )}
+      {dietary.slice(0, 2).map((d) => (
+        <span
+          key={`dt-${d}`}
+          title={dietaryTitle}
+          className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
+        >
+          {t(`dietary.${d}`)}
+        </span>
+      ))}
+      {dietary.length > 2 && (
+        <span
+          title={dietaryTitle}
+          className="rounded border border-emerald-300 bg-emerald-50 px-1 py-0 text-[10px] font-medium leading-4 text-emerald-700"
+        >
+          +{dietary.length - 2}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * R8/R13/R28: status badges — manual 86 flag, options affordance, stock
+ * counters. Shared by the visual tiles and the compact cards.
+ */
+function StatusBadges({
+  product,
+  manualSoldOut,
+  soldOut,
+  lowStock,
+  hasOptions,
+}: {
+  product: Product
+  manualSoldOut: boolean
+  soldOut: boolean
+  lowStock: boolean
+  hasOptions: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <>
+      {manualSoldOut && (
+        <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
+          {t('pos.86')}
+        </Badge>
+      )}
+      {hasOptions && (
+        <Badge
+          variant="outline"
+          className="gap-1 border-primary/40 px-1.5 text-[10px] text-primary"
+          title={t('pos.options')}
+        >
+          <SlidersHorizontal className="size-3" aria-hidden />
+          {t('pos.options')}
+        </Badge>
+      )}
+      {product.isStockable && (
+        <span>
+          {soldOut ? (
+            <Badge variant="outline" className="border-rose-300 bg-rose-50 text-rose-700">
+              {t('pos.soldOut')}
+            </Badge>
+          ) : lowStock ? (
+            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+              {t('pos.lowStock', { qty: product.stock })}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-muted-foreground">
+              {t('pos.left', { qty: product.stock })}
+            </Badge>
+          )}
+        </span>
+      )}
+    </>
+  )
+}
+
+/**
+ * R8/R13/R28: the two corner toggles every menu card shares — favorite
+ * star top-END, "86" availability flip top-START. Siblings of the card
+ * button (valid HTML); stopPropagation keeps taps from adding the item.
+ * `overPhoto` adds the soft white pill so glyphs stay visible on images.
+ */
+function CardCorners({
+  favorite,
+  onToggleFavorite,
+  manualSoldOut,
+  soldOut,
+  soldOutPending,
+  onToggleSoldOut,
+  overPhoto,
+}: {
+  favorite: boolean
+  onToggleFavorite: () => void
+  manualSoldOut: boolean
+  soldOut: boolean
+  soldOutPending: boolean
+  onToggleSoldOut: () => void
+  overPhoto: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <>
       <button
         type="button"
         aria-pressed={favorite}
@@ -549,16 +753,12 @@ function ProductTile({
           favorite
             ? 'text-amber-500 hover:bg-amber-100'
             : 'text-stone-300 hover:bg-primary/10 hover:text-amber-400',
-          showPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
+          overPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
         )}
       >
         <Star className={cn('size-5', favorite && 'fill-amber-400 text-amber-500')} aria-hidden />
       </button>
 
-      {/* R13: "86" availability toggle — top-START corner (star owns the
-          end). One tap flips sold-out; the toast carries an Undo. Stock-
-          exhausted (non-manual) tiles keep the chip disabled so waiters
-          don't fight the inventory system. */}
       <button
         type="button"
         aria-pressed={manualSoldOut}
@@ -577,7 +777,7 @@ function ProductTile({
               ? 'text-rose-600 hover:bg-rose-100'
               : 'text-stone-300 hover:bg-rose-100 hover:text-rose-500',
           soldOut && !manualSoldOut && 'opacity-30 cursor-not-allowed',
-          showPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
+          overPhoto && 'bg-white/85 shadow-sm backdrop-blur-sm',
         )}
       >
         {manualSoldOut ? (
@@ -586,6 +786,112 @@ function ProductTile({
           <CircleSlash className="size-5" aria-hidden />
         )}
       </button>
+    </>
+  )
+}
+
+/**
+ * R28: the compact, text-first menu card from the reference design —
+ * name + course icon on top, allergen/dietary chips in the middle, price
+ * with the Options pill at the bottom, in a dense ~96px landscape card.
+ * Photo recognition lives one tap away in the tiles view.
+ */
+function CompactCard({
+  product,
+  favorite,
+  onToggleFavorite,
+  onAdd,
+  onToggleSoldOut,
+  soldOutPending = false,
+  ...rest
+}: {
+  product: Product
+  favorite: boolean
+  onToggleFavorite: () => void
+  onAdd: (p: Product) => void
+  onToggleSoldOut: () => void
+  soldOutPending?: boolean
+} & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
+  const { t, lang } = useI18n()
+  const course = guessCourse(product)
+  const Icon = COURSE_ICONS[course]
+  // R13: manual 86 flag OR stock-tracked exhaustion both disable the card
+  const manualSoldOut = product.soldOut === true
+  const soldOut = manualSoldOut || (product.isStockable && product.stock <= 0)
+  const lowStock = product.isStockable && product.stock > 0 && product.stock <= product.lowStockThreshold
+  const label = localizedName(product.name, product.nameAr, lang)
+  // Arabic mode cross-reference: keep the English name visible as a tiny
+  // secondary line (only when a distinct Arabic name exists).
+  const showEnglishHint = lang === 'ar' && label !== product.name
+  const allergens = (product.allergens ?? []).slice()
+  const dietary = (product.dietary ?? []).slice()
+  const hasOptions = (product.modifierGroups ?? []).some(
+    (g) => g.active && g.modifiers.some((m) => m.active),
+  )
+
+  return (
+    <div className="relative">
+      <Button
+        type="button"
+        variant="outline"
+        disabled={soldOut}
+        aria-disabled={soldOut}
+        onClick={() => {
+          // same instant ear + touch confirmation as the tiles
+          sndTap()
+          haptic(8)
+          onAdd(product)
+        }}
+        className={cn(
+          // h-full equalizes cards inside a grid row; the tight min-h is
+          // the density win (≈96px vs 116px+ tiles); whitespace-normal
+          // lets the name wrap to the line clamp.
+          'h-full min-h-[96px] w-full flex-col items-start justify-between gap-1.5 rounded-xl border-border bg-white p-3 text-start shadow-sm transition active:scale-95',
+          'whitespace-normal hover:border-primary/50 hover:bg-primary/[0.04] hover:shadow',
+          soldOut && 'pointer-events-none cursor-not-allowed opacity-50',
+        )}
+        {...rest}
+      >
+        {/* name row — course icon at the end; pe-9 keeps the star clear */}
+        <span className="flex w-full items-start justify-between gap-1 pe-9">
+          <span className="min-w-0 flex-1">
+            <span className="line-clamp-2 text-[15px] font-semibold leading-tight">{label}</span>
+            {showEnglishHint && (
+              <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
+                {product.name}
+              </span>
+            )}
+          </span>
+          <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground/70" aria-hidden />
+        </span>
+
+        <ChipsRow allergens={allergens} dietary={dietary} align="start" />
+
+        <span className="flex w-full flex-wrap items-center justify-between gap-1">
+          <span className="text-[15px] font-bold tabular-nums text-primary">
+            {formatCurrency(product.price)}
+          </span>
+          <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+            <StatusBadges
+              product={product}
+              manualSoldOut={manualSoldOut}
+              soldOut={soldOut}
+              lowStock={lowStock}
+              hasOptions={hasOptions}
+            />
+          </span>
+        </span>
+      </Button>
+
+      <CardCorners
+        favorite={favorite}
+        onToggleFavorite={onToggleFavorite}
+        manualSoldOut={manualSoldOut}
+        soldOut={soldOut}
+        soldOutPending={soldOutPending}
+        onToggleSoldOut={onToggleSoldOut}
+        overPhoto={false}
+      />
     </div>
   )
 }

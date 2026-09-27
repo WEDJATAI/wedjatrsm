@@ -291,6 +291,9 @@ export const posDict: DictPair = {
     // product grid
     'pos.searchDishes': 'Search dishes…',
     'pos.all': 'All',
+    'pos.viewMode': 'Menu layout',
+    'pos.viewCompact': 'Compact list',
+    'pos.viewTiles': 'Photo tiles',
     'pos.noProducts': 'No sellable products available.',
     'pos.noMatch': 'No dishes match “{search}”.',
     'pos.soldOut': 'Sold out',
@@ -559,6 +562,9 @@ export const posDict: DictPair = {
     // product grid
     'pos.searchDishes': 'ابحث عن الأطباق…',
     'pos.all': 'الكل',
+    'pos.viewMode': 'تخطيط القائمة',
+    'pos.viewCompact': 'قائمة مدمجة',
+    'pos.viewTiles': 'بطاقات مصورة',
     'pos.noProducts': 'لا توجد منتجات متاحة للبيع.',
     'pos.noMatch': 'لا توجد أطباق تطابق "{search}".',
     'pos.soldOut': 'نفدت الكمية',

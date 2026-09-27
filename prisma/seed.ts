@@ -182,6 +182,15 @@ async function main() {
   await shisha('Premium Head Upgrade', 'رأس بريميوم', 45, 12, 'SH-010')
   console.log('✓ sellable products: 28 (incl. 10 shisha flavors)')
 
+  // ── R28: menu enrichment — Garlic Bread + allergen/dietary tags +
+  //     modifier groups/links (the R8 fixtures the R27 reseed lost).
+  //     Idempotent module; keeps every future reseed complete.
+  const { enrichMenu } = await import('./menu-enrichment')
+  const enrichment = await enrichMenu(db)
+  console.log(
+    `✓ menu enrichment: Garlic Bread ${enrichment.garlicBread}, ${enrichment.tagged} tagged, ${enrichment.groups} modifier groups, ${enrichment.links} links`,
+  )
+
   // ── Recipes (BOM) ─────────────────────────────────────────────────
   const rc = (productId: number, ingredientId: number, quantity: number) =>
     db.recipeComponent.create({ data: { productId, ingredientId, quantity } })
