@@ -1,7 +1,7 @@
 {
   "name": "rsm-desktop",
   "productName": "RSM Restaurant Platform",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "RSM Restaurant Platform — offline-first restaurant POS, kitchen display, inventory and reports for Windows. Built by GitHub Actions, self-updating via GitHub Releases.",
   "author": "WEDJATAI",
   "private": true,
