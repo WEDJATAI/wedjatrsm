@@ -8,6 +8,14 @@
 // All external requests are plain `fetch` with AbortController timeouts —
 // no extra packages. Keys come from ./config (env ?? constant) and never
 // leave the server.
+//
+// R30 failover hardening (additive): every provider attempt runs under a
+// per-`capability:provider` circuit breaker (./failover) so a dead provider
+// is skipped instantly instead of retried on every request; the PRIMARY
+// provider gets ONE transient retry (429/5xx/network — never 4xx auth)
+// with 500ms + jitter backoff before the chain moves on; every failure is
+// logged through safeLogAIError (one line, secret-free). AI_CAPABILITY_CHAINS
+// below is the single source of truth for the chain shape (docs + UI).
 
 import {
   GROQ_API_KEY,
@@ -15,15 +23,23 @@ import {
   GROQ_MODEL,
   GEMINI_API_KEY,
   GEMINI_API_URL,
+  GEMINI_MODEL,
   HF_API_KEY,
   HF_API_URL,
   HF_ROUTER_URL,
   HF_ALT_EMBED_URL,
+  HF_EMBED_MODEL,
   AI_CHAT_TIMEOUT_MS,
   AI_EMBED_TIMEOUT_MS,
   EMBED_CACHE_MAX_ENTRIES,
   EMBED_CACHE_TTL_MS,
 } from './config'
+import {
+  ProviderUnavailableError,
+  isTransientError,
+  safeLogAIError,
+  withCircuitBreaker,
+} from './failover'
 
 // ─── Errors ─────────────────────────────────────────────────────────
 
@@ -98,6 +114,181 @@ function briefError(err: unknown): string {
   if (err instanceof Error && err.name === 'AbortError') return 'timeout'
   if (err instanceof Error) return err.message.slice(0, 160)
   return String(err).slice(0, 160)
+}
+
+// ─── Capability→chain registry (single source of truth) ─────────────
+
+export type AIChainEntry = {
+  /** Registry id — matches the breaker key suffix ('groq', 'hf:minilm', …). */
+  provider: string
+  /** Human label for docs/UI. */
+  label: string
+  /** Model (or engine) label served by this step. */
+  model: string
+  /** Per-attempt timeout (AbortController / Promise.race). 0 = in-process. */
+  timeoutMs: number
+  /** Circuit breaker key ('chat:groq', 'embeddings:hf:minilm', …). */
+  breakerKey: string
+}
+
+export type AIChainDefinition = {
+  entries: AIChainEntry[]
+  retryPolicy: {
+    maxRetries: number
+    backoffBaseMs: number
+    backoffJitterMs: number
+    transientOnly: boolean
+  }
+  finalFallback: string
+}
+
+/**
+ * Formal capability → provider chain registry (single source of truth for
+ * docs and UI). Entry order = fallback order:
+ *   chat:       groq → gemini → zai → (all failed: friendly 503)
+ *   embeddings: hf:minilm → hf:router → hf:bge-small → local (never fails)
+ * The embeddings chain additionally tries the last WORKING endpoint first
+ * (sticky reorder inside embedTexts) — the registry documents the canonical
+ * order. Vision/CCTV is deliberately absent: it is rule-based edge
+ * processing with no server-side model inference (see docs/r30-ai-failover.md).
+ */
+export const AI_CAPABILITY_CHAINS: Readonly<{
+  chat: AIChainDefinition
+  embeddings: AIChainDefinition
+}> = {
+  chat: {
+    entries: [
+      {
+        provider: 'groq',
+        label: 'Groq',
+        model: GROQ_MODEL,
+        timeoutMs: AI_CHAT_TIMEOUT_MS,
+        breakerKey: 'chat:groq',
+      },
+      {
+        provider: 'gemini',
+        label: 'Google Gemini',
+        model: GEMINI_MODEL,
+        timeoutMs: AI_CHAT_TIMEOUT_MS,
+        breakerKey: 'chat:gemini',
+      },
+      {
+        provider: 'zai',
+        label: 'Platform z-ai SDK',
+        model: 'z-ai-web-dev-sdk (backend-only)',
+        timeoutMs: AI_CHAT_TIMEOUT_MS,
+        breakerKey: 'chat:zai',
+      },
+    ],
+    retryPolicy: {
+      maxRetries: 1,
+      backoffBaseMs: 500,
+      backoffJitterMs: 250,
+      transientOnly: true,
+    },
+    finalFallback:
+      'All chat providers down → AiProviderError(503) → routes answer with a friendly "AI temporarily unreachable" message (never provider details or keys).',
+  },
+  embeddings: {
+    entries: [
+      {
+        provider: 'hf:minilm',
+        label: 'HuggingFace MiniLM (pinned endpoint)',
+        model: HF_EMBED_MODEL,
+        timeoutMs: AI_EMBED_TIMEOUT_MS,
+        breakerKey: 'embeddings:hf:minilm',
+      },
+      {
+        provider: 'hf:router',
+        label: 'HuggingFace router (MiniLM)',
+        model: HF_EMBED_MODEL,
+        timeoutMs: AI_EMBED_TIMEOUT_MS,
+        breakerKey: 'embeddings:hf:router',
+      },
+      {
+        provider: 'hf:bge-small',
+        label: 'HuggingFace bge-small alternate',
+        model: 'BAAI/bge-small-en-v1.5',
+        timeoutMs: AI_EMBED_TIMEOUT_MS,
+        breakerKey: 'embeddings:hf:bge-small',
+      },
+      {
+        provider: 'local',
+        label: 'Local deterministic fallback',
+        model: 'hashed bag-of-words, 256-dim',
+        timeoutMs: 0,
+        breakerKey: '', // in-process and cannot fail → no breaker needed
+      },
+    ],
+    retryPolicy: {
+      maxRetries: 1,
+      backoffBaseMs: 500,
+      backoffJitterMs: 250,
+      transientOnly: true,
+    },
+    finalFallback:
+      'localEmbed — deterministic in-process hashed-bag-of-words vectors; menu search degrades from semantic to keyword mode but never fails.',
+  },
+}
+
+// ─── Breaker + retry wrapper (R30) ──────────────────────────────────
+
+/** ONE transient retry on the primary provider, 500ms + jitter backoff. */
+const TRANSIENT_RETRY_BASE_MS = 500
+const TRANSIENT_RETRY_JITTER_MS = 250
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+type AttemptOpts = {
+  capability: 'chat' | 'embeddings'
+  /** Registry provider id ('groq', 'hf:minilm', …) — used for logging. */
+  provider: string
+  /** Primary providers get the one transient retry; the rest do not. */
+  allowRetry: boolean
+}
+
+/**
+ * Run ONE provider attempt under its circuit breaker, preserving the
+ * existing AbortController / Promise.race timeouts inside fn. On failure:
+ * log one safe line (safeLogAIError); when the failure is transient
+ * (429 / 5xx / network / timeout) and this is the primary provider, back
+ * off 500ms + jitter and retry ONCE. 4xx auth errors and circuit-open
+ * skips return straight to the caller — the chain moves to the next
+ * provider and the breaker has already counted the failure.
+ */
+async function attemptProvider<T>(
+  breakerKey: string,
+  fn: () => Promise<T>,
+  opts: AttemptOpts,
+): Promise<T> {
+  const started = Date.now()
+  try {
+    return await withCircuitBreaker(breakerKey, fn)
+  } catch (err) {
+    safeLogAIError(opts.capability, opts.provider, err, {
+      durationMs: Date.now() - started,
+    })
+    if (
+      !opts.allowRetry ||
+      err instanceof ProviderUnavailableError ||
+      !isTransientError(err)
+    ) {
+      throw err
+    }
+    await sleep(TRANSIENT_RETRY_BASE_MS + Math.random() * TRANSIENT_RETRY_JITTER_MS)
+    const retryStarted = Date.now()
+    try {
+      return await withCircuitBreaker(breakerKey, fn)
+    } catch (retryErr) {
+      safeLogAIError(opts.capability, opts.provider, retryErr, {
+        durationMs: Date.now() - retryStarted,
+        detail: 'transient retry exhausted',
+      })
+      throw retryErr
+    }
+  }
 }
 
 // ─── Groq (OpenAI-compatible) ───────────────────────────────────────
@@ -287,12 +478,17 @@ export async function chatWithFallback(
   messages: ChatMessage[],
   opts: ChatOpts = {},
 ): Promise<ChatResult> {
-  // 1) Groq (fast primary — user-provided key)
+  // 1) Groq (fast primary — user-provided key). Primary = one transient
+  //    retry (429/5xx/network) before the chain moves on.
   try {
-    const text = await groqChat(messages, opts)
+    const text = await attemptProvider('chat:groq', () => groqChat(messages, opts), {
+      capability: 'chat',
+      provider: 'groq',
+      allowRetry: true,
+    })
     return { text, provider: 'groq' }
-  } catch (err) {
-    console.warn('[ai] groq failed → falling back to gemini:', briefError(err))
+  } catch {
+    // safeLogAIError already recorded the one-line failure
   }
 
   // 2) Gemini (single-turn: flatten the conversation into one prompt)
@@ -300,22 +496,31 @@ export async function chatWithFallback(
     const transcript = messages
       .map((m) => `${m.role === 'user' ? 'Manager' : 'Assistant'}: ${m.content}`)
       .join('\n\n')
-    const text = await geminiChat(
-      transcript,
-      opts.system ?? 'You are a helpful restaurant management assistant.',
-      opts,
+    const text = await attemptProvider(
+      'chat:gemini',
+      () =>
+        geminiChat(
+          transcript,
+          opts.system ?? 'You are a helpful restaurant management assistant.',
+          opts,
+        ),
+      { capability: 'chat', provider: 'gemini', allowRetry: false },
     )
     return { text, provider: 'gemini' }
-  } catch (err) {
-    console.warn('[ai] gemini failed → falling back to z-ai sdk:', briefError(err))
+  } catch {
+    // safeLogAIError already recorded the one-line failure
   }
 
   // 3) Platform z-ai SDK (backend-only built-in LLM service)
   try {
-    const text = await zaiChat(messages, opts)
+    const text = await attemptProvider('chat:zai', () => zaiChat(messages, opts), {
+      capability: 'chat',
+      provider: 'zai',
+      allowRetry: false,
+    })
     return { text, provider: 'zai' }
-  } catch (err) {
-    console.warn('[ai] z-ai failed too:', briefError(err))
+  } catch {
+    // safeLogAIError already recorded the one-line failure
   }
 
   throw new AiProviderError(
@@ -371,7 +576,15 @@ function cacheSet(key: string, entry: CacheEntry): void {
  *  3. router.huggingface.co/hf-inference .../BAAI/bge-small-en-v1.5
  *     (feature-extraction-capable fallback model, same HF key)
  */
-const HF_EMBED_URLS = [HF_API_URL, HF_ROUTER_URL, HF_ALT_EMBED_URL]
+const HF_EMBED_ENDPOINTS: ReadonlyArray<{
+  url: string
+  provider: string
+  breakerKey: string
+}> = [
+  { url: HF_API_URL, provider: 'hf:minilm', breakerKey: 'embeddings:hf:minilm' },
+  { url: HF_ROUTER_URL, provider: 'hf:router', breakerKey: 'embeddings:hf:router' },
+  { url: HF_ALT_EMBED_URL, provider: 'hf:bge-small', breakerKey: 'embeddings:hf:bge-small' },
+]
 // Remember the last endpoint that worked so later calls skip dead ones.
 let lastWorkingHfUrl: string | null = null
 
@@ -504,18 +717,28 @@ export async function embedTexts(texts: string[]): Promise<EmbedResult> {
   let vectors: number[][] | null = null
   let used: EmbedProvider = 'local'
 
-  const orderedUrls = lastWorkingHfUrl
-    ? [lastWorkingHfUrl, ...HF_EMBED_URLS.filter((u) => u !== lastWorkingHfUrl)]
-    : HF_EMBED_URLS
-  for (const url of orderedUrls) {
+  const ordered = lastWorkingHfUrl
+    ? [
+        ...HF_EMBED_ENDPOINTS.filter((e) => e.url === lastWorkingHfUrl),
+        ...HF_EMBED_ENDPOINTS.filter((e) => e.url !== lastWorkingHfUrl),
+      ]
+    : HF_EMBED_ENDPOINTS
+  for (let i = 0; i < ordered.length; i++) {
+    const ep = ordered[i]
     try {
-      vectors = await hfEmbedBatch(url, texts)
+      // First attempted endpoint (the sticky primary) gets the one
+      // transient retry; the rest fail straight to the next endpoint.
+      vectors = await attemptProvider(ep.breakerKey, () => hfEmbedBatch(ep.url, texts), {
+        capability: 'embeddings',
+        provider: ep.provider,
+        allowRetry: i === 0,
+      })
       used = 'huggingface'
-      lastWorkingHfUrl = url
+      lastWorkingHfUrl = ep.url
       break
-    } catch (err) {
-      if (lastWorkingHfUrl === url) lastWorkingHfUrl = null
-      console.warn(`[ai] hf endpoint failed (${url}):`, briefError(err))
+    } catch {
+      if (lastWorkingHfUrl === ep.url) lastWorkingHfUrl = null
+      // safeLogAIError already recorded the one-line failure
     }
   }
   if (!vectors) {

@@ -979,3 +979,89 @@ export type ForecastReport = {
   /** projected weekly total */
   projectedWeekTotal: number
 }
+
+// ─── R30: hybrid sync (rsm-hybrid/1 — event-based device-to-cloud) ──
+
+/** GET /api/hybrid/status — engine health snapshot (server-side internet
+ *  verdict merged in; the UI layers navigator.onLine on top of it). */
+export type HybridStatusDTO = {
+  version: string
+  engine: 'running' | 'stopped'
+  paused: boolean
+  /** host+path only — credentials never leak (null when unset) */
+  targetUrl: string | null
+  device: { deviceId: string; name: string; status: string } | null
+  counts: {
+    pendingUploads: number
+    inflight: number
+    failedOut: number
+    deadOut: number
+    failedIn: number
+    conflicts: number
+    pendingDownloads: number
+  }
+  lastPushAt: string | null
+  lastPullAt: string | null
+  lastReconcileAt: string | null
+  cloud: {
+    reachable: 'yes' | 'no' | 'unknown'
+    lastCheckedAt: string | null
+    authFailed: boolean
+  }
+  local: { dbOk: boolean }
+  restorePending: string | null
+  internet: 'online' | 'offline' | 'unknown'
+}
+
+/** POST /api/hybrid/sync-now — one push cycle + one pull cycle. */
+export type HybridSyncNowResult = {
+  push: { pushed: number; acked: number; failed: number }
+  pull: {
+    applied: number
+    skipped: number
+    conflicts: number
+    failed: number
+    remaining: number
+  }
+}
+
+/** GET /api/hybrid/errors row (last 50 failed/dead events). */
+export type HybridErrorEvent = {
+  eventId: string
+  entity: string
+  entityId: number
+  operation: string
+  direction: 'out' | 'in'
+  status: string
+  attempts: number
+  lastError: string | null
+  updatedAt: string
+}
+
+/** /api/hybrid/device row (the keyHash is never returned). */
+export type HybridDeviceDTO = {
+  id: number
+  deviceId: string
+  installationId: string
+  name: string
+  platform: string
+  status: string
+  lastSeenAt: string | null
+  lastPushAt: string | null
+  lastPullAt: string | null
+  createdAt: string
+}
+
+/** POST /api/hybrid/reconcile report (cloudCount/drift null when the
+ *  cloud was unreachable — local counts still shown). */
+export type HybridReconcileReport = {
+  cloudReachable: boolean
+  entities: Array<{
+    entity: string
+    localCount: number
+    cloudCount: number | null
+    drift: number | null
+  }>
+  conflictsTotal: number
+  reconciledAt: string
+}

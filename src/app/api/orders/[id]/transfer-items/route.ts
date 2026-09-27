@@ -24,6 +24,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { getOrderOr404, parseId, recomputeTotals, round2, serializeOrder } from '@/lib/orders'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { MONEY_EPSILON } from '@/lib/constants'
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -301,6 +302,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             throw new ApiError(`Item ${row.id} is no longer on this order`, 400)
           }
           targetBySignature.set(signature, row.id)
+        }
+      }
+
+      // R30 hybrid sync: both affected orders ride outbox events in the SAME
+      // transaction (final rows read inside the tx; the per-item move rows
+      // are a phase-2 candidate — see worklog r30-8b)
+      for (const affectedId of [sourceId, targetOrderId]) {
+        const orderRow = await tx.order.findUnique({ where: { id: affectedId } })
+        if (orderRow) {
+          await emitOutboxEvent(tx, {
+            entity: 'Order',
+            entityId: affectedId,
+            operation: 'update',
+            row: orderRow,
+          })
         }
       }
     })

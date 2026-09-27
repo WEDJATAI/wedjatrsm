@@ -6,6 +6,8 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { MAX_SEATING_TABLES, ORDER_TYPES } from '@/lib/constants'
+import { getLocalDevice } from '@/lib/hybrid-sync/device-identity'
+import { withOutboxEvents, type OutboxEventInput } from '@/lib/hybrid-sync/outbox'
 import {
   ORDER_INCLUDE,
   checkStockAvailability,
@@ -160,6 +162,11 @@ export async function POST(req: NextRequest) {
     // Stock check for the whole new order
     await checkStockAvailability(items)
 
+    // R30 hybrid sync: stamp the creating device on the order (read-only
+    // getter — when no local identity exists yet the column stays unset and
+    // the origin-authority policy falls through to revision-aware).
+    const localDevice = await getLocalDevice()
+
     // Create order + items + occupy ALL seating tables atomically
     const created = await db.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -170,6 +177,7 @@ export async function POST(req: NextRequest) {
           deliveryPhone,
           deliveryAddress,
           customerId,
+          originDeviceId: localDevice?.deviceId ?? null,
           extraTableIds:
             extraTables.length > 0 ? JSON.stringify(extraTables.map((t) => t.id)) : null,
           guests,
@@ -189,12 +197,32 @@ export async function POST(req: NextRequest) {
           },
         },
       })
+      // R30 hybrid sync: outbox events ride the SAME transaction — the
+      // order, its items (read back: createMany-style nested creates return
+      // no rows) and every occupied table.
+      const createdItems = await tx.orderItem.findMany({ where: { orderId: order.id } })
+      const events: OutboxEventInput[] = [
+        { entity: 'Order', entityId: order.id, operation: 'create', row: order },
+        ...createdItems.map((item) => ({
+          entity: 'OrderItem',
+          entityId: item.id,
+          operation: 'create' as const,
+          row: item,
+        })),
+      ]
       for (const seatTable of tables) {
-        await tx.restaurantTable.update({
+        const updatedTable = await tx.restaurantTable.update({
           where: { id: seatTable.id },
           data: { status: 'occupied' },
         })
+        events.push({
+          entity: 'RestaurantTable',
+          entityId: updatedTable.id,
+          operation: 'update',
+          row: updatedTable,
+        })
       }
+      await withOutboxEvents(tx, events)
       return order
     })
 

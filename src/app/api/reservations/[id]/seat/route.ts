@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { findOpenOrderOnTable } from '@/lib/orders'
 import { RESERVATION_INCLUDE, serializeReservation } from '@/lib/reservations'
 
@@ -54,19 +55,40 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError(`Table "${table.name}" needs cleaning before seating`, 409)
     }
 
-    const updated = await db.reservation.update({
-      where: { id: reservationId },
-      data: {
-        status: 'seated',
-        tableId: table.id,
-        floorPlanId: table.floorPlanId ?? existing.floorPlanId,
-      },
-      include: RESERVATION_INCLUDE,
+    // R30 hybrid sync: the two sequential writes (reservation → seated,
+    // table → reserved) now ride ONE transaction together with their outbox
+    // events (plain rows for the events — the API row keeps its includes).
+    const updated = await db.$transaction(async (tx) => {
+      const savedReservation = await tx.reservation.update({
+        where: { id: reservationId },
+        data: {
+          status: 'seated',
+          tableId: table.id,
+          floorPlanId: table.floorPlanId ?? existing.floorPlanId,
+        },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Reservation',
+        entityId: reservationId,
+        operation: 'update',
+        row: savedReservation,
+      })
+      const updatedTable = await tx.restaurantTable.update({
+        where: { id: table.id },
+        data: { status: 'reserved' },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'RestaurantTable',
+        entityId: table.id,
+        operation: 'update',
+        row: updatedTable,
+      })
+      return tx.reservation.findUnique({
+        where: { id: reservationId },
+        include: RESERVATION_INCLUDE,
+      })
     })
-    await db.restaurantTable.update({
-      where: { id: table.id },
-      data: { status: 'reserved' },
-    })
+    if (!updated) throw new ApiError('Reservation not found', 404)
 
     await logAudit({
       user: session,

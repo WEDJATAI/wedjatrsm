@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAuth, errorResponse, ApiError } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { round2, serializeOrder, ORDER_INCLUDE } from '@/lib/orders'
 
 const METHODS = ['cash', 'card', 'other']
@@ -77,8 +78,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       (order.payments.filter((p) => p.amount > 0).sort((a, b) => b.amount - a.amount)[0]?.method ??
         'cash')
 
-    const [payment] = await db.$transaction([
-      db.payment.create({
+    // R30 hybrid sync: the refund payment (a negative Payment row) and the
+    // order's outbox events ride the SAME transaction (was a batch $transaction
+    // array with just the create — same commit boundary, now interactive so
+    // events can join it).
+    const [payment] = await db.$transaction(async (tx) => {
+      const createdPayment = await tx.payment.create({
         data: {
           orderId,
           method: refundMethod,
@@ -86,8 +91,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           tip: 0,
           reference: `refund: ${reason}`,
         },
-      }),
-    ])
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Payment',
+        entityId: createdPayment.id,
+        operation: 'create',
+        row: createdPayment,
+      })
+      const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+      if (orderRow) {
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: orderRow,
+        })
+      }
+      return [createdPayment] as const
+    })
 
     // Fire-and-forget audit trail (never blocks the business operation).
     await logAudit({

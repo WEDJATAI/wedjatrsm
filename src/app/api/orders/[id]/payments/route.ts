@@ -7,6 +7,7 @@ import { logAudit } from '@/lib/audit'
 import { MONEY_EPSILON, PAYMENT_METHODS } from '@/lib/constants'
 import { redeemLoyaltyPoints } from '@/lib/loyalty'
 import { paymentReference } from '@/lib/payment'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   closeOrderIfFullyPaid,
   getOrderOr404,
@@ -148,16 +149,50 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       })
     }
 
-    await db.payment.createMany({
-      data: rows.map((p) => ({
-        orderId,
-        method: p.method,
-        amount: p.amount,
-        tip: p.tip,
-        reference: p.reference,
-        amountTendered: p.amountTendered,
-        changeGiven: p.changeGiven,
-      })),
+    await db.$transaction(async (tx) => {
+      // R30 hybrid sync: read-back window computed BEFORE createMany (which
+      // returns no rows) so the new payments are identified by id > max.
+      const lastPayment = await tx.payment.findFirst({
+        where: { orderId },
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      })
+      const maxPaymentId = lastPayment?.id ?? 0
+      await tx.payment.createMany({
+        data: rows.map((p) => ({
+          orderId,
+          method: p.method,
+          amount: p.amount,
+          tip: p.tip,
+          reference: p.reference,
+          amountTendered: p.amountTendered,
+          changeGiven: p.changeGiven,
+        })),
+      })
+      // R30 hybrid sync: outbox events ride the SAME transaction — the new
+      // payment rows and the order row they settle onto.
+      if (rows.length > 0) {
+        const createdPayments = await tx.payment.findMany({
+          where: { orderId, id: { gt: maxPaymentId } },
+        })
+        for (const payment of createdPayments) {
+          await emitOutboxEvent(tx, {
+            entity: 'Payment',
+            entityId: payment.id,
+            operation: 'create',
+            row: payment,
+          })
+        }
+        const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+        if (orderRow) {
+          await emitOutboxEvent(tx, {
+            entity: 'Order',
+            entityId: orderId,
+            operation: 'update',
+            row: orderRow,
+          })
+        }
+      }
     })
 
     const { closed } = await closeOrderIfFullyPaid(orderId)

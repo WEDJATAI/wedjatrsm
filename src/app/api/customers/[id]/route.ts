@@ -7,6 +7,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { normalizePersonName } from '@/lib/names'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { ORDER_INCLUDE, parseId, serializeOrder } from '@/lib/orders'
 import { RESERVATION_INCLUDE, serializeReservation } from '@/lib/reservations'
 
@@ -154,7 +155,18 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     if (changed.length === 0) throw new ApiError('Nothing to update', 400)
 
-    const updated = await db.customer.update({ where: { id: customerId }, data })
+    // R30 hybrid sync: the profile write + its outbox event commit together
+    // (covers every edit source incl. the pointsAdjust branch)
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.customer.update({ where: { id: customerId }, data })
+      await emitOutboxEvent(tx, {
+        entity: 'Customer',
+        entityId: customerId,
+        operation: 'update',
+        row: saved,
+      })
+      return saved
+    })
 
     if (changed.some((c) => c !== 'points' && !c.startsWith('points '))) {
       await logAudit({

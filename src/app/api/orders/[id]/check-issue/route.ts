@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { parseId } from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -43,12 +44,27 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       // stamp with no person attached).
       // Conditional update: only when still null (two waiters presenting
       // simultaneously → the first stamp wins, no double overwrite).
-      const updated = await db.order.updateMany({
-        where: { id: orderId, checkIssuedByPersonId: null },
-        data: {
-          checkIssuedByPersonId: personId,
-          checkIssuedAt: new Date(),
-        },
+      // R30 hybrid sync: the stamp + its outbox event commit together.
+      const updated = await db.$transaction(async (tx) => {
+        const result = await tx.order.updateMany({
+          where: { id: orderId, checkIssuedByPersonId: null },
+          data: {
+            checkIssuedByPersonId: personId,
+            checkIssuedAt: new Date(),
+          },
+        })
+        if (result.count === 1) {
+          const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+          if (orderRow) {
+            await emitOutboxEvent(tx, {
+              entity: 'Order',
+              entityId: orderId,
+              operation: 'update',
+              row: orderRow,
+            })
+          }
+        }
+        return result
       })
       stamped = updated.count === 1
     }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse } from '@/lib/auth'
 import { checkRateLimit, clientIp, resetRateLimit } from '@/lib/rate-limit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import type { AttendanceRecord } from '@/lib/types'
 import {
   findUserByUsername,
@@ -55,9 +56,19 @@ export async function POST(req: NextRequest) {
     if (!open) throw new ApiError('No open check-in found', 400)
 
     const now = new Date()
-    const updated = await db.attendance.update({
-      where: { id: open.id },
-      data: { checkOutAt: now },
+    // R30 hybrid sync: the check-out write + its outbox event commit together
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.attendance.update({
+        where: { id: open.id },
+        data: { checkOutAt: now },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Attendance',
+        entityId: open.id,
+        operation: 'update',
+        row: saved,
+      })
+      return saved
     })
 
     resetRateLimit(rlKey)

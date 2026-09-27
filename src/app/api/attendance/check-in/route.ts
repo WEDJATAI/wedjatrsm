@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse } from '@/lib/auth'
 import { checkRateLimit, clientIp, resetRateLimit } from '@/lib/rate-limit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { LATE_GRACE_MINUTES } from '@/lib/constants'
 import type { AttendanceRecord } from '@/lib/types'
 import {
@@ -67,8 +68,20 @@ export async function POST(req: NextRequest) {
     const shift = matchShift(minutesOfDay(now), activeShifts)
     const lateMinutes = computeLateMinutes(now, shift, LATE_GRACE_MINUTES)
 
-    const record = await db.attendance.create({
-      data: { userId: user.id, checkInAt: now, lateMinutes },
+    // R30 hybrid sync: the attendance write + its outbox event commit
+    // together. PUBLIC route (no session actor) — the event's deviceId comes
+    // from local device state, which is exactly what the outbox contract wants.
+    const record = await db.$transaction(async (tx) => {
+      const saved = await tx.attendance.create({
+        data: { userId: user.id, checkInAt: now, lateMinutes },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Attendance',
+        entityId: saved.id,
+        operation: 'create',
+        row: saved,
+      })
+      return saved
     })
 
     resetRateLimit(rlKey)

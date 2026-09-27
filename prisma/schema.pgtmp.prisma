@@ -268,6 +268,11 @@ model Order {
   discountReason  String?           @map("discount_reason")
   clientName     String?            @map("client_name") // deferred-check client name
   extraTableIds  String?            @map("extra_table_ids") // JSON array of extra table ids (merged seating from the beginning)
+  // R30 hybrid sync: which device created this order — required for the
+  // origin-authority conflict policy (while an order is open/deferred, the
+  // device that created it keeps edit authority; other devices' changes are
+  // recorded as conflicts instead of overwriting live check state).
+  originDeviceId String?            @map("origin_device_id")
   // R19: who actually presented/issued the guest check (person-level — a
   // real staff member, not just the shared account). Stamped on first
   // issue (print/present or first payment) and never overwritten.
@@ -790,4 +795,82 @@ model Promotion {
 
   @@index([active])
   @@map("promotions")
+}
+
+// ─── R30: Local-first hybrid sync (rsm-hybrid/1) ─────────────────────
+// LOCAL OPERATIONAL QUEUES — these tables are per-installation state and
+// must NEVER replicate to the Turso replica (see HYBRID_QUEUE_TABLES in
+// src/lib/turso-schema.ts) nor ride legacy rsm-sync/1 bundles.
+
+// A device participating in hybrid sync (the local terminal itself — created
+// lazily by ensureLocalDevice() — plus every peer registered by an admin).
+// The raw deviceKey lives ONLY on the device itself; this row stores sha256(key).
+model HybridDevice {
+  id             Int       @id @default(autoincrement())
+  deviceId       String    @unique
+  installationId String    @unique
+  name           String
+  platform       String    @default("windows")
+  keyHash        String
+  status         String    @default("active") // active | paused | revoked
+  lastSeenAt     DateTime?
+  lastPushAt     DateTime?
+  lastPullAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  @@map("hybrid_devices")
+}
+
+// Durable event log — the outbox (direction 'out', local origin) and the
+// in-record (direction 'in', received from peers) in one table. Event
+// identity is the eventId UUID, so duplicate delivery is always detectable.
+model HybridEvent {
+  id            Int       @id @default(autoincrement())
+  eventId       String    @unique
+  deviceId      String
+  batchId       String?
+  entity        String
+  entityId      Int
+  operation     String // create | update | delete
+  revision      Int       @default(1)
+  payloadHash   String
+  payload       String
+  direction     String    @default("out") // out = local origin (outbox), in = received from cloud
+  status        String    @default("pending") // pending | inflight | acked | applied | failed | dead
+  attempts      Int       @default(0)
+  lastError     String?
+  nextAttemptAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  ackedAt       DateTime?
+  @@index([status, nextAttemptAt])
+  @@index([entity, entityId])
+  @@index([direction, deviceId])
+  @@map("hybrid_events")
+}
+
+// Every policy decision that did NOT silently resolve: append-only
+// violations, origin-authority refusals, revision tiebreaks, cloud
+// overrides of un-acked local edits. Human-reviewable record.
+model HybridConflict {
+  id         Int      @id @default(autoincrement())
+  eventId    String   @unique
+  entity     String
+  entityId   Int
+  localHash  String
+  remoteHash String
+  policy     String
+  resolution String // local-wins | remote-wins | recorded | appended | rejected
+  details    String?
+  resolvedAt DateTime @default(now())
+  @@map("hybrid_conflicts")
+}
+
+// Small key/value engine state (pull cursor, cloud reachability, pause
+// flag, local device identity, staged-restore marker …).
+model HybridSyncState {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+  @@map("hybrid_sync_state")
 }

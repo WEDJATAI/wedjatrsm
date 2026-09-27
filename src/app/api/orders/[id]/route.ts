@@ -6,6 +6,7 @@ import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { COURSES, DELETE_PIN_KEY } from '@/lib/constants'
 import { checkRateLimit, peekRateLimit } from '@/lib/rate-limit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   checkStockAvailability,
   getOrderOr404,
@@ -98,20 +99,50 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     if (addItems != null) {
       const items = await validateOrderItems(addItems)
       await checkStockAvailability(items, orderId)
-      await db.orderItem.createMany({
-        data: items.map((item) => ({
-          orderId,
-          productId: item.productId,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          notes: item.notes,
-          course: item.course,
-          status: 'new',
-          // R8: option snapshot (validated server-side by validateOrderItems)
-          selectedModifiers: item.selectedModifiers
-            ? JSON.stringify(item.selectedModifiers)
-            : undefined,
-        })),
+      await db.$transaction(async (tx) => {
+        // R30 hybrid sync: read-back window — createMany returns no rows, so
+        // the new items are identified by id > the order's previous max.
+        const lastItem = await tx.orderItem.findFirst({
+          where: { orderId },
+          orderBy: { id: 'desc' },
+          select: { id: true },
+        })
+        const maxItemId = lastItem?.id ?? 0
+        await tx.orderItem.createMany({
+          data: items.map((item) => ({
+            orderId,
+            productId: item.productId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            notes: item.notes,
+            course: item.course,
+            status: 'new',
+            // R8: option snapshot (validated server-side by validateOrderItems)
+            selectedModifiers: item.selectedModifiers
+              ? JSON.stringify(item.selectedModifiers)
+              : undefined,
+          })),
+        })
+        const createdItems = await tx.orderItem.findMany({
+          where: { orderId, id: { gt: maxItemId } },
+        })
+        for (const item of createdItems) {
+          await emitOutboxEvent(tx, {
+            entity: 'OrderItem',
+            entityId: item.id,
+            operation: 'create',
+            row: item,
+          })
+        }
+        const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+        if (orderRow) {
+          await emitOutboxEvent(tx, {
+            entity: 'Order',
+            entityId: orderId,
+            operation: 'update',
+            row: orderRow,
+          })
+        }
       })
     }
 
@@ -146,7 +177,34 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
             product: { select: { name: true } },
           },
         })
-        const removed = await db.orderItem.deleteMany({ where: { id: { in: ids }, orderId } })
+        const removed = await db.$transaction(async (tx) => {
+          // R30 hybrid sync: full pre-delete rows so the outbox events carry
+          // the deleted snapshot atomically with the deleteMany.
+          const doomedRows = await tx.orderItem.findMany({
+            where: { id: { in: ids }, orderId },
+          })
+          const result = await tx.orderItem.deleteMany({ where: { id: { in: ids }, orderId } })
+          for (const row of doomedRows) {
+            await emitOutboxEvent(tx, {
+              entity: 'OrderItem',
+              entityId: row.id,
+              operation: 'delete',
+              row,
+            })
+          }
+          if (result.count > 0) {
+            const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+            if (orderRow) {
+              await emitOutboxEvent(tx, {
+                entity: 'Order',
+                entityId: orderId,
+                operation: 'update',
+                row: orderRow,
+              })
+            }
+          }
+          return result
+        })
         if (removed.count > 0) {
           await logAudit({
             user,
@@ -166,34 +224,57 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       if (!Array.isArray(updateItems)) {
         throw new ApiError('updateItems must be an array', 400)
       }
-      for (const raw of updateItems) {
-        const itemId = Number(raw?.id)
-        if (!Number.isInteger(itemId) || itemId <= 0) {
-          throw new ApiError('updateItems contains an invalid item id', 400)
-        }
-        const data: { quantity?: number; notes?: string | null; course?: string } = {}
-        if (raw.quantity != null) {
-          const quantity = Number(raw.quantity)
-          if (!Number.isFinite(quantity) || quantity <= 0) {
-            throw new ApiError('Item quantity must be greater than zero', 400)
+      await db.$transaction(async (tx) => {
+        for (const raw of updateItems) {
+          const itemId = Number(raw?.id)
+          if (!Number.isInteger(itemId) || itemId <= 0) {
+            throw new ApiError('updateItems contains an invalid item id', 400)
           }
-          data.quantity = quantity
-        }
-        if (raw.notes !== undefined) {
-          data.notes = raw.notes == null ? null : String(raw.notes)
-        }
-        if (raw.course != null) {
-          const course = String(raw.course)
-          if (!(COURSES as readonly string[]).includes(course)) {
-            throw new ApiError(`Invalid course "${course}"`, 400)
+          const data: { quantity?: number; notes?: string | null; course?: string } = {}
+          if (raw.quantity != null) {
+            const quantity = Number(raw.quantity)
+            if (!Number.isFinite(quantity) || quantity <= 0) {
+              throw new ApiError('Item quantity must be greater than zero', 400)
+            }
+            data.quantity = quantity
           }
-          data.course = course
+          if (raw.notes !== undefined) {
+            data.notes = raw.notes == null ? null : String(raw.notes)
+          }
+          if (raw.course != null) {
+            const course = String(raw.course)
+            if (!(COURSES as readonly string[]).includes(course)) {
+              throw new ApiError(`Invalid course "${course}"`, 400)
+            }
+            data.course = course
+          }
+          const result = await tx.orderItem.updateMany({ where: { id: itemId, orderId }, data })
+          if (result.count === 0) {
+            throw new ApiError(`Order item ${itemId} not found`, 404)
+          }
+          // R30 hybrid sync: the updated row rides the same transaction
+          const updatedRow = await tx.orderItem.findUnique({ where: { id: itemId } })
+          if (updatedRow) {
+            await emitOutboxEvent(tx, {
+              entity: 'OrderItem',
+              entityId: itemId,
+              operation: 'update',
+              row: updatedRow,
+            })
+          }
         }
-        const result = await db.orderItem.updateMany({ where: { id: itemId, orderId }, data })
-        if (result.count === 0) {
-          throw new ApiError(`Order item ${itemId} not found`, 404)
+        if (updateItems.length > 0) {
+          const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+          if (orderRow) {
+            await emitOutboxEvent(tx, {
+              entity: 'Order',
+              entityId: orderId,
+              operation: 'update',
+              row: orderRow,
+            })
+          }
         }
-      }
+      })
     }
 
     // Absolute discount in EGP (clamped to subtotal inside recomputeTotals).
@@ -223,12 +304,21 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
           throw new ApiError('Invalid manager PIN', 403)
         }
       }
-      await db.order.update({
-        where: { id: orderId },
-        data: {
-          discountAmount: discount,
-          discountReason: discount > 0 ? reason : null,
-        },
+      await db.$transaction(async (tx) => {
+        const updatedOrder = await tx.order.update({
+          where: { id: orderId },
+          data: {
+            discountAmount: discount,
+            discountReason: discount > 0 ? reason : null,
+          },
+        })
+        // R30 hybrid sync: the discount write rides the same transaction
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: updatedOrder,
+        })
       })
       if (discount > 0) {
         await logDiscountAudit(
@@ -249,7 +339,19 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       if (!Number.isInteger(parsedGuests) || parsedGuests < 1 || parsedGuests > 30) {
         throw new ApiError('Guests must be between 1 and 30', 400)
       }
-      await db.order.update({ where: { id: orderId }, data: { guests: parsedGuests } })
+      await db.$transaction(async (tx) => {
+        const updatedOrder = await tx.order.update({
+          where: { id: orderId },
+          data: { guests: parsedGuests },
+        })
+        // R30 hybrid sync: the guest-count write rides the same transaction
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: updatedOrder,
+        })
+      })
     }
 
     // R13: loyalty — attach / detach the customer profile on an open order
@@ -266,7 +368,19 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         if (!customer || !customer.active) throw new ApiError('Customer not found', 400)
         customerId = customer.id
       }
-      await db.order.update({ where: { id: orderId }, data: { customerId } })
+      await db.$transaction(async (tx) => {
+        const updatedOrder = await tx.order.update({
+          where: { id: orderId },
+          data: { customerId },
+        })
+        // R30 hybrid sync: the attach/detach write rides the same transaction
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: updatedOrder,
+        })
+      })
       await logAudit({
         user,
         action: 'order.update',

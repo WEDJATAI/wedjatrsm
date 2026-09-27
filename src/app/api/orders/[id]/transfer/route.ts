@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   findOpenOrderOnTable,
   getOrderOr404,
@@ -47,6 +48,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       // single destination table: primary table moves, extras are released.
       // R9: shared with the human-confirmed AI movement flow (lib/vision.ts).
       await rehouseOpenOrder(tx, order, tableId)
+      // R30 hybrid sync: the moved order rides an outbox event in the SAME
+      // transaction (final row read inside the tx)
+      const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+      if (orderRow) {
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: orderRow,
+        })
+      }
     })
 
     const fresh = await getOrderOr404(orderId)

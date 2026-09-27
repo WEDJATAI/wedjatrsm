@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { ITEM_STATUSES } from '@/lib/constants'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { parseId, serializeOrderItem } from '@/lib/orders'
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -43,10 +44,21 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       data.quantity = quantity
     }
 
-    const updated = await db.orderItem.update({
-      where: { id: itemId },
-      data,
-      include: { product: { select: { id: true, name: true, nameAr: true } } },
+    // R30 hybrid sync: the item write + its outbox event commit together —
+    // one transaction, two statements (KDS hot path, kept lean)
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.orderItem.update({
+        where: { id: itemId },
+        data,
+        include: { product: { select: { id: true, name: true, nameAr: true } } },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'OrderItem',
+        entityId: itemId,
+        operation: 'update',
+        row: saved,
+      })
+      return saved
     })
     return NextResponse.json({ item: serializeOrderItem(updated) })
   } catch (err) {

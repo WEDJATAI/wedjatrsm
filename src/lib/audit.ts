@@ -99,6 +99,10 @@ export const AUDIT_ACTIONS = [
   'replication.tursoSync',
   // R27: manager sign-in — the super admin changed his own PIN
   'manager.pinChange',
+  // R30: local-first hybrid sync — device registry + staged restore
+  'hybrid.deviceCreate',
+  'hybrid.deviceUpdate',
+  'backup.restoreStage',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 

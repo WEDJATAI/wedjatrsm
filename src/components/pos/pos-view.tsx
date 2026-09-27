@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftRight, Ban, Check, ChevronLeft, Combine, Loader2, Minus, Plus, Users } from 'lucide-react'
 
@@ -32,7 +32,7 @@ import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
 import { enqueueOfflineAction } from '@/lib/offline-queue'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import type { Customer, FloorPlan, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
+import type { Customer, FloorPlan, HybridStatusDTO, Order, Product, RestaurantTable, SelectedModifier, SessionUser } from '@/lib/types'
 import CartPanel from './cart-panel'
 import CheckModal from './check-modal'
 import ModifierSheet, { type ModifierSheetSelection } from './modifier-sheet'
@@ -89,9 +89,83 @@ function readDeliveryInfo(): { phone: string; address: string } | null {
   return null
 }
 
+// ── R30: hybrid sync status pill (order-mode header) ─────────────
+
+/** navigator.onLine as a React store (online/offline event subscription). */
+function subscribeOnline(onChange: () => void): () => void {
+  window.addEventListener('online', onChange)
+  window.addEventListener('offline', onChange)
+  return () => {
+    window.removeEventListener('online', onChange)
+    window.removeEventListener('offline', onChange)
+  }
+}
+
+function getOnlineSnapshot(): boolean {
+  return navigator.onLine
+}
+
+function getOnlineServerSnapshot(): boolean {
+  return true
+}
+
+/**
+ * A CALM presence-only chip: LOCAL MODE is a normal, healthy state and is
+ * NEVER rendered red. No toasts, no modals, no click action (waiters lack
+ * the settings permission — details live in the Hybrid Sync Center).
+ * Shares the ['hybrid','status'] query cache with the Sync Center card.
+ * Renders nothing while loading or when the query fails (POS stays clean).
+ */
+function HybridSyncPill() {
+  const { t } = useI18n()
+  const online = useSyncExternalStore(subscribeOnline, getOnlineSnapshot, getOnlineServerSnapshot)
+  const statusQuery = useQuery({
+    queryKey: ['hybrid', 'status'],
+    queryFn: () => fetcher<HybridStatusDTO>('/api/hybrid/status'),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    staleTime: 20_000,
+    retry: false,
+  })
+  const status = statusQuery.data
+  if (statusQuery.isLoading || statusQuery.isError || !status) return null
+
+  const pending = status.counts.pendingUploads
+  const cloudConnected = online && !!status.targetUrl && status.cloud.reachable === 'yes'
+  const waiting = online && pending > 0
+
+  const text = waiting
+    ? t('hybrid.mode.waiting', { n: pending })
+    : cloudConnected
+      ? t('hybrid.mode.cloud')
+      : t('hybrid.mode.local')
+
+  return (
+    <span
+      role="status"
+      title={text}
+      aria-label={text}
+      className={cn(
+        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium',
+        waiting
+          ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
+          : 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300',
+      )}
+    >
+      <span
+        className={cn('h-1.5 w-1.5 rounded-full', waiting ? 'bg-amber-500' : 'bg-emerald-500')}
+        aria-hidden
+      />
+      <span className="hidden sm:inline">{text}</span>
+      {waiting ? <span className="tabular-nums sm:hidden">{pending}</span> : null}
+    </span>
+  )
+}
+
 /** `active` — true while the POS view is the visible top-level view. page.tsx
  *  keeps PosView mounted (hidden) when the user switches views so the order
  *  state survives; defaults to true when the prop is not passed. */
+
 /** R13 PWA: read the mirrored product catalog (undefined when never cached). */
 function readProductsCache(): { products: Product[] } | undefined {
   if (typeof window === 'undefined') return undefined
@@ -1170,6 +1244,9 @@ export default function PosView({ active = true }: { active?: boolean }) {
               <span className="hidden md:inline">{t('common.cancel')}</span>
             </Button>
           )}
+          {/* R30: hybrid sync status — calm presence chip (details live in
+              Settings → Hybrid Sync Center; no interaction by design) */}
+          <HybridSyncPill />
         </div>
       </header>
 

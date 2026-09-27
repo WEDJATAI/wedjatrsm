@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import type { SessionPayload } from '@/lib/auth'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { round2 } from '@/lib/orders'
 import type {
   CashDrawerEntryDTO,
@@ -248,10 +249,24 @@ export async function POST(req: NextRequest) {
       }
       const openingFloat = round2(float)
 
-      const created = await db.cashDrawerSession.create({
-        data: { userId: user.userId, openingFloat },
-        include: { user: { select: { id: true, name: true } } },
+      // R30 hybrid sync: the session write + its outbox event commit together
+      // (event row is a plain re-read — the API row carries the user include)
+      const created = await db.$transaction(async (tx) => {
+        const saved = await tx.cashDrawerSession.create({
+          data: { userId: user.userId, openingFloat },
+        })
+        await emitOutboxEvent(tx, {
+          entity: 'CashDrawerSession',
+          entityId: saved.id,
+          operation: 'create',
+          row: saved,
+        })
+        return tx.cashDrawerSession.findUnique({
+          where: { id: saved.id },
+          include: { user: { select: { id: true, name: true } } },
+        })
       })
+      if (!created) throw new ApiError('Drawer session not found', 404)
       await auditDrawer(
         user,
         'drawer.open',
@@ -280,14 +295,25 @@ export async function POST(req: NextRequest) {
       const note = parseNote(body.note, NOTE_MAX, 'Note')
 
       const amountR = round2(amount)
-      const entry = await db.cashDrawerEntry.create({
-        data: {
-          sessionId: open.id,
-          type,
-          amount: amountR,
-          note,
-          userId: user.userId,
-        },
+      // R30 hybrid sync: the drawer entry write + its outbox event commit
+      // together
+      const entry = await db.$transaction(async (tx) => {
+        const saved = await tx.cashDrawerEntry.create({
+          data: {
+            sessionId: open.id,
+            type,
+            amount: amountR,
+            note,
+            userId: user.userId,
+          },
+        })
+        await emitOutboxEvent(tx, {
+          entity: 'CashDrawerEntry',
+          entityId: saved.id,
+          operation: 'create',
+          row: saved,
+        })
+        return saved
       })
       const entryDto: CashDrawerEntryDTO = {
         id: entry.id,

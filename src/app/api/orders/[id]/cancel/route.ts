@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   ORDER_INCLUDE,
   freeTableIfUnused,
@@ -34,10 +35,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       throw new ApiError('Order is already cancelled', 400)
     }
 
-    const updated = await db.order.update({
-      where: { id: orderId },
-      data: { status: 'cancelled', closedAt: new Date() },
-      include: ORDER_INCLUDE,
+    // R30 hybrid sync: the cancel write + its outbox event commit together
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.order.update({
+        where: { id: orderId },
+        data: { status: 'cancelled', closedAt: new Date() },
+        include: ORDER_INCLUDE,
+      })
+      const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+      if (orderRow) {
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: orderRow,
+        })
+      }
+      return saved
     })
 
     // Release EVERY seating table (primary + merged extras) — only when no

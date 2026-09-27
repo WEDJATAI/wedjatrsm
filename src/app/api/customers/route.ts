@@ -8,6 +8,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { normalizePersonName } from '@/lib/names'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 
 function serializeCustomer(c: {
   id: number
@@ -103,8 +104,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const created = await db.customer.create({
-      data: { name, phone, notes, points },
+    // R30 hybrid sync: the profile write + its outbox event commit together
+    const created = await db.$transaction(async (tx) => {
+      const saved = await tx.customer.create({
+        data: { name, phone, notes, points },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Customer',
+        entityId: saved.id,
+        operation: 'create',
+        row: saved,
+      })
+      return saved
     })
 
     await logAudit({

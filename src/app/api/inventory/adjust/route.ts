@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAuth, errorResponse, ApiError } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import type { Product } from '@/lib/types'
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
@@ -97,12 +98,29 @@ export async function POST(req: NextRequest) {
         data: { stock: newStock },
         include: { category: { select: { id: true, name: true } } },
       })
-      await tx.inventoryTransaction.create({
+      // R30 hybrid sync: stock write + ledger row + outbox events ride the
+      // SAME transaction (event rows are plain re-reads — no relation includes)
+      const productRow = await tx.product.findUnique({ where: { id: productId } })
+      if (productRow) {
+        await emitOutboxEvent(tx, {
+          entity: 'Product',
+          entityId: productId,
+          operation: 'update',
+          row: productRow,
+        })
+      }
+      const createdTx = await tx.inventoryTransaction.create({
         data: {
           productId,
           quantityChange,
           reason: note ? `${reason} (${note})` : reason,
         },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'InventoryTransaction',
+        entityId: createdTx.id,
+        operation: 'create',
+        row: createdTx,
       })
       return saved
     })

@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, type SessionPayload } from '@/lib/auth'
 import { COURSES, MONEY_EPSILON, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   bestPromotion,
   isPromoReason,
@@ -283,7 +284,19 @@ export async function setTablesStatusForOrder(
       continue
     }
     if (table.status === target) continue
-    await db.restaurantTable.update({ where: { id: tableId }, data: { status: target } })
+    // R30 hybrid sync: each table write + its outbox event commit together
+    await db.$transaction(async (tx) => {
+      const updatedTable = await tx.restaurantTable.update({
+        where: { id: tableId },
+        data: { status: target },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'RestaurantTable',
+        entityId: tableId,
+        operation: 'update',
+        row: updatedTable,
+      })
+    })
   }
 }
 
@@ -361,18 +374,31 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
   const tax = round2(base * TAX_RATE)
   const serviceTax = round2(base * SERVICE_TAX_RATE)
   const total = round2(base + tax + serviceTax)
-  const updated = await db.order.update({
-    where: { id: orderId },
-    data: {
-      subtotalAmount: subtotal,
-      discountAmount: round2(discount),
-      discountReason,
-      taxAmount: tax,
-      serviceTaxAmount: serviceTax,
-      totalAmount: total,
-    },
-    include: ORDER_INCLUDE,
+  // R30 hybrid sync: the money write + its outbox event commit together —
+  // this is the single server-authoritative totals choke point (it runs at
+  // order creation and after every item add/remove/update/transfer/merge),
+  // so every recomputed order state rides an event with the FINAL totals.
+  const updated = await db.$transaction(async (tx) => {
+    const saved = await tx.order.update({
+      where: { id: orderId },
+      data: {
+        subtotalAmount: subtotal,
+        discountAmount: round2(discount),
+        discountReason,
+        taxAmount: tax,
+        serviceTaxAmount: serviceTax,
+        totalAmount: total,
+      },
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Order',
+      entityId: orderId,
+      operation: 'update',
+      row: saved,
+    })
+    return tx.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE })
   })
+  if (!updated) throw new ApiError('Order not found', 404)
   return serializeOrder(updated)
 }
 
@@ -684,11 +710,19 @@ export async function deductInventoryForOrder(orderId: number): Promise<void> {
       if (!product) continue
 
       if (product.isStockable) {
-        await tx.product.update({
+        // R30 hybrid sync: stock write + transaction row + outbox events
+        // all ride this same transaction
+        const savedProduct = await tx.product.update({
           where: { id: product.id },
           data: { stock: { decrement: item.quantity } },
         })
-        await tx.inventoryTransaction.create({
+        await emitOutboxEvent(tx, {
+          entity: 'Product',
+          entityId: savedProduct.id,
+          operation: 'update',
+          row: savedProduct,
+        })
+        const createdTx = await tx.inventoryTransaction.create({
           data: {
             productId: product.id,
             quantityChange: -item.quantity,
@@ -696,22 +730,40 @@ export async function deductInventoryForOrder(orderId: number): Promise<void> {
             orderId,
           },
         })
+        await emitOutboxEvent(tx, {
+          entity: 'InventoryTransaction',
+          entityId: createdTx.id,
+          operation: 'create',
+          row: createdTx,
+        })
       }
 
       for (const component of product.recipeFor) {
         const quantity = component.quantity * item.quantity
         if (quantity === 0) continue
-        await tx.product.update({
+        const savedIngredient = await tx.product.update({
           where: { id: component.ingredientId },
           data: { stock: { decrement: quantity } },
         })
-        await tx.inventoryTransaction.create({
+        await emitOutboxEvent(tx, {
+          entity: 'Product',
+          entityId: savedIngredient.id,
+          operation: 'update',
+          row: savedIngredient,
+        })
+        const createdTx = await tx.inventoryTransaction.create({
           data: {
             productId: component.ingredientId,
             quantityChange: -quantity,
             reason: 'sale',
             orderId,
           },
+        })
+        await emitOutboxEvent(tx, {
+          entity: 'InventoryTransaction',
+          entityId: createdTx.id,
+          operation: 'create',
+          row: createdTx,
         })
       }
     }
@@ -739,9 +791,18 @@ export async function closeOrderIfFullyPaid(orderId: number): Promise<{ closed: 
   const paidAmount = order.payments.reduce((sum, p) => sum + p.amount, 0)
   if (paidAmount < order.totalAmount - MONEY_EPSILON) return { closed: false }
 
-  await db.order.update({
-    where: { id: orderId },
-    data: { status: 'paid', closedAt: new Date() },
+  // R30 hybrid sync: the close write + its outbox event commit together
+  await db.$transaction(async (tx) => {
+    const closedOrder = await tx.order.update({
+      where: { id: orderId },
+      data: { status: 'paid', closedAt: new Date() },
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Order',
+      entityId: orderId,
+      operation: 'update',
+      row: closedOrder,
+    })
   })
   await deductInventoryForOrder(orderId)
 
@@ -783,9 +844,19 @@ export async function deferOrder(
   if (order.items.length === 0) {
     throw new ApiError('Cannot defer an empty order', 400)
   }
-  const updated = await db.order.update({
-    where: { id: orderId },
-    data: { status: 'deferred', clientName },
+  // R30 hybrid sync: the defer write + its outbox event commit together
+  const updated = await db.$transaction(async (tx) => {
+    const deferredOrder = await tx.order.update({
+      where: { id: orderId },
+      data: { status: 'deferred', clientName },
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Order',
+      entityId: orderId,
+      operation: 'update',
+      row: deferredOrder,
+    })
+    return deferredOrder
   })
   await setTablesStatusForOrder(updated, 'deferred')
   return db.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE })

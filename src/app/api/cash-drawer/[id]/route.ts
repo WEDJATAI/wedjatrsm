@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import type { SessionPayload } from '@/lib/auth'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { round2 } from '@/lib/orders'
 import type { CashDrawerSessionDTO } from '@/lib/types'
 
@@ -150,11 +151,25 @@ export async function POST(
     const variance = round2(countedCash - expected)
     const closedAt = new Date()
 
-    const updated = await db.cashDrawerSession.update({
-      where: { id: sessionId },
-      data: { countedCash, expectedCash: expected, variance, note, closedAt },
-      include: { user: { select: { id: true, name: true } } },
+    // R30 hybrid sync: the close write + its outbox event commit together
+    // (event row is a plain re-read — the API row carries the user include)
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.cashDrawerSession.update({
+        where: { id: sessionId },
+        data: { countedCash, expectedCash: expected, variance, note, closedAt },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'CashDrawerSession',
+        entityId: sessionId,
+        operation: 'update',
+        row: saved,
+      })
+      return tx.cashDrawerSession.findUnique({
+        where: { id: sessionId },
+        include: { user: { select: { id: true, name: true } } },
+      })
     })
+    if (!updated) throw new ApiError('Drawer session not found', 404)
 
     await auditDrawer(
       user,

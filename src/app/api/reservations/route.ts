@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { RESERVATION_STATUSES } from '@/lib/constants'
 import {
   RESERVATION_INCLUDE,
@@ -134,21 +135,35 @@ export async function POST(req: NextRequest) {
       customerId = byPhone?.id ?? null
     }
 
-    const reservation = await db.reservation.create({
-      data: {
-        customerName,
-        customerPhone,
-        customerId,
-        partySize,
-        reservedAt,
-        notes,
-        tableId,
-        floorPlanId,
-        status: 'pending',
-        createdBy: session.name,
-      },
-      include: RESERVATION_INCLUDE,
+    // R30 hybrid sync: the booking write + its outbox event commit together
+    // (event row is a plain re-read — the API row carries relation includes)
+    const reservation = await db.$transaction(async (tx) => {
+      const saved = await tx.reservation.create({
+        data: {
+          customerName,
+          customerPhone,
+          customerId,
+          partySize,
+          reservedAt,
+          notes,
+          tableId,
+          floorPlanId,
+          status: 'pending',
+          createdBy: session.name,
+        },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'Reservation',
+        entityId: saved.id,
+        operation: 'create',
+        row: saved,
+      })
+      return tx.reservation.findUnique({
+        where: { id: saved.id },
+        include: RESERVATION_INCLUDE,
+      })
     })
+    if (!reservation) throw new ApiError('Reservation not found', 404)
 
     await logAudit({
       user: session,

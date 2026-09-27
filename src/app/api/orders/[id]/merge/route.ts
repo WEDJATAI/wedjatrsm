@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   closeOrderIfFullyPaid,
   findOpenOrderOnTable,
@@ -89,6 +90,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           where: { id: targetTableId },
           data: { status: 'occupied' },
         })
+      }
+
+      // R30 hybrid sync: both affected orders ride outbox events in the SAME
+      // transaction — final rows read inside the tx (the re-parented item /
+      // payment rows themselves are deliberately not evented this phase;
+      // Payment is append-only by policy and item re-parenting is a phase-2
+      // candidate — see worklog r30-8b).
+      for (const affectedId of [target.id, source.id]) {
+        const orderRow = await tx.order.findUnique({ where: { id: affectedId } })
+        if (orderRow) {
+          await emitOutboxEvent(tx, {
+            entity: 'Order',
+            entityId: affectedId,
+            operation: 'update',
+            row: orderRow,
+          })
+        }
       }
     })
 

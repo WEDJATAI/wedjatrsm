@@ -28,6 +28,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DesktopDownloadCard } from '@/components/admin/desktop-download-card'
 import { SyncCard } from '@/components/admin/sync-card'
+import { HybridSyncCard } from '@/components/admin/hybrid-sync-card'
 import {
   Card,
   CardContent,
@@ -116,6 +117,9 @@ export default function SettingsView() {
 
       {/* Card 5 — sync center (offline-first Windows deployment) */}
       <SyncCard />
+
+      {/* Card 5b — hybrid sync center (R30 event-based device-to-cloud layer) */}
+      <HybridSyncCard />
 
       {/* Card 6 — download for Windows (offline-first desktop package) */}
       <DesktopDownloadCard />

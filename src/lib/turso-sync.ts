@@ -18,7 +18,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { getTursoClient, isTursoConfigured } from '@/lib/turso'
-import { TURSO_DDL, TURSO_DDL_MIGRATIONS } from '@/lib/turso-schema'
+import { TURSO_DDL, TURSO_DDL_MIGRATIONS, HYBRID_QUEUE_TABLES } from '@/lib/turso-schema'
 
 export type TursoSyncTableReport = {
   table: string
@@ -63,9 +63,14 @@ function accessorFor(modelName: string): string {
   return modelName.charAt(0).toLowerCase() + modelName.slice(1)
 }
 
-/** Models topologically sorted by FK dependencies (parents first). */
+/** Models topologically sorted by FK dependencies (parents first).
+ * R30: hybrid-sync queue tables (HYBRID_QUEUE_TABLES) are EXCLUDED — they are
+ * per-installation operational state (outbox/in-record/device registry), not
+ * business data; a full-refresh copy of a queue is meaningless and harmful. */
 function orderedModels(): ModelInfo[] {
-  const models = Prisma.dmmf.datamodel.models as unknown as DmmfModel[]
+  const models = (Prisma.dmmf.datamodel.models as unknown as DmmfModel[]).filter(
+    (m) => !HYBRID_QUEUE_TABLES.has(m.dbName ?? m.name),
+  )
   const deps = new Map<string, Set<string>>()
   for (const m of models) {
     const d = new Set<string>()

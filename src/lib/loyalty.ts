@@ -5,6 +5,7 @@
 
 import { db } from '@/lib/db'
 import { ApiError } from '@/lib/auth'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import {
   LOYALTY_DEFAULTS,
   LOYALTY_EGP_PER_POINT_KEY,
@@ -68,21 +69,36 @@ export async function awardLoyaltyOnClose(orderId: number): Promise<number> {
   const earned = round2(earnBase * settings.pointsPerEgp)
   if (earned <= 0) return 0
 
-  await db.$transaction([
-    db.order.update({
+  // R30 hybrid sync: order + customer writes and their outbox events ride
+  // ONE transaction (award stays all-or-nothing, as before)
+  const customerId = order.customerId
+  await db.$transaction(async (tx) => {
+    const updatedOrder = await tx.order.update({
       where: { id: orderId },
       data: { pointsEarned: earned },
-    }),
-    db.customer.update({
-      where: { id: order.customerId },
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Order',
+      entityId: orderId,
+      operation: 'update',
+      row: updatedOrder,
+    })
+    const updatedCustomer = await tx.customer.update({
+      where: { id: customerId },
       data: {
         points: { increment: earned },
         visits: { increment: 1 },
         totalSpent: { increment: round2(order.totalAmount) },
         lastVisitAt: new Date(),
       },
-    }),
-  ])
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Customer',
+      entityId: updatedCustomer.id,
+      operation: 'update',
+      row: updatedCustomer,
+    })
+  })
   return earned
 }
 
@@ -132,16 +148,32 @@ export async function redeemLoyaltyPoints(
   if (egpValue <= 0) throw new ApiError('Redeemed value rounds to zero', 400)
   const pointsUsed = round2(egpValue / settings.egpPerPoint)
 
-  await db.$transaction([
-    db.customer.update({
-      where: { id: order.customerId },
+  // R30 hybrid sync: the double-spend guard (customer points), the order
+  // stamp and the loyalty tender row ride ONE transaction together with
+  // their outbox events.
+  const customerId = order.customerId
+  await db.$transaction(async (tx) => {
+    const updatedCustomer = await tx.customer.update({
+      where: { id: customerId },
       data: { points: { decrement: pointsUsed } },
-    }),
-    db.order.update({
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Customer',
+      entityId: updatedCustomer.id,
+      operation: 'update',
+      row: updatedCustomer,
+    })
+    const updatedOrder = await tx.order.update({
       where: { id: orderId },
       data: { pointsRedeemed: round2(order.pointsRedeemed + pointsUsed) },
-    }),
-    db.payment.create({
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Order',
+      entityId: orderId,
+      operation: 'update',
+      row: updatedOrder,
+    })
+    const createdPayment = await tx.payment.create({
       data: {
         orderId,
         method: 'loyalty',
@@ -149,7 +181,13 @@ export async function redeemLoyaltyPoints(
         tip: 0,
         reference: `points:${pointsUsed}`,
       },
-    }),
-  ])
+    })
+    await emitOutboxEvent(tx, {
+      entity: 'Payment',
+      entityId: createdPayment.id,
+      operation: 'create',
+      row: createdPayment,
+    })
+  })
   return { egpValue, customerId: order.customerId, customerName: order.customer.name }
 }

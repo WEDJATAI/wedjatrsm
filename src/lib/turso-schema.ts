@@ -10,8 +10,24 @@
  * REGENERATE after any prisma/schema.prisma model change:
  *   bun scripts/turso-schema-gen.ts
  */
+
+/**
+ * R30: hybrid-sync LOCAL OPERATIONAL QUEUES — per-installation state that must
+ * NEVER replicate to the Turso replica. The replica is a full DELETE+INSERT
+ * refresh; refreshing a queue table from the system of record would be wrong
+ * on every level (an outbox is not a copy target — it is instance-local).
+ * Applied by src/lib/turso-sync.ts (table walk) and this generator (DDL
+ * generation) so the 4 hybrid tables never enter the replica at all.
+ */
+export const HYBRID_QUEUE_TABLES = new Set([
+  'hybrid_devices',
+  'hybrid_events',
+  'hybrid_conflicts',
+  'hybrid_sync_state',
+])
+
 export const TURSO_DDL: string[] = [
-  "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"email\" TEXT NOT NULL, \"password_hash\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"role\" TEXT NOT NULL DEFAULT 'waiter', \"role_id\" INTEGER, \"pin\" TEXT, \"active\" BOOLEAN NOT NULL DEFAULT true, \"hourly_rate\" REAL, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"users_role_id_fkey\" FOREIGN KEY (\"role_id\") REFERENCES \"roles\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
+  "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"email\" TEXT NOT NULL, \"password_hash\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"role\" TEXT NOT NULL DEFAULT 'waiter', \"role_id\" INTEGER, \"pin\" TEXT, \"active\" BOOLEAN NOT NULL DEFAULT true, \"is_super_admin\" BOOLEAN NOT NULL DEFAULT false, \"hourly_rate\" REAL, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"users_role_id_fkey\" FOREIGN KEY (\"role_id\") REFERENCES \"roles\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"persons\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"user_id\" INTEGER NOT NULL, \"name\" TEXT NOT NULL, \"active\" BOOLEAN NOT NULL DEFAULT true, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \"updated_at\" DATETIME, CONSTRAINT \"persons_user_id_fkey\" FOREIGN KEY (\"user_id\") REFERENCES \"users\" (\"id\") ON DELETE CASCADE ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"roles\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"permissions\" TEXT NOT NULL DEFAULT '', \"active\" BOOLEAN NOT NULL DEFAULT true, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \"updated_at\" DATETIME )",
   "CREATE TABLE IF NOT EXISTS \"attendance\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"user_id\" INTEGER NOT NULL, \"check_in_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \"check_out_at\" DATETIME, \"late_minutes\" INTEGER NOT NULL DEFAULT 0, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"attendance_user_id_fkey\" FOREIGN KEY (\"user_id\") REFERENCES \"users\" (\"id\") ON DELETE RESTRICT ON UPDATE CASCADE )",
@@ -22,7 +38,7 @@ export const TURSO_DDL: string[] = [
   "CREATE TABLE IF NOT EXISTS \"products\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"name_ar\" TEXT, \"category_id\" INTEGER, \"price\" REAL NOT NULL DEFAULT 0, \"cost\" REAL NOT NULL DEFAULT 0, \"is_stockable\" BOOLEAN NOT NULL DEFAULT false, \"is_sellable\" BOOLEAN NOT NULL DEFAULT true, \"sku\" TEXT, \"image_url\" TEXT, \"active\" BOOLEAN NOT NULL DEFAULT true, \"low_stock_threshold\" REAL NOT NULL DEFAULT 0, \"stock\" REAL NOT NULL DEFAULT 0, \"sold_out\" BOOLEAN NOT NULL DEFAULT false, \"allergens\" TEXT, \"dietary\" TEXT, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"products_category_id_fkey\" FOREIGN KEY (\"category_id\") REFERENCES \"categories\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"floor_plans\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"background_image\" TEXT, \"active\" BOOLEAN NOT NULL DEFAULT true )",
   "CREATE TABLE IF NOT EXISTS \"tables\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"floor_plan_id\" INTEGER, \"name\" TEXT NOT NULL, \"capacity\" INTEGER NOT NULL DEFAULT 2, \"shape\" TEXT NOT NULL DEFAULT 'square', \"position_x\" REAL NOT NULL DEFAULT 50, \"position_y\" REAL NOT NULL DEFAULT 50, \"status\" TEXT NOT NULL DEFAULT 'free', \"active\" BOOLEAN NOT NULL DEFAULT true, CONSTRAINT \"tables_floor_plan_id_fkey\" FOREIGN KEY (\"floor_plan_id\") REFERENCES \"floor_plans\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
-  "CREATE TABLE IF NOT EXISTS \"orders\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"table_id\" INTEGER, \"user_id\" INTEGER, \"status\" TEXT NOT NULL DEFAULT 'open', \"order_type\" TEXT NOT NULL DEFAULT 'dinein', \"delivery_phone\" TEXT, \"delivery_address\" TEXT, \"customer_id\" INTEGER, \"points_earned\" REAL NOT NULL DEFAULT 0, \"points_redeemed\" REAL NOT NULL DEFAULT 0, \"external_ref\" TEXT, \"guests\" INTEGER NOT NULL DEFAULT 1, \"subtotal_amount\" REAL NOT NULL DEFAULT 0, \"total_amount\" REAL NOT NULL DEFAULT 0, \"discount_amount\" REAL NOT NULL DEFAULT 0, \"tax_amount\" REAL NOT NULL DEFAULT 0, \"service_tax_amount\" REAL NOT NULL DEFAULT 0, \"discount_reason\" TEXT, \"client_name\" TEXT, \"extra_table_ids\" TEXT, \"check_issued_by_person_id\" INTEGER, \"check_issued_at\" DATETIME, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \"closed_at\" DATETIME, \"updated_at\" DATETIME, CONSTRAINT \"orders_table_id_fkey\" FOREIGN KEY (\"table_id\") REFERENCES \"tables\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_user_id_fkey\" FOREIGN KEY (\"user_id\") REFERENCES \"users\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_customer_id_fkey\" FOREIGN KEY (\"customer_id\") REFERENCES \"customers\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_check_issued_by_person_id_fkey\" FOREIGN KEY (\"check_issued_by_person_id\") REFERENCES \"persons\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
+  "CREATE TABLE IF NOT EXISTS \"orders\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"table_id\" INTEGER, \"user_id\" INTEGER, \"status\" TEXT NOT NULL DEFAULT 'open', \"order_type\" TEXT NOT NULL DEFAULT 'dinein', \"delivery_phone\" TEXT, \"delivery_address\" TEXT, \"customer_id\" INTEGER, \"points_earned\" REAL NOT NULL DEFAULT 0, \"points_redeemed\" REAL NOT NULL DEFAULT 0, \"external_ref\" TEXT, \"guests\" INTEGER NOT NULL DEFAULT 1, \"subtotal_amount\" REAL NOT NULL DEFAULT 0, \"total_amount\" REAL NOT NULL DEFAULT 0, \"discount_amount\" REAL NOT NULL DEFAULT 0, \"tax_amount\" REAL NOT NULL DEFAULT 0, \"service_tax_amount\" REAL NOT NULL DEFAULT 0, \"discount_reason\" TEXT, \"client_name\" TEXT, \"extra_table_ids\" TEXT, \"origin_device_id\" TEXT, \"check_issued_by_person_id\" INTEGER, \"check_issued_at\" DATETIME, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \"closed_at\" DATETIME, \"updated_at\" DATETIME, CONSTRAINT \"orders_table_id_fkey\" FOREIGN KEY (\"table_id\") REFERENCES \"tables\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_user_id_fkey\" FOREIGN KEY (\"user_id\") REFERENCES \"users\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_customer_id_fkey\" FOREIGN KEY (\"customer_id\") REFERENCES \"customers\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE, CONSTRAINT \"orders_check_issued_by_person_id_fkey\" FOREIGN KEY (\"check_issued_by_person_id\") REFERENCES \"persons\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"order_items\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"order_id\" INTEGER NOT NULL, \"product_id\" INTEGER, \"quantity\" REAL NOT NULL DEFAULT 1, \"unit_price\" REAL NOT NULL DEFAULT 0, \"notes\" TEXT, \"course\" TEXT NOT NULL DEFAULT 'main', \"status\" TEXT NOT NULL DEFAULT 'new', \"selected_modifiers\" TEXT, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"order_items_order_id_fkey\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE ON UPDATE CASCADE, CONSTRAINT \"order_items_product_id_fkey\" FOREIGN KEY (\"product_id\") REFERENCES \"products\" (\"id\") ON DELETE SET NULL ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"payments\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"order_id\" INTEGER NOT NULL, \"method\" TEXT NOT NULL, \"amount\" REAL NOT NULL, \"tip\" REAL NOT NULL DEFAULT 0, \"reference\" TEXT, \"amount_tendered\" REAL NOT NULL DEFAULT 0, \"change_given\" REAL NOT NULL DEFAULT 0, \"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT \"payments_order_id_fkey\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE ON UPDATE CASCADE )",
   "CREATE TABLE IF NOT EXISTS \"modifier_groups\" ( \"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"name\" TEXT NOT NULL, \"name_ar\" TEXT, \"min_select\" INTEGER NOT NULL DEFAULT 0, \"max_select\" INTEGER NOT NULL DEFAULT 1, \"active\" BOOLEAN NOT NULL DEFAULT true, \"sort_order\" INTEGER NOT NULL DEFAULT 0 )",
@@ -102,13 +118,16 @@ export const TURSO_DDL: string[] = [
   "CREATE INDEX IF NOT EXISTS \"waste_logs_created_at_idx\" ON \"waste_logs\"(\"created_at\")",
   "CREATE INDEX IF NOT EXISTS \"promotions_active_idx\" ON \"promotions\"(\"active\")",
 ]
-
 /**
- * R26: column evolution for ALREADY-EXISTING replica tables — the DDL above
+ * Column evolution for ALREADY-EXISTING replica tables — the DDL above
  * is CREATE TABLE IF NOT EXISTS, so new columns on existing tables need
  * explicit ALTERs. Executed tolerantly (duplicate-column errors are fine).
  */
 export const TURSO_DDL_MIGRATIONS: string[] = [
   'ALTER TABLE "payments" ADD COLUMN "amount_tendered" REAL NOT NULL DEFAULT 0',
   'ALTER TABLE "payments" ADD COLUMN "change_given" REAL NOT NULL DEFAULT 0',
+  // R27 (healed on replica here in R30): the one super-admin flag
+  'ALTER TABLE "users" ADD COLUMN "is_super_admin" BOOLEAN NOT NULL DEFAULT false',
+  // R30 hybrid sync: Order.originDeviceId (origin-authority conflict policy)
+  'ALTER TABLE "orders" ADD COLUMN "origin_device_id" TEXT',
 ]
