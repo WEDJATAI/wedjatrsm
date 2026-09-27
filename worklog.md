@@ -1964,3 +1964,22 @@ Stage Summary:
 - Tiers are computed from lifetime spend everywhere (API + UI share one engine) — zero migration, self-updating, EGP 7,500/15,000 thresholds give a Bronze→Diamond ladder with progress bars on every card.
 - Files: src/lib/person-style.ts (NEW), src/app/api/customers/stats/route.ts (NEW), prisma/customer-fixtures.ts (NEW), src/components/admin/customers-view.tsx (rewrite), prisma/seed.ts (+fixtures call), src/lib/i18n/dict/r29.ts (NEW), src/lib/i18n/index.tsx (register). Evidence: screenshots/r29-01..12.png.
 - Honest notes: (1) live DB had only 2 demo customers before this round — the 12 fixtures are now seed-embedded so the CRM story survives reseeds; (2) /api/customers/[id]/loyalty-adjust + customer-helpers.ts are dead R12-era code (reference fields the schema never had — loyaltyPoints, LoyaltyTransaction) failing tsc since before this round; deleting them is a candidate for R30; (3) production Neon has no new columns/tables this round (tiers computed, stats endpoint is pure read) — deploy needs only the git push.
+
+---
+Task ID: r30-2/3/4/5 (Prompt 1 — Forensic Audit + Hardening Checkpoint)
+Agent: Z.ai Code (orchestrator) + 2 read-only Explore agents (infra r30-2a, surface r30-2b)
+Task: Full forensic audit of repository before hybrid architecture; create protected checkpoint; record provider states; honest audit report.
+
+Work Log:
+- Confirmed R29 closed (commit 7f55cba, lint 0 findings, E2E 12 screenshots per prior worklog section).
+- Forensic audit executed by two parallel read-only agents: (a) infrastructure/data layer — Prisma/DB/sync/offline/backup/Electron/providers/env; (b) application surface — 116 API routes, auth, write-path transaction map, audit logging, AI wiring, UI insertion points, existing sync UI.
+- KEY FINDINGS: sync is ONE-WAY only (no pull); Int autoincrement PKs + upsert-by-id = multi-site collision risk; updatedAt on only 12/35 models; no outbox/revisions/device identity; payment+close path is multi-commit; schema mirrored in 4 artifacts (sqlite/postgres/pgtmp/turso-schema); Turso token dead (401); Electron desktop mature (auto-update, CI); AI fallback chains already exist (chat Groq→Gemini→zai; embed 3×HF→local); 4 constant-time machine-auth precedents.
+- CHECKPOINT: backup branch `backup/pre-hybrid-r30` + annotated immutable tag `r29-validated-checkpoint` at 7f55cba.
+- Remote check: origin/main = e7bf6ab (r26b) — local 4 commits AHEAD. Push attempted → FAILED: no GitHub write credentials in sandbox (verified: no credential helper, no GH/GITHUB env tokens, no SSH keys). Recorded honestly; push must happen from credentialed environment.
+- Verified dead code: customers/[id]/loyalty-adjust + customer-helpers.ts reference schema fields that never existed (loyaltyPoints, LoyaltyTransaction) — tsc-failing since R12 era; flagged for removal in R30 implementation (loyaltyPointsPerEgp in seed/constants is a LIVE AppSetting key name, untouched).
+- Wrote docs/r30-forensic-audit.md (full report: checkpoint record, DB/schema/provider states, EXISTS/GOOD/WEAK/MUST CHANGE/PRESERVE/ADD/RISKS).
+
+Stage Summary:
+- Full implementation map delivered; checkpoint objects created locally (tag + backup branch); newest validated state = 7f55cba protected from rollback.
+- HONEST STATUS: GitHub push FAILED (no credentials in sandbox) — remote still at r26b; Vercel/Neon/Turso/Inngest runtime states unverifiable from sandbox (no tokens); Turso credential known-dead from worklog evidence.
+- Next: Prompt 2/3 implementation — Prisma hybrid models ×4 schema artifacts, src/lib/hybrid-sync/ engine, /api/hybrid/* routes with device auth, outbox wiring on key write paths, dead-code removal, then Sync Center UI + AI failover hardening.
