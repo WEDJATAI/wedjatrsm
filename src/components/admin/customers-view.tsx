@@ -603,7 +603,15 @@ export default function CustomersView() {
 
       {/* Detail dialog — the rich profile */}
       <Dialog open={detailId != null} onOpenChange={(open) => !open && setDetailId(null)}>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
+        <DialogContent
+          aria-describedby={undefined}
+          className="max-h-[90dvh] overflow-y-auto sm:max-w-xl"
+        >
+          {/* always-mounted title (sr-only) — keeps the dialog accessible
+              even during the profile's loading frame */}
+          <DialogTitle className="sr-only">
+            {detailQuery.data?.customer.name ?? t('customers.title')}
+          </DialogTitle>
           {detailQuery.isLoading ? (
             <div className="flex justify-center py-10">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -820,8 +828,7 @@ function CustomerProfile({ customer }: { customer: Customer }) {
   return (
     <div className="space-y-5">
       <DialogHeader className="space-y-4 text-start">
-        <DialogTitle className="sr-only">{customer.name}</DialogTitle>
-        {/* hero identity */}
+        {/* hero identity (the sr-only DialogTitle lives on the dialog root) */}
         <div className="flex flex-wrap items-start gap-4">
           <span className="relative shrink-0">
             <span
@@ -953,14 +960,14 @@ function CustomerProfile({ customer }: { customer: Customer }) {
                   · {t('customers.orderItems', { n: order.items.length })}
                 </span>
                 <span className="ms-auto flex items-center gap-2">
-                  {order.pointsEarned > 0 && (
+                  {(order.pointsEarned ?? 0) > 0 && (
                     <Badge className="border-primary/30 bg-primary/10 text-primary" variant="outline">
-                      {t('customers.pointsEarnedShort', { n: order.pointsEarned })}
+                      {t('customers.pointsEarnedShort', { n: order.pointsEarned ?? 0 })}
                     </Badge>
                   )}
-                  {order.pointsRedeemed > 0 && (
+                  {(order.pointsRedeemed ?? 0) > 0 && (
                     <Badge className="border-amber-300 bg-amber-50 text-amber-700" variant="outline">
-                      {t('customers.pointsRedeemedShort', { n: order.pointsRedeemed })}
+                      {t('customers.pointsRedeemedShort', { n: order.pointsRedeemed ?? 0 })}
                     </Badge>
                   )}
                   <span className="font-semibold tabular-nums">{formatCurrency(order.totalAmount)}</span>

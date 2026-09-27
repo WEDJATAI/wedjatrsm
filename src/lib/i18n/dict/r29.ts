@@ -39,7 +39,7 @@ export const r29Dict: DictPair = {
     'customers.tier.silver': 'Silver',
     'customers.tier.gold': 'Gold',
     'customers.tier.diamond': 'Diamond',
-    'customers.toNextTier': 'EGP {egp} to {tier}',
+    'customers.toNextTier': '{egp} to {tier}',
     'customers.topTier': 'Top tier — thank you!',
 
     // ── card + profile ──
@@ -94,7 +94,7 @@ export const r29Dict: DictPair = {
     'customers.tier.silver': 'فضي',
     'customers.tier.gold': 'ذهبي',
     'customers.tier.diamond': 'ماسي',
-    'customers.toNextTier': 'متبقي {egp} ج.م لفئة {tier}',
+    'customers.toNextTier': 'متبقي {egp} لفئة {tier}',
     'customers.topTier': 'أعلى فئة — شكرًا لكم!',
 
     // ── card + profile ──
