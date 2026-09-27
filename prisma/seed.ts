@@ -1,6 +1,7 @@
 /* Seed script: run with `bun prisma/seed.ts` */
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import { ensureCustomerFixtures } from './customer-fixtures'
 
 const db = new PrismaClient()
 
@@ -346,7 +347,12 @@ async function main() {
       { name: 'Karim Regular', phone: '0122 333 4455', points: 5, visits: 2, totalSpent: 480.5, lastVisitAt: new Date(Date.now() - 3 * 86400000) },
     ],
   })
-  console.log('✓ loyalty: enabled (0.1 pts/EGP · EGP 1/pt) + 2 demo customers')
+  // R29: the full CRM demo story — every tier, VIP-lapsed, at-risk,
+  // brand-new and deactivated guests (idempotent upserts by phone).
+  const fixtures = await ensureCustomerFixtures(db)
+  console.log(
+    `✓ loyalty: enabled (0.1 pts/EGP · EGP 1/pt) + 2 demo customers + CRM fixtures (${fixtures.created} created, ${fixtures.present} present)`,
+  )
 
   // ── R9 parity: vision subsystem (cameras + zones + table states) ──
   const cam1 = await db.visionCamera.create({

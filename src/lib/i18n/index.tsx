@@ -29,6 +29,7 @@ import { adminDict } from './dict/admin'
 import { visionDict } from './dict/vision'
 import { r13Dict } from './dict/r13'
 import { r15SyncDict } from './dict/r15-sync'
+import { r29Dict } from './dict/r29'
 import { r15MobileDict } from './dict/r15-mobile'
 import { r17Dict } from './dict/r17'
 import { r25Dict } from './dict/r25'
@@ -73,7 +74,7 @@ const LANG_EVENT = 'rms-lang-change'
 export type Dict = Record<string, string>
 export type DictPair = { en: Dict; ar: Dict }
 
-const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict, visionDict, r13Dict, r15SyncDict, r15MobileDict, r17Dict, r25Dict, aiDict]
+const DICT_PAIRS: DictPair[] = [common, authDict, posDict, kitchenDict, adminDict, visionDict, r13Dict, r15SyncDict, r15MobileDict, r17Dict, r25Dict, aiDict, r29Dict]
 
 const FULL_DICT: Record<Lang, Dict> = { en: {}, ar: {} }
 for (const pair of DICT_PAIRS) {
