@@ -24,8 +24,24 @@ import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
 import { escapeHtml, round2 } from './pos-utils'
 
+/** p8: per-payer itemized line (By-Items split with quantity allocation). */
+export type CheckSplitItem = {
+  qty: number
+  name: string
+  nameAr: string | null
+  total: number
+}
+
 /** A split part of the check (when opened from the payment modal, mirrors its split config). */
-export type CheckSplitRow = { label: string; amount: number; method?: string }
+export type CheckSplitRow = {
+  label: string
+  amount: number
+  method?: string
+  /** p8: optional per-payer itemized sub-lines (quantity-level By-Items split) —
+   *  printed indented under the payer's row so each guest sees exactly what
+   *  they had, on the same paper. */
+  items?: CheckSplitItem[]
+}
 
 type CheckModalProps = {
   order: Order
@@ -311,6 +327,11 @@ function buildCheckHtml(
     m.split.forEach((p) => {
       const method = p.method ? ` (${bilingualLabel(`status.payment.${p.method}`)})` : ''
       lines.push(row(`${p.label}${method}`, formatCurrency(p.amount)))
+      // p8: per-payer itemized sub-lines (quantity-level By-Items split)
+      for (const it of p.items ?? []) {
+        lines.push(row(`${formatQty(it.qty)}× ${it.name}`, formatCurrency(it.total), 'sub'))
+        if (it.nameAr) lines.push(`<p class="ar" dir="rtl">${escapeHtml(it.nameAr)}</p>`)
+      }
     })
     if (m.splitTotal != null)
       lines.push(row(bilingualLabel('pos.splitTotal'), formatCurrency(m.splitTotal), 'bold'))
@@ -399,10 +420,11 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
     // Letter-spacing on the Latin part only (Arabic letters must stay joined),
     // and only when the UI language is English.
     const stampSpacing = isRTL ? 'normal' : '4px'
+    // p8: .sub = per-payer itemized sub-lines on the split paper
     w.document.write(
       `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(
         model.title,
-      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold} .ar{font-size:11px;text-align:${arAlign};direction:rtl;margin:0} .arn{font-weight:bold;direction:rtl;margin:2px 0} .stampline{margin:10px 0;text-align:center} .stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stampd .se{letter-spacing:${stampSpacing}} .stampd .sar{direction:rtl} .stampd .sep{letter-spacing:normal}</style></head><body>${html}</body></html>`,
+      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .sub{font-size:11px;opacity:.85;padding-inline-start:14px} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold} .ar{font-size:11px;text-align:${arAlign};direction:rtl;margin:0} .arn{font-weight:bold;direction:rtl;margin:2px 0} .stampline{margin:10px 0;text-align:center} .stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stampd .se{letter-spacing:${stampSpacing}} .stampd .sar{direction:rtl} .stampd .sep{letter-spacing:normal}</style></head><body>${html}</body></html>`,
     )
     w.document.close()
     w.focus()
@@ -668,11 +690,22 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
                   <div className="my-2 border-t border-dashed border-stone-400" />
                   <p className="text-center font-semibold uppercase">{bilingualLabel('pos.splitBill')}</p>
                   {model.split.map((p, i) => (
-                    <CheckRow
-                      key={i}
-                      left={`${p.label}${p.method ? ` · ${bilingualLabel(`status.payment.${p.method}`)}` : ''}`}
-                      right={formatCurrency(p.amount)}
-                    />
+                    <div key={i}>
+                      <CheckRow
+                        left={`${p.label}${p.method ? ` · ${bilingualLabel(`status.payment.${p.method}`)}` : ''}`}
+                        right={formatCurrency(p.amount)}
+                      />
+                      {(p.items ?? []).map((it, j) => (
+                        <div key={j} className="ps-2 opacity-80">
+                          <CheckRow left={`${formatQty(it.qty)}× ${it.name}`} right={formatCurrency(it.total)} />
+                          {it.nameAr && (
+                            <p className="text-left rtl:text-right text-[10px] text-stone-600" dir="rtl" lang="ar">
+                              {it.nameAr}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   ))}
                   {model.splitTotal != null && (
                     <CheckRow left={bilingualLabel('pos.splitTotal')} right={formatCurrency(model.splitTotal)} bold />

@@ -150,6 +150,36 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     await db.$transaction(async (tx) => {
+      // ── p8 race hardening (F1, confirmed live by the stress test): the
+      // overpay guard used to read paidAmount OUTSIDE this tx — two
+      // terminals paying the same open check concurrently could BOTH pass
+      // it and overshoot the bill (reproduced: 2 × EGP 1323 on one check).
+      // Fix: take the ORDER ROW WRITE LOCK first (updateMany with the
+      // status filter = atomic re-assert that the check is still
+      // open/deferred), then re-read the payments INSIDE the lock — the
+      // authoritative guard. Concurrent payment txs serialize on the row
+      // lock (SQLite single-writer; Postgres row lock held to commit), so
+      // the second one sees the first's rows and is rejected cleanly.
+      const locked = await tx.order.updateMany({
+        where: { id: orderId, status: { in: ['open', 'deferred'] } },
+        data: { updatedAt: new Date() },
+      })
+      if (locked.count === 0) {
+        throw new ApiError('Only open or deferred orders can receive payments', 400)
+      }
+      const currentPayments = await tx.payment.findMany({
+        where: { orderId },
+        select: { amount: true },
+      })
+      const paidInTx = currentPayments.reduce((sum, p) => sum + p.amount, 0)
+      const rowsSum = rows.reduce((sum, p) => sum + p.amount, 0)
+      if (paidInTx + rowsSum > order.totalAmount + MONEY_EPSILON) {
+        const remaining = round2(order.totalAmount - paidInTx)
+        throw new ApiError(
+          `Payment exceeds the remaining balance (EGP ${remaining.toFixed(2)})`,
+          400,
+        )
+      }
       // R30 hybrid sync: read-back window computed BEFORE createMany (which
       // returns no rows) so the new payments are identified by id > max.
       const lastPayment = await tx.payment.findFirst({

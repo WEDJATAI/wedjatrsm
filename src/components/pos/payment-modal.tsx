@@ -13,6 +13,7 @@ import {
   HandCoins,
   Hourglass,
   Loader2,
+  Minus,
   MoreHorizontal,
   Plus,
   Printer,
@@ -68,6 +69,27 @@ type EditableRow = {
 type SubmitRow = { method: string; amount: number }
 
 type SplitTab = 'single' | 'equal' | 'items' | 'custom'
+
+// ── p8: quantity-level item split (pure helpers, shared by the math + UI) ──
+// A merged cart line ("5 × Pizza") must be handable out ONE unit per payer.
+// Model: per line, an explicit per-payer unit count (steppers). Units not
+// explicitly allocated follow the line's BASE payer (the classic whole-line
+// assignment — default P1), so an untouched line behaves exactly like before.
+// Invariant: Σ explicit ≤ floor(line qty); a fractional remainder (weighed
+// items) always follows the base payer.
+export function qtyForPayerOf(
+  line: { id: number; qty: number },
+  payer: number,
+  assignments: Record<number, number>,
+  qtyAllocations: Record<number, number[]>,
+): number {
+  const alloc = qtyAllocations[line.id]
+  const base = assignments[line.id] ?? 0
+  if (alloc == null) return base === payer ? line.qty : 0
+  const allocated = alloc.reduce((s, q) => s + q, 0)
+  const unallocated = Math.max(0, line.qty - allocated)
+  return (alloc[payer] ?? 0) + (base === payer ? unallocated : 0)
+}
 
 // ── R13: terminal-local split preferences ──────────────────────────
 // Remembers the last-used split mode + payer counts so the next check on
@@ -142,6 +164,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
   const [itPayers, setItPayers] = useState(2)
   const [itMethods, setItMethods] = useState<Record<number, string>>({})
   const [assignments, setAssignments] = useState<Record<number, number>>({})
+  // p8: per-line per-payer unit allocation for lines with quantity > 1
+  // (itemId → array indexed by payer). See qtyForPayerOf above.
+  const [qtyAllocations, setQtyAllocations] = useState<Record<number, number[]>>({})
 
   // ── R13: loyalty redemption state ──
   const [redeemInput, setRedeemInput] = useState('')
@@ -198,6 +223,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     setItPayers(prefs?.itPayers ?? 2)
     setItMethods({})
     setAssignments({})
+    setQtyAllocations({})
     setSubmitting(false)
     setActiveIdx(0)
     setTipSel({})
@@ -228,6 +254,10 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     () =>
       order.items.map((it) => ({
         id: it.id,
+        qty: it.quantity,
+        unitPrice: round2(it.unitPrice),
+        name: it.product ? localizedName(it.product.name, it.product.nameAr, lang) : t('pos.item'),
+        nameAr: it.product?.nameAr?.trim() || null,
         label: `${formatQty(it.quantity)} × ${
           it.product ? localizedName(it.product.name, it.product.nameAr, lang) : t('pos.item')
         }`,
@@ -240,8 +270,12 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
     const subtotal = round2(order.subtotalAmount)
     const rawTotals = new Array<number>(itPayers).fill(0)
     for (const line of itemLines) {
-      const payer = assignments[line.id] ?? 0
-      if (payer < itPayers) rawTotals[payer] = round2(rawTotals[payer] + line.total)
+      for (let p = 0; p < itPayers; p++) {
+        // p8: quantity-level allocation — each payer's raw share is their
+        // units × unit price (untouched lines: whole line to its payer).
+        const units = qtyForPayerOf(line, p, assignments, qtyAllocations)
+        if (units > 0) rawTotals[p] = round2(rawTotals[p] + units * line.unitPrice)
+      }
     }
     const amounts: number[] = []
     let allocated = 0
@@ -255,7 +289,71 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       }
     }
     return amounts
-  }, [itemLines, assignments, itPayers, remaining, order.subtotalAmount])
+  }, [itemLines, assignments, qtyAllocations, itPayers, remaining, order.subtotalAmount])
+
+  // ── p8: quantity-allocation mutators ───────────────────────────────
+  /** Normalized allocation array for a line (padded to the payer count). */
+  const allocArray = (lineId: number): number[] => {
+    const cur = qtyAllocations[lineId] ?? []
+    const arr = cur.slice(0, itPayers)
+    while (arr.length < itPayers) arr.push(0)
+    return arr
+  }
+
+  const allocatedWholeUnits = (lineId: number, arr?: number[]): number =>
+    (arr ?? allocArray(lineId)).reduce((s, q) => s + q, 0)
+
+  /** Stepper + on a payer: take a unit from the free pool, or transfer one
+   *  from the base payer's explicit units when the pool is empty. */
+  const addUnitTo = (line: { id: number; qty: number }, payer: number) => {
+    setQtyAllocations((prev) => {
+      const arr = (() => {
+        const cur = prev[line.id] ?? []
+        const a = cur.slice(0, itPayers)
+        while (a.length < itPayers) a.push(0)
+        return a
+      })()
+      const whole = Math.floor(line.qty)
+      const allocated = arr.reduce((s, q) => s + q, 0)
+      const base = Math.min(assignments[line.id] ?? 0, itPayers - 1)
+      if (allocated < whole) {
+        arr[payer] += 1
+      } else if (arr[base] > 0 && payer !== base) {
+        arr[base] -= 1
+        arr[payer] += 1
+      }
+      return { ...prev, [line.id]: arr }
+    })
+  }
+
+  /** Stepper − on a payer: release an explicitly steered unit back to the
+   *  pool (it follows the base payer again). */
+  const removeUnitFrom = (lineId: number, payer: number) => {
+    setQtyAllocations((prev) => {
+      const cur = prev[lineId]
+      if (!cur || (cur[payer] ?? 0) <= 0) return prev
+      const arr = cur.slice(0, itPayers)
+      while (arr.length < itPayers) arr.push(0)
+      arr[payer] = Math.max(0, (arr[payer] ?? 0) - 1)
+      return { ...prev, [lineId]: arr }
+    })
+  }
+
+  /** "1 each": spread the line's whole units round-robin across the payers
+   *  (5 pizzas across 5 payers → 1 each — the classic shared-table case). */
+  const spreadEvenly = (lineId: number, lineQty: number) => {
+    setQtyAllocations((prev) => {
+      const arr = new Array<number>(itPayers).fill(0)
+      let left = Math.floor(lineQty)
+      let i = 0
+      while (left > 0) {
+        arr[i % itPayers] += 1
+        left -= 1
+        i += 1
+      }
+      return { ...prev, [lineId]: arr }
+    })
+  }
 
   const submitRows: SubmitRow[] = useMemo(() => {
     if (tab === 'single') {
@@ -394,10 +492,24 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       }))
     }
     if (tab === 'items') {
+      // p8: each payer's row carries their ITEMIZED lines (quantity-aware)
+      // so the printed split check shows exactly who had what.
       return itAmounts.map((amount, i) => ({
         label: t('pos.payer', { n: i + 1 }),
         amount,
         method: itMethods[i] ?? 'cash',
+        items: itemLines.flatMap((line) => {
+          const units = qtyForPayerOf(line, i, assignments, qtyAllocations)
+          if (units <= 0) return []
+          return [
+            {
+              qty: units,
+              name: line.name,
+              nameAr: line.nameAr,
+              total: round2(units * line.unitPrice),
+            },
+          ]
+        }),
       }))
     }
     return customRows.map((r, i) => ({
@@ -405,7 +517,7 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       amount: parseAmount(r.amount),
       method: r.method,
     }))
-  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, t])
+  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, itemLines, assignments, qtyAllocations, t])
 
   // ── Handlers ──────────────────────────────────────────────────────
   const clampPayers = (raw: number, min: number, max: number) => {
@@ -911,6 +1023,15 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
                   onChange={(e) => {
                     const next = clampPayers(parseInt(e.target.value, 10) || 2, 2, 6)
                     setItPayers(next)
+                    // p8: keep unit allocations sized to the payer count
+                    setQtyAllocations((prev) => {
+                      if (Object.keys(prev).length === 0) return prev
+                      const out: Record<number, number[]> = {}
+                      for (const [k, arr] of Object.entries(prev)) {
+                        out[Number(k)] = arr.slice(0, next)
+                      }
+                      return out
+                    })
                     writePaymentPrefs({ tab, eqPayers, itPayers: next })
                   }}
                   className="h-10 w-16 text-center tabular-nums"
@@ -921,35 +1042,124 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
               <div className="space-y-1.5">
                 {itemLines.map((line) => {
                   const active = Math.min(assignments[line.id] ?? 0, itPayers - 1)
+                  const multi = line.qty > 1
+                  const alloc = allocArray(line.id)
+                  const allocatedTotal = allocatedWholeUnits(line.id, alloc)
+                  const wholeUnits = Math.floor(line.qty)
+                  const unallocated = Math.max(0, line.qty - allocatedTotal)
                   return (
-                    <div
-                      key={line.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-white p-2.5"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{line.label}</p>
-                        <p className="text-xs text-muted-foreground tabular-nums">
-                          {formatCurrency(line.total)}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {Array.from({ length: itPayers }, (_, p) => (
-                          <button
-                            key={p}
-                            type="button"
-                            onClick={() => setAssignment(line.id, p)}
-                            className={cn(
-                              'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
-                              p === active
-                                ? 'border-primary bg-primary text-white'
-                                : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/40',
+                    <div key={line.id} className="rounded-xl border border-border bg-white p-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{line.label}</p>
+                          <p className="text-xs text-muted-foreground tabular-nums">
+                            {formatCurrency(line.total)}
+                            {multi && unallocated > 0.001 && (
+                              <span className="ms-1.5 font-semibold text-amber-700">
+                                · {t('pos.unitsLeft', { n: formatQty(unallocated) })} →{' '}
+                                {t('pos.payer', { n: active + 1 })}
+                              </span>
                             )}
-                            aria-pressed={p === active}
+                          </p>
+                        </div>
+                        {multi && (
+                          <button
+                            type="button"
+                            onClick={() => spreadEvenly(line.id, line.qty)}
+                            className="h-9 shrink-0 rounded-lg border-2 border-primary/40 bg-primary/5 px-3 text-xs font-bold text-primary transition active:scale-95 hover:bg-primary/10"
+                            title={t('pos.spreadEvenlyHint')}
                           >
-                            P{p + 1}
+                            {t('pos.spreadEvenly')}
                           </button>
-                        ))}
+                        )}
                       </div>
+                      {multi ? (
+                        /* p8: per-payer unit steppers — hand out this line's
+                         * units one by one (5 × Pizza → 1 each). Tapping a
+                         * payer's badge picks who gets the LEFTOVER units. */
+                        <div className="mt-1.5 space-y-1">
+                          <div className="flex flex-wrap gap-1">
+                            {Array.from({ length: itPayers }, (_, p) => {
+                              const units = qtyForPayerOf(line, p, assignments, qtyAllocations)
+                              const explicit = alloc[p] ?? 0
+                              const canAdd =
+                                allocatedTotal < wholeUnits ||
+                                (alloc[active] > 0 && p !== active)
+                              const canRemove = explicit > 0
+                              return (
+                                <div
+                                  key={p}
+                                  className={cn(
+                                    'flex h-9 items-center gap-0.5 rounded-lg border px-1 text-xs font-semibold transition-colors',
+                                    units > 0
+                                      ? 'border-primary bg-primary/10 text-primary'
+                                      : 'border-border bg-muted/50 text-muted-foreground',
+                                  )}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setAssignment(line.id, p)}
+                                    aria-pressed={active === p}
+                                    aria-label={t('pos.payer', { n: p + 1 })}
+                                    title={t('pos.basePayerHint')}
+                                    className={cn(
+                                      'h-7 min-w-8 rounded-md px-1.5 text-xs font-bold transition-colors',
+                                      active === p
+                                        ? 'bg-primary text-white'
+                                        : 'text-muted-foreground hover:bg-primary/10',
+                                    )}
+                                  >
+                                    P{p + 1}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!canRemove}
+                                    onClick={() => removeUnitFrom(line.id, p)}
+                                    aria-label={t('pos.removeUnit', { n: p + 1 })}
+                                    className="grid size-7 place-items-center rounded-md text-muted-foreground transition hover:bg-primary/10 disabled:opacity-30"
+                                  >
+                                    <Minus className="size-3.5" />
+                                  </button>
+                                  <span className="w-7 text-center text-sm font-bold tabular-nums">
+                                    {formatQty(units)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={!canAdd}
+                                    onClick={() => addUnitTo(line, p)}
+                                    aria-label={t('pos.addUnit', { n: p + 1 })}
+                                    className="grid size-7 place-items-center rounded-md text-muted-foreground transition hover:bg-primary/10 disabled:opacity-30"
+                                  >
+                                    <Plus className="size-3.5" />
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          <p className="text-[11px] leading-tight text-muted-foreground">
+                            {t('pos.qtySplitHint')}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {Array.from({ length: itPayers }, (_, p) => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => setAssignment(line.id, p)}
+                              className={cn(
+                                'h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition-colors',
+                                p === active
+                                  ? 'border-primary bg-primary text-white'
+                                  : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/40',
+                              )}
+                              aria-pressed={p === active}
+                            >
+                              P{p + 1}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
