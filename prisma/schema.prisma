@@ -174,6 +174,9 @@ model Product {
   // R8: JSON string arrays of tags (see ALLERGENS / DIETARY_TAGS in constants)
   allergens         String? // e.g. '["gluten","dairy"]' — red warning badges (POS + KDS)
   dietary           String? // e.g. '["vegetarian","spicy"]' — green badges
+  // p9 (Lelo menu): dish description straight from the house menu —
+  // preserved verbatim for future menu/kiosk display + guest receipts.
+  description       String?
   createdAt         DateTime @default(now()) @map("created_at")
 
   orderItems               OrderItem[]

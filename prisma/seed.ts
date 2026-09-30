@@ -192,6 +192,14 @@ async function main() {
     `✓ menu enrichment: Garlic Bread ${enrichment.garlicBread}, ${enrichment.tagged} tagged, ${enrichment.groups} modifier groups, ${enrichment.links} links`,
   )
 
+  // ── p9: Lelo house menu (the operator's real menu) — additive on top of
+  //     the demo menu. Idempotent (LO-* SKUs); reseeds can't lose it either.
+  const { importLeloMenu, LELO_ITEM_COUNT } = await import('./lelo-menu')
+  const lelo = await importLeloMenu(db)
+  console.log(
+    `✓ Lelo menu: ${lelo.itemsCreated} items created / ${lelo.itemsUpdated} refreshed (of ${LELO_ITEM_COUNT}) · categories ${lelo.categoriesCreated} created / ${lelo.categoriesReused} reused`,
+  )
+
   // ── Recipes (BOM) ─────────────────────────────────────────────────
   const rc = (productId: number, ingredientId: number, quantity: number) =>
     db.recipeComponent.create({ data: { productId, ingredientId, quantity } })

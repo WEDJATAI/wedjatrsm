@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
 """
-Split-Check STRESS Test — RSM Restaurant Platform (p8 / stress round).
+Split-Check STRESS Test — LELO HOUSE MENU EDITION (p9).
 
-The exact scenario requested by the operator:
+Same operator scenario as tests/split-stress.py, but on the REAL Lelo menu
+(imported p9, additive LO-* SKUs) with REAL house prices:
 
-  Basket: 5 Margherita Pizza + 3 Mineral Water + 2 Caesar Salad
-  People (5):  P1 = pizza + water + caesar   (pays VISA → method 'card')
-               P2 = pizza + water + caesar   (cash)
-               P3 = pizza + water            (cash)
-               P4 = pizza                    (cash)
-               P5 = pizza                    (cash)
+  Basket: 5 Pepperoni Pizza (195) + 3 Small Water (20) + 2 Chicken Caesar Salad (190)
+  People (5):  G1 = pizza + water + caesar   (pays VISA → method 'card')
+               G2 = pizza + water + caesar   (cash)
+               G3 = pizza + water            (cash)
+               G4 = pizza                    (cash)
+               G5 = pizza                    (cash)
 
-  Expected money (no discount): subtotal 1050.00 → VAT 14% 147.00 +
-  service 12% 126.00 → TOTAL 1323.00
-    P1 346.50 · P2 346.50 · P3 226.80 · P4 201.60 · P5 201.60
+  Expected money (no discount): subtotal 1415.00 → VAT 14% 198.10 +
+  service 12% 169.80 → TOTAL 1782.90   (×1.26 — exact, no piastre residual)
+    G1 510.30 · G2 510.30 · G3 270.90 · G4 245.70 · G5 245.70
 
 ADDITIVE-ONLY: every step creates rows (orders/payments/audits/outbox
 events). Nothing is deleted. DB backed up before this run via VACUUM INTO
-(backups/pre-split-stress-*.db, integrity ok).
+(backups/2026-09-30T12-00-pre-lelo-import.db, integrity ok).
 
 Covers (honest pass/fail per check):
-  S1  login + product lookup
-  S2  Order A — the shape the POS cart REALLY builds (merged lines:
-      pizza x5, water x3, caesar x2) + totals math
+  S0  Lelo menu integrity (176 LO- items, 3 spicy tags, descriptions,
+      stress trio present at house prices)
+  S1  login + product lookup by NAME (robust to id drift)
+  S2  Order A — merged cart lines (pizza x5, water x3, caesar x2) + math
   S3  Order B — per-person shape (10 qty-1 lines) on table T3
-  S4  GOLDEN PATH on Order B: ONE POST, 5 rows (P1 card + P2..P5 cash)
-      → exact close, 5 rows, distinct same-second refs, audit, outbox,
+  S4  GOLDEN PATH on Order B: ONE POST, 5 rows (G1 card + G2..G5 cash)
+      → exact close, 5 distinct same-second R26 refs, audit, outbox,
       table release, closed-order rejection
-  S5  SEQUENTIAL PATH on Order A: P1 visa first, then the rest by cash
-      one at a time (incl. R26 tendered/change on P2, tip on P5 that
-      must NOT count toward paid)
-  S6  guard wall: overpay total, overpay remaining, zero, negative,
-      invalid method, tendered<amount, change>overage
-  S7  rounding stress: discount 33.33 + 8-payer equal split (piastre
-      residuals) and discount 7.77 + 3-payer proportional split — both
-      must close EXACTLY with no guard trip
-  S8  TOCTOU race on the overpay guard: two terminals paying the same
-      open check concurrently (pre-fix: observation; post-fix run with
-      --expect-race-fixed: exactly one 200 + one 400)
+  S5  SEQUENTIAL PATH on Order A: G1 visa first, then cash one at a time
+      (incl. R26 tendered/change on G2, tip on G5 excluded from paid math)
+  S6  guard wall: overpay total/remaining, zero, negative, invalid method,
+      tendered<amount, change>overage, empty array
+  S7  rounding stress on Lelo prices: discount 33.33 + 8-payer equal split;
+      discount 7.77 + 3-payer proportional (UI formula)
+  S8  TOCTOU race re-verification (fix from p8 must hold): run with
+      --expect-race-fixed
 """
 import json
+import re as _re
 import sqlite3
 import sys
 import threading
@@ -51,21 +51,25 @@ RACE_FIXED = "--expect-race-fixed" in sys.argv
 PASS, FAIL, NOTE = [], [], []
 COOKIE = None
 
-PIZZA, WATER, CAESAR = 29, 37, 23          # product ids (seeded menu)
-P_PRICES = {PIZZA: 160.0, WATER: 20.0, CAESAR: 95.0}
+# Real Lelo menu items (looked up by name in S1 — no hardcoded ids)
+N_PIZZA, N_WATER, N_CAESAR = "Pepperoni Pizza", "Small Water", "Chicken Caesar Salad"
+PIZZA = WATER = CAESAR = None
+P_PRICES = {N_PIZZA: 195.0, N_WATER: 20.0, N_CAESAR: 190.0}
 # Per-person item allocation: payer index -> {product: qty}
 PEOPLE = [
-    {PIZZA: 1, WATER: 1, CAESAR: 1},   # P1 visa
-    {PIZZA: 1, WATER: 1, CAESAR: 1},   # P2 cash
-    {PIZZA: 1, WATER: 1},              # P3 cash
-    {PIZZA: 1},                        # P4 cash
-    {PIZZA: 1},                        # P5 cash
+    {N_PIZZA: 1, N_WATER: 1, N_CAESAR: 1},   # G1 visa
+    {N_PIZZA: 1, N_WATER: 1, N_CAESAR: 1},   # G2 cash
+    {N_PIZZA: 1, N_WATER: 1},                # G3 cash
+    {N_PIZZA: 1},                            # G4 cash
+    {N_PIZZA: 1},                            # G5 cash
 ]
 METHODS = ["card", "cash", "cash", "cash", "cash"]
-EXP_SUBTOTAL = 1050.00
-EXP_TOTAL = 1323.00
-# Expected per-payer totals (proportional ×1.26; last payer absorbs residual)
-EXP_PAY = [346.50, 346.50, 226.80, 201.60, 201.60]
+EXP_SUBTOTAL = 1415.00            # 5*195 + 3*20 + 2*190
+EXP_TAX = 198.10                  # 14% VAT
+EXP_SERVICE = 169.80              # 12% service
+EXP_TOTAL = 1782.90               # 1415 * 1.26 — exact
+# Expected per-guest totals (proportional ×1.26 — exact, no residual)
+EXP_PAY = [510.30, 510.30, 270.90, 245.70, 245.70]
 
 
 def check(name, cond, detail=""):
@@ -120,16 +124,36 @@ def pay(order_id, payments):
 
 
 print("=" * 74)
-print("SPLIT-CHECK STRESS TEST —", BASE, "— 5 pizzas / 3 water / 2 caesar / 5 people")
+print("SPLIT-CHECK STRESS — LELO HOUSE MENU —", BASE)
+print(" 5 Pepperoni Pizza / 3 Small Water / 2 Chicken Caesar / 5 guests")
+print(" G1 Visa (card) + G2..G5 cash — expected total EGP 1782.90")
 print("=" * 74)
 
-# ── S1: login + products ─────────────────────────────────────────────────
+# ── S0: Lelo menu integrity ─────────────────────────────────────────────
+lo = q("SELECT COUNT(*) n FROM products WHERE sku LIKE 'LO-%'")[0]["n"]
+check("S0a. 176 Lelo items imported (LO-* SKUs)", lo == 176, f"count={lo}")
+spicy = q("SELECT name FROM products WHERE sku LIKE 'LO-%' AND dietary='[\"spicy\"]'")
+check("S0b. exactly the 3 menu 🌶️ dishes tagged spicy",
+      sorted(s["name"] for s in spicy) == ["Arabita", "Beef Alexandrian Sausage Pan", "Mexican Chicken"],
+      f"{[s['name'] for s in spicy]}")
+desc = q("SELECT COUNT(*) n FROM products WHERE sku LIKE 'LO-%' AND description IS NOT NULL")[0]["n"]
+check("S0c. 73 items carry their house-menu description", desc == 73, f"count={desc}")
+cats = q("SELECT COUNT(*) n FROM categories")[0]["n"]
+check("S0d. 28 categories (6 demo + 22 Lelo + internal)", cats == 28, f"count={cats}")
+
+# ── S1: login + products by NAME ────────────────────────────────────────
 st, me = api("POST", "/api/auth/login", {"email": "admin@rms.com", "password": "admin123"})
 check("S1a. login admin", st == 200, f"status={st}")
-prods = {p["id"]: p for p in q("SELECT id,name,price FROM products WHERE id IN (?,?,?)", (PIZZA, WATER, CAESAR))}
-check("S1b. menu products present",
-      prods.get(PIZZA, {}).get("price") == 160 and prods.get(WATER, {}).get("price") == 20 and prods.get(CAESAR, {}).get("price") == 95,
-      f"pizza={prods.get(PIZZA, {}).get('price')} water={prods.get(WATER, {}).get('price')} caesar={prods.get(CAESAR, {}).get('price')}")
+rows = q("SELECT id,name,price FROM products WHERE name IN (?,?,?) AND active=1",
+         (N_PIZZA, N_WATER, N_CAESAR))
+by_name = {r["name"]: r for r in rows}
+PIZZA, WATER, CAESAR = by_name[N_PIZZA]["id"], by_name[N_WATER]["id"], by_name[N_CAESAR]["id"]
+check("S1b. Lelo stress trio at house prices (195/20/190)",
+      by_name.get(N_PIZZA, {}).get("price") == 195.0 and by_name.get(N_WATER, {}).get("price") == 20.0
+      and by_name.get(N_CAESAR, {}).get("price") == 190.0,
+      f"pizza={by_name.get(N_PIZZA, {}).get('price')} water={by_name.get(N_WATER, {}).get('price')} "
+      f"caesar={by_name.get(N_CAESAR, {}).get('price')}")
+note(f"product ids: {N_PIZZA}={PIZZA} {N_WATER}={WATER} {N_CAESAR}={CAESAR}")
 
 # ── S2: Order A — the REAL cart shape (merged lines) ────────────────────
 st, A = make_order([
@@ -141,15 +165,16 @@ check("S2a. Order A created (cart-merge shape)", st == 200 and A.get("id"), f"#{
 check("S2b. Order A has 3 merged lines (5/3/2)",
       len(A.get("items", [])) == 3 and sorted(i["quantity"] for i in A["items"]) == [2, 3, 5],
       f"lines={[ (i['quantity']) for i in A.get('items', []) ]}")
-check("S2c. Order A totals 1050/147/126/1323",
-      A.get("subtotalAmount") == EXP_SUBTOTAL and A.get("taxAmount") == 147.0
-      and A.get("serviceTaxAmount") == 126.0 and A.get("totalAmount") == EXP_TOTAL,
+check("S2c. Order A totals 1415.00/198.10/169.80/1782.90",
+      A.get("subtotalAmount") == EXP_SUBTOTAL and A.get("taxAmount") == EXP_TAX
+      and A.get("serviceTaxAmount") == EXP_SERVICE and A.get("totalAmount") == EXP_TOTAL,
       f"sub={A.get('subtotalAmount')} tax={A.get('taxAmount')} svc={A.get('serviceTaxAmount')} total={A.get('totalAmount')}")
 
 # ── S3: Order B — per-person shape (10 qty-1 lines), table T3 ───────────
 items_b = []
 for alloc in PEOPLE:
-    for pid, n in alloc.items():
+    for name, n in alloc.items():
+        pid = {N_PIZZA: PIZZA, N_WATER: WATER, N_CAESAR: CAESAR}[name]
         for _ in range(n):
             course = "drink" if pid == WATER else ("starter" if pid == CAESAR else "main")
             items_b.append({"productId": pid, "quantity": 1, "course": course})
@@ -159,21 +184,20 @@ check("S3b. Order B 10 lines, same totals",
       len(B.get("items", [])) == 10 and B.get("totalAmount") == EXP_TOTAL,
       f"lines={len(B.get('items', []))} total={B.get('totalAmount')}")
 
-# ── S4: GOLDEN PATH — one POST, 5 rows: P1 visa + P2..P5 cash ───────────
+# ── S4: GOLDEN PATH — one POST, 5 rows: G1 visa + G2..G5 cash ───────────
 rows = [{"method": m, "amount": a} for m, a in zip(METHODS, EXP_PAY)]
 st, res = pay(B["id"], rows)
 check("S4a. 5-row split POST accepted", st == 200, f"status={st} err={(res.get('error') or '')[:90]}")
-check("S4b. closed exactly (paid=1323.00 remaining=0 closed=True)",
+check("S4b. closed exactly (paid=1782.90 remaining=0 closed=True)",
       res.get("closed") is True and abs(res.get("paidAmount", 0) - EXP_TOTAL) < 0.01 and abs(res.get("remaining", -1)) < 0.01,
       f"paid={res.get('paidAmount')} remaining={res.get('remaining')} closed={res.get('closed')}")
 pays = q("SELECT method, amount, tip, reference, amount_tendered, change_given FROM payments WHERE order_id=? ORDER BY id", (B["id"],))
 check("S4c. 5 payment rows persisted (1 card + 4 cash)",
       len(pays) == 5 and sum(1 for p in pays if p["method"] == "card") == 1 and sum(1 for p in pays if p["method"] == "cash") == 4,
       f"{[(p['method'], p['amount']) for p in pays]}")
-check("S4d. amounts exact per payer (346.50/346.50/226.80/201.60/201.60)",
+check("S4d. amounts exact per guest (510.30/510.30/270.90/245.70/245.70)",
       [p["amount"] for p in pays] == EXP_PAY, f"{[p['amount'] for p in pays]}")
 refs = [p["reference"] or "" for p in pays]
-import re as _re
 _r26 = _re.compile(r"^(CASH|CARD|OTHR|LOYL)-\d{8}-\d{6}-[A-Z0-9]{3}$")
 cash_ts = {r[5:20] for r in refs if r.startswith("CASH")}
 check("S4e. 5 DISTINCT auto references (same-second collision-proof)",
@@ -201,13 +225,13 @@ check("S4j. closed order rejects further payment", st == 400, f"status={st}")
 
 # ── S5: SEQUENTIAL PATH on Order A — visa first, then cash one by one ───
 seq = [
-    ("card", 346.50, {}),
-    ("cash", 346.50, {"amountTendered": 400.00, "changeGiven": 53.50}),
-    ("cash", 226.80, {}),
-    ("cash", 201.60, {}),
-    ("cash", 201.60, {"tip": 20.00}),
+    ("card", 510.30, {}),
+    ("cash", 510.30, {"amountTendered": 600.00, "changeGiven": 89.70}),
+    ("cash", 270.90, {}),
+    ("cash", 245.70, {}),
+    ("cash", 245.70, {"tip": 20.00}),
 ]
-remaining_after = [976.50, 630.00, 403.20, 201.60, 0]
+remaining_after = [1272.60, 762.30, 491.40, 245.70, 0]
 ok_seq = True
 for i, (m, amt, extra) in enumerate(seq):
     row = {"method": m, "amount": amt}
@@ -216,14 +240,14 @@ for i, (m, amt, extra) in enumerate(seq):
     closed = res.get("closed") is True
     ok = st == 200 and abs(res.get("remaining", -1) - remaining_after[i]) < 0.01 and closed == (i == 4)
     ok_seq = ok_seq and ok
-    check(f"S5{i + 1}. P{i + 1} {m} {amt:.2f} → remaining {remaining_after[i]:.2f}{' + CLOSED' if i == 4 else ''}",
+    check(f"S5{i + 1}. G{i + 1} {m} {amt:.2f} → remaining {remaining_after[i]:.2f}{' + CLOSED' if i == 4 else ''}",
           ok, f"status={st} remaining={res.get('remaining')} closed={res.get('closed')}")
 paysA = q("SELECT method, amount, tip, amount_tendered, change_given FROM payments WHERE order_id=? ORDER BY id", (A["id"],))
-check("S5c. P2 tendered 400 / change 53.50 persisted (R26)",
-      any(p["amount_tendered"] == 400.0 and p["change_given"] == 53.5 for p in paysA),
+check("S5c. G2 tendered 600 / change 89.70 persisted (R26)",
+      any(p["amount_tendered"] == 600.0 and p["change_given"] == 89.7 for p in paysA),
       f"tendered={[p['amount_tendered'] for p in paysA]} change={[p['change_given'] for p in paysA]}")
 paidA = sum(p["amount"] for p in paysA)
-check("S5d. P5 tip 20 EXCLUDED from paid math (paid=1323.00 not 1343.00)",
+check("S5d. G5 tip 20 EXCLUDED from paid math (paid=1782.90 not 1802.90)",
       abs(paidA - EXP_TOTAL) < 0.01 and paysA[-1]["tip"] == 20.0,
       f"paid={paidA} tip_last={paysA[-1]['tip']}")
 auditsA = q("SELECT details FROM audit_logs WHERE entity='order' AND entity_id=? AND action='order.payment'", (A["id"],))
@@ -233,13 +257,13 @@ check("S5e. 5 audit entries (one per sequential payment)", len(auditsA) == 5, f"
 st, C = make_order([{"productId": PIZZA, "quantity": 5, "course": "main"},
                     {"productId": WATER, "quantity": 3, "course": "drink"},
                     {"productId": CAESAR, "quantity": 2, "course": "starter"}])
-st, res = pay(C["id"], [{"method": "cash", "amount": 1323.50}])
-check("S6a. overpay TOTAL rejected (1323.50 > 1323.00)", st == 400, f"status={st} err={(res.get('error') or '')[:70]}")
+st, res = pay(C["id"], [{"method": "cash", "amount": 1783.50}])
+check("S6a. overpay TOTAL rejected (1783.50 > 1782.90)", st == 400, f"status={st} err={(res.get('error') or '')[:70]}")
 st, res = pay(C["id"], [{"method": "cash", "amount": 500.00}])
-check("S6b. partial 500 accepted → remaining 823.00", st == 200 and abs(res.get("remaining", -1) - 823.0) < 0.01,
+check("S6b. partial 500 accepted → remaining 1282.90", st == 200 and abs(res.get("remaining", -1) - 1282.90) < 0.01,
       f"status={st} remaining={res.get('remaining')}")
-st, res = pay(C["id"], [{"method": "cash", "amount": 824.00}])
-check("S6c. overpay REMAINING rejected (824 > 823)", st == 400, f"status={st} err={(res.get('error') or '')[:70]}")
+st, res = pay(C["id"], [{"method": "cash", "amount": 1284.00}])
+check("S6c. overpay REMAINING rejected (1284 > 1282.90)", st == 400, f"status={st} err={(res.get('error') or '')[:70]}")
 st, res = pay(C["id"], [{"method": "bitcoin", "amount": 10}])
 check("S6d. invalid method rejected", st == 400)
 st, res = pay(C["id"], [{"method": "cash", "amount": 0}])
@@ -253,20 +277,20 @@ check("S6h. change > overage rejected", st == 400)
 st, res = pay(C["id"], [])
 check("S6i. empty payments array rejected", st == 400)
 
-# ── S7: rounding stress ─────────────────────────────────────────────────
-# S7a: discount 33.33 → base 1016.67 → tax 142.33 svc 122.00 → total 1281.00
+# ── S7: rounding stress on Lelo prices ──────────────────────────────────
+# S7a: discount 33.33 → base 1381.67 → tax 193.43 svc 165.80 → total 1740.90
 st, D = make_order([{"productId": PIZZA, "quantity": 5, "course": "main"},
                     {"productId": WATER, "quantity": 3, "course": "drink"},
                     {"productId": CAESAR, "quantity": 2, "course": "starter"}])
 st, res = api("PUT", f"/api/orders/{D['id']}", {"discountAmount": 33.33, "discountReason": "stress rounding test"})
 d_total = res.get("order", {}).get("totalAmount") if st == 200 else None
-check("S7a. discount 33.33 applied → total 1281.00", st == 200 and abs((d_total or 0) - 1281.0) < 0.01,
+check("S7a. discount 33.33 applied → total 1740.90", st == 200 and abs((d_total or 0) - 1740.90) < 0.011,
       f"status={st} total={d_total}")
-# 8-payer equal split: 7 × round2(1281/8=160.125→160.13) = 1120.91; last = 160.09
+# 8-payer equal split: 7 × round2(1740.90/8=217.6125→217.61) = 1523.27; last = 217.63
 part = r2(d_total / 8)
 rows = [{"method": "cash", "amount": part} for _ in range(7)] + [{"method": "cash", "amount": r2(d_total - 7 * part)}]
 st, res = pay(D["id"], rows)
-check("S7b. 8-payer equal split closes EXACTLY on fractional total (160.13×7 + 160.09)",
+check("S7b. 8-payer equal split closes EXACTLY on fractional total (217.61×7 + 217.63)",
       st == 200 and res.get("closed") is True and abs(res.get("remaining", -1)) < 0.01,
       f"status={st} closed={res.get('closed')} remaining={res.get('remaining')} err={(res.get('error') or '')[:60]}")
 
@@ -274,12 +298,12 @@ check("S7b. 8-payer equal split closes EXACTLY on fractional total (160.13×7 + 
 st, E = make_order([{"productId": PIZZA, "quantity": 5, "course": "main"},
                     {"productId": WATER, "quantity": 3, "course": "drink"},
                     {"productId": CAESAR, "quantity": 2, "course": "starter"}])
-check("S7c-pre. Order E created", st == 200 and E.get("id"), f"status={st} err={(E.get('error') or '')[:80]}")
+check("S7c-pre. Order E created", st == 200 and E.get("id"), f"status={st} err={(res.get('error') or '')[:80]}")
 st, res = api("PUT", f"/api/orders/{E['id']}", {"discountAmount": 7.77, "discountReason": "stress rounding test"})
 e = res.get("order", {}) if st == 200 else {}
 e_total, e_sub = e.get("totalAmount"), e.get("subtotalAmount")
-# per-payer raw subtotals: P1 275, P2 275, P3 500 (pizza5 alone) — mirror the UI formula
-raw = [275.0, 275.0, 500.0]
+# per-guest raw subtotals: G1 405, G2 405, G3 the rest (605) — mirror the UI formula
+raw = [405.0, 405.0, 605.0]
 shares = [r2(raw[0] / e_sub * e_total), r2(raw[1] / e_sub * e_total)]
 shares.append(r2(e_total - sum(shares)))
 check("S7c. discount 7.77 → total computed", st == 200 and e_total is not None, f"total={e_total}")
@@ -288,7 +312,7 @@ check("S7d. 3-payer proportional split closes EXACTLY (residual on last)",
       st == 200 and res.get("closed") is True and abs(sum(shares) - e_total) < 0.005,
       f"shares={shares} Σ={r2(sum(shares))} total={e_total} closed={res.get('closed')}")
 
-# ── S8: TOCTOU race on the overpay guard ────────────────────────────────
+# ── S8: TOCTOU race on the overpay guard (p8 fix must hold) ─────────────
 st, F = make_order([{"productId": PIZZA, "quantity": 5, "course": "main"},
                     {"productId": WATER, "quantity": 3, "course": "drink"},
                     {"productId": CAESAR, "quantity": 2, "course": "starter"}])
@@ -310,11 +334,9 @@ if RACE_FIXED:
           f"statuses={statuses} combined_paid={combined}")
 else:
     if statuses == [200, 400] and abs(combined - EXP_TOTAL) < 0.01:
-        note(f"S8. race NOT reproduced this run (statuses={statuses}, combined={combined}) — "
-             "window exists in code (guard read at route line ~105 outside tx); see F1.")
+        note(f"S8. race NOT reproduced this run (statuses={statuses}, combined={combined}) — p8 in-tx guard held.")
     else:
-        note(f"S8. race REPRODUCED (statuses={statuses}, combined_paid={combined} > {EXP_TOTAL}) — "
-             "F1 confirmed live: both terminals' payments landed.")
+        note(f"S8. race REPRODUCED (statuses={statuses}, combined_paid={combined} > {EXP_TOTAL}) — REGRESSION of the p8 fix!")
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()
@@ -325,5 +347,5 @@ for n in NOTE:
 for n in FAIL:
     print(f"  FAILED: {n}")
 print("Data safety: additive-only stress — 0 rows deleted.")
-print("Backup: backups/pre-split-stress-2026-09-28-19-01-.db (integrity ok)")
+print("Backup: backups/2026-09-30T12-00-pre-lelo-import.db (integrity ok)")
 sys.exit(1 if FAIL else 0)
