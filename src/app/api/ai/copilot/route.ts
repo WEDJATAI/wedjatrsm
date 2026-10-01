@@ -1,13 +1,17 @@
 // POST /api/ai/copilot — manager AI chat grounded in the live business
 // snapshot (admin only). Body: { messages: [{ role: 'user'|'assistant',
-// content }] } → { reply, provider }. Provider chain: Groq → Gemini;
-// 503 with a friendly message when both are down.
+// content }], mode?: 'fast' | 'consensus' } → { reply, provider, model,
+// consensus? }. 'fast' (default) = sequential chain groq → openrouter →
+// nvidia → gemini → huggingface (lowest latency); 'consensus' = every
+// configured provider answers in parallel and the medoid answer wins.
+// 503 with a friendly message when all are down.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth, errorResponse, ApiError } from '@/lib/auth'
 import { RESTAURANT_NAME } from '@/lib/constants'
 import {
   chatWithFallback,
+  chatWithConsensus,
   AiProviderError,
   type ChatMessage,
 } from '@/lib/ai/providers'
@@ -66,6 +70,9 @@ export async function POST(req: NextRequest) {
       throw new ApiError(`conversation too long (max ${MAX_TOTAL_CHARS} characters)`, 400)
     }
 
+    // Consensus mode: all configured providers vote in parallel.
+    const mode = body.mode === 'consensus' ? 'consensus' : 'fast'
+
     // ── Grounded system prompt with the live snapshot ──────────────
     const snapshot = await buildBusinessSnapshot()
     const system = [
@@ -79,14 +86,34 @@ export async function POST(req: NextRequest) {
     ].join('\n')
 
     const started = Date.now()
-    const { text, provider } = await chatWithFallback(history, {
+    if (mode === 'consensus') {
+      const result = await chatWithConsensus(history, {
+        system,
+        temperature: 0.3,
+        maxTokens: 600,
+      })
+      console.log(
+        `[ai] copilot consensus ${result.agreement.agreed}/${result.agreement.total} via ${result.provider}:${result.model} in ${Date.now() - started}ms`,
+      )
+      return NextResponse.json({
+        reply: result.text,
+        provider: result.provider,
+        model: result.model,
+        consensus: {
+          agreed: result.agreement.agreed,
+          total: result.agreement.total,
+          strategy: result.strategy,
+        },
+      })
+    }
+    const result = await chatWithFallback(history, {
       system,
       temperature: 0.3,
       maxTokens: 600,
     })
-    console.log(`[ai] copilot served by ${provider} in ${Date.now() - started}ms`)
+    console.log(`[ai] copilot served by ${result.provider}:${result.model} in ${Date.now() - started}ms`)
 
-    return NextResponse.json({ reply: text, provider })
+    return NextResponse.json({ reply: result.text, provider: result.provider, model: result.model })
   } catch (err) {
     if (err instanceof AiProviderError) {
       // friendly 503 — never leak provider details or keys

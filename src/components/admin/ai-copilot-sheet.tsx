@@ -5,10 +5,12 @@
 // POST /api/ai/copilot with the last 10 messages of the local thread;
 // assistant replies append to it. Bottom sheet on mobile, right side sheet
 // on sm+ (useIsMobile picks the side before the sheet opens).
+// P15: consensus toggle — 'fast' (chain failover) or 'consensus' (every
+// provider answers in parallel, most-agreed answer wins).
 
 import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Loader2, Send, Sparkles } from 'lucide-react'
+import { GitMerge, Loader2, Send, Sparkles, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -29,7 +31,12 @@ import { aiProviderLabel } from './ai-briefing-card'
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
-type CopilotResponse = { reply: string; provider: string }
+type CopilotResponse = {
+  reply: string
+  provider: string
+  model?: string
+  consensus?: { agreed: number; total: number; strategy: string }
+}
 
 type AiCopilotSheetProps = {
   open: boolean
@@ -44,15 +51,21 @@ export default function AiCopilotSheet({ open, onOpenChange }: AiCopilotSheetPro
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [lastProvider, setLastProvider] = useState<string | null>(null)
+  const [lastConsensus, setLastConsensus] = useState<CopilotResponse['consensus'] | null>(null)
+  const [consensusMode, setConsensusMode] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const sendMutation = useMutation({
     mutationFn: (history: ChatMessage[]) =>
       apiFetch<CopilotResponse>('/api/ai/copilot', {
-        body: { messages: history.slice(-MAX_HISTORY) },
+        body: {
+          messages: history.slice(-MAX_HISTORY),
+          mode: consensusMode ? 'consensus' : 'fast',
+        },
       }),
     onSuccess: (data) => {
       setLastProvider(data.provider)
+      setLastConsensus(data.consensus ?? null)
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
     },
     onError: (err) => {
@@ -97,9 +110,25 @@ export default function AiCopilotSheet({ open, onOpenChange }: AiCopilotSheetPro
               {t('ai.copilotTitle')}
             </SheetTitle>
             {lastProvider && (
-              <Badge variant="secondary" className="shrink-0 font-medium">
-                {aiProviderLabel(lastProvider, t('ai.providerZai'))}
-              </Badge>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {lastConsensus && lastConsensus.total > 1 && (
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-emerald-300 bg-emerald-50 text-[10px] font-semibold text-emerald-700"
+                    title={t('ai.consensusTitle')
+                      .replace('{agreed}', String(lastConsensus.agreed))
+                      .replace('{total}', String(lastConsensus.total))}
+                  >
+                    <GitMerge className="size-3" aria-hidden />
+                    {t('ai.consensusBadge')
+                      .replace('{agreed}', String(lastConsensus.agreed))
+                      .replace('{total}', String(lastConsensus.total))}
+                  </Badge>
+                )}
+                <Badge variant="secondary" className="shrink-0 font-medium">
+                  {aiProviderLabel(lastProvider, t)}
+                </Badge>
+              </div>
             )}
           </div>
           <SheetDescription>{t('ai.copilotSubtitle')}</SheetDescription>
@@ -191,12 +220,48 @@ export default function AiCopilotSheet({ open, onOpenChange }: AiCopilotSheetPro
 
         {/* Input row */}
         <form
-          className="shrink-0 border-t border-[#E2E2E0] p-3 sm:p-4"
+          className="shrink-0 space-y-2 border-t border-[#E2E2E0] p-3 sm:p-4"
           onSubmit={(e) => {
             e.preventDefault()
             send(input)
           }}
         >
+          <button
+            type="button"
+            role="switch"
+            aria-checked={consensusMode}
+            onClick={() => setConsensusMode((v) => !v)}
+            title={consensusMode ? t('ai.copilotConsensusHint') : t('ai.copilotFastHint')}
+            className={cn(
+              'flex h-9 w-full items-center justify-between gap-2 rounded-xl border px-3 text-xs font-medium transition-colors',
+              consensusMode
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                : 'border-[#E2E2E0] bg-stone-50 text-stone-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800',
+            )}
+          >
+            <span className="flex items-center gap-1.5">
+              {consensusMode ? (
+                <GitMerge className="size-3.5" aria-hidden />
+              ) : (
+                <Zap className="size-3.5" aria-hidden />
+              )}
+              {consensusMode ? t('ai.copilotConsensus') : t('ai.copilotFast')}
+            </span>
+            <span
+              aria-hidden
+              className={cn(
+                'relative inline-flex h-4.5 w-8 shrink-0 items-center rounded-full transition-colors',
+                consensusMode ? 'bg-emerald-500' : 'bg-stone-300',
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-block size-3.5 rounded-full bg-white shadow transition-transform',
+                  consensusMode ? 'translate-x-3.5' : 'translate-x-0.5',
+                )}
+              />
+            </span>
+          </button>
           <div className="flex items-center gap-2">
             <Input
               value={input}

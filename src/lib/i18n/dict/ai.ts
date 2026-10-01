@@ -1,10 +1,9 @@
 import type { DictPair } from '../index'
 
-// ─── AI dictionary (R9 feature, restored R17) ───────────────────────
-// Keys for the manager AI briefing card + copilot chat sheet. The
-// components existed since R9 but their dictionary was lost when the
-// render wiring was orphaned — rebuilt here (EN/AR) so t() never falls
-// through to raw key tails.
+// ─── AI dictionary (R9 feature, restored R17, P15 consensus) ────────
+// Keys for the manager AI briefing card + copilot chat sheet. P15:
+// five-provider consensus architecture — labels for every provider,
+// the consensus badge, and the copilot consensus toggle.
 
 export const aiDict: DictPair = {
   en: {
@@ -28,7 +27,19 @@ export const aiDict: DictPair = {
     'ai.copilotSuggest2': 'How is this week vs last week?',
     'ai.copilotSuggest3': 'Which items are low on stock?',
     'ai.copilotSuggest4': 'Summarize my top waiter by sales',
-    'ai.providerZai': 'Z.ai',
+    'ai.providerGroq': 'Groq',
+    'ai.providerOpenrouter': 'OpenRouter',
+    'ai.providerNvidia': 'NVIDIA',
+    'ai.providerGemini': 'Gemini',
+    'ai.providerHuggingface': 'HuggingFace',
+    'ai.providerUnknown': 'AI',
+    'ai.consensusBadge': 'Consensus {agreed}/{total}',
+    'ai.consensusTitle': 'Answered by consensus of {agreed} of {total} AI models',
+    'ai.consensusSingle': 'single model',
+    'ai.copilotConsensus': 'Consensus',
+    'ai.copilotFast': 'Fast',
+    'ai.copilotConsensusHint': 'Ask every AI provider and pick the most-agreed answer (slower, more reliable)',
+    'ai.copilotFastHint': 'Fastest available AI provider answers (chain failover)',
   },
   ar: {
     'ai.briefingTitle': 'الموجز الصباحي',
@@ -51,6 +62,18 @@ export const aiDict: DictPair = {
     'ai.copilotSuggest2': 'كيف يسير هذا الأسبوع مقارنة بالماضي؟',
     'ai.copilotSuggest3': 'أي الأصناف قارب على النفاد؟',
     'ai.copilotSuggest4': 'لخّص أداء أفضل نادل في المبيعات',
-    'ai.providerZai': 'Z.ai',
+    'ai.providerGroq': 'Groq',
+    'ai.providerOpenrouter': 'OpenRouter',
+    'ai.providerNvidia': 'NVIDIA',
+    'ai.providerGemini': 'Gemini',
+    'ai.providerHuggingface': 'HuggingFace',
+    'ai.providerUnknown': 'الذكاء الاصطناعي',
+    'ai.consensusBadge': 'توافق {agreed}/{total}',
+    'ai.consensusTitle': 'أجاب بالتوافق بين {agreed} من {total} نماذج ذكاء اصطناعي',
+    'ai.consensusSingle': 'نموذج واحد',
+    'ai.copilotConsensus': 'التوافق',
+    'ai.copilotFast': 'سريع',
+    'ai.copilotConsensusHint': 'اسأل كل مزودي الذكاء الاصطناعي واختر الإجابة الأكثر توافقًا (أبطأ وأدق)',
+    'ai.copilotFastHint': 'أسرع مزود متاح يجيب (تبديل تلقائي عند التعطل)',
   },
 }
