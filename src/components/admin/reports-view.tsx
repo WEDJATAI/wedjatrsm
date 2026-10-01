@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  ArrowDownToLine,
   ArrowUpFromLine,
   Ban,
   Banknote,
@@ -271,12 +272,20 @@ function buildZReportHtml(
   lines.push(row(t('admin.zreportDeferredSettled'), formatCurrency(report.deferredSettled)))
   lines.push(row(t('admin.zreportDeferredOutstanding'), formatCurrency(report.deferredOutstanding)))
   lines.push(dashed)
-  // R26: cash drawer reconciliation — cash bill portions − change given
+  // R26: cash drawer reconciliation — cash bill portions − change given;
+  // p11-c: paid-ins and withdrawals (paid-outs) recorded on drawer sessions
+  // today move physical cash too, so they net into the expected total.
   lines.push(section(t('admin.zreportCashDrawer')))
   lines.push(
     row(t('admin.zreportCashPayments'), formatCurrency(report.cashDrawer.cashPayments)),
   )
   lines.push(row(t('admin.zreportChangeGiven'), formatCurrency(report.cashDrawer.changeGiven)))
+  if (report.cashDrawer.paidIn > 0) {
+    lines.push(row(t('admin.paidIn'), formatCurrency(report.cashDrawer.paidIn)))
+  }
+  if (report.cashDrawer.paidOut > 0) {
+    lines.push(row(t('admin.paidOut'), formatCurrency(report.cashDrawer.paidOut)))
+  }
   lines.push(
     row(
       t('admin.zreportExpectedDrawer'),
@@ -822,7 +831,10 @@ function ZReportSection() {
                 </div>
 
                 {/* R26: cash drawer reconciliation — what the till should hold
-                    (bill portions only; float/tips live on the drawer screen) */}
+                    (bill portions only; float/tips live on the drawer screen).
+                    p11-c: withdrawals (paid-outs) and paid-ins recorded on
+                    drawer sessions today are netted in — without them the
+                    count would look short by the withdrawal total. */}
                 <div className="space-y-1.5 border-t pt-4">
                   <p className="text-xs font-medium text-muted-foreground">
                     {t('admin.zreportCashDrawer')}
@@ -851,6 +863,30 @@ function ZReportSection() {
                         <p className="text-xs font-medium">{t('admin.zreportChangeGiven')}</p>
                         <p className="text-sm font-bold tabular-nums">
                           −{formatCurrency(report.cashDrawer.changeGiven)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-400">
+                      <ArrowDownToLine
+                        className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="text-xs font-medium">{t('admin.paidIn')}</p>
+                        <p className="text-sm font-bold tabular-nums">
+                          +{formatCurrency(report.cashDrawer.paidIn)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-400">
+                      <ArrowUpFromLine
+                        className="size-4 shrink-0 text-rose-600 dark:text-rose-400"
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="text-xs font-medium">{t('admin.paidOut')}</p>
+                        <p className="text-sm font-bold tabular-nums">
+                          −{formatCurrency(report.cashDrawer.paidOut)}
                         </p>
                       </div>
                     </div>

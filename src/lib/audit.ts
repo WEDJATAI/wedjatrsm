@@ -99,6 +99,8 @@ export const AUDIT_ACTIONS = [
   'replication.tursoSync',
   // R27: manager sign-in — the super admin changed his own PIN
   'manager.pinChange',
+  // p11-d: developer sign-in — the developer changed his own PIN
+  'developer.pinChange',
   // R30: local-first hybrid sync — device registry + staged restore
   'hybrid.deviceCreate',
   'hybrid.deviceUpdate',

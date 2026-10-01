@@ -468,7 +468,12 @@ export type ZReport = {
     cashPayments: number
     /** Σ change handed back to guests on cash payments */
     changeGiven: number
-    /** cashPayments − changeGiven: what the drawer should hold (excl. float/tips) */
+    /** Σ manual paid-ins on drawer sessions today (cash ADDED to the drawer) */
+    paidIn: number
+    /** Σ withdrawals (paid-outs) on drawer sessions today — cash PULLED OUT of the drawer */
+    paidOut: number
+    /** cashPayments − changeGiven + paidIn − paidOut: what the drawer should hold
+     *  (excl. float/tips — those reconcile on the cash-drawer session screen) */
     expectedInDrawer: number
   }
 }

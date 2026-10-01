@@ -122,6 +122,32 @@ export const authDict: DictPair = {
     'manager.defaultPinBanner':
       'You are still using the starting PIN 123456 — set your own number now.',
     'manager.setPinNow': 'Set my PIN',
+
+    // p11-d Developer sign-in — the developer role's private PIN door
+    // (mirrors the manager set above; generic keys — wall.backToWall,
+    // wall.retry, auth.signingIn, auth.welcomeBack, auth.loginFailed,
+    // auth.registerPinInvalid, auth.registerPinConfirm — are reused)
+    'wall.developer': 'Developer sign-in',
+    'wall.welcomeDeveloper': 'Welcome, {name} 👋',
+    'developer.role': 'Developer',
+    'developer.pinOnly': "Only the developer's PIN works here",
+    'developer.defaultPinHint':
+      'First time? The starting PIN is 111111 — you will set your own right after signing in.',
+    'developer.moreOptions': 'More sign-in options',
+    'developer.changePinTitle': 'Change my PIN',
+    'developer.changePinShort': 'My PIN',
+    'developer.changePinSub': 'Pick a 6-digit number only you know — staff PINs stay unchanged.',
+    'developer.currentPin': 'Current PIN',
+    'developer.currentPinInvalid': 'Enter your current 6-digit PIN',
+    'developer.newPin': 'New PIN',
+    'developer.savePin': 'Save PIN',
+    'developer.savingPin': 'Saving…',
+    'developer.later': 'Later',
+    'developer.pinChanged': 'PIN updated — use your new number next time',
+    'developer.sameAsOld': 'New PIN must be different from the current one',
+    'developer.defaultPinBanner':
+      'You are still using the starting PIN 111111 — set your own number now.',
+    'developer.setPinNow': 'Set my PIN',
   },
   ar: {
     'auth.title': 'تسجيل الدخول',
@@ -235,5 +261,28 @@ export const authDict: DictPair = {
     'manager.defaultPinBanner':
       'لسه بتستخدم الرقم الافتتاحي 123456 — حدد رقمك الخاص دلوقتي.',
     'manager.setPinNow': 'حدد رقمي',
+
+    // p11-d دخول المطور — باب المطور الخاص (الرمز السري فقط، الافتتاحي 111111)
+    'wall.developer': 'دخول المطور',
+    'wall.welcomeDeveloper': 'أهلاً بيك يا {name} 👋',
+    'developer.role': 'المطور',
+    'developer.pinOnly': 'رقم المطور السري بس هو اللي يشتغل هنا',
+    'developer.defaultPinHint':
+      'أول مرة؟ الرمز الافتتاحي هو 111111 — هتحدد رقمك الخاص بعد الدخول مباشرة.',
+    'developer.moreOptions': 'طرق دخول تانية',
+    'developer.changePinTitle': 'غيّر رقمي السري',
+    'developer.changePinShort': 'رقمي السري',
+    'developer.changePinSub': 'اختار رقم من 6 أرقام انت بس اللي تعرفه — أرقام الموظفين هتفضل زي ما هي.',
+    'developer.currentPin': 'الرقم السري الحالي',
+    'developer.currentPinInvalid': 'أدخل رقمك السري الحالي (6 أرقام)',
+    'developer.newPin': 'الرقم السري الجديد',
+    'developer.savePin': 'احفظ الرقم',
+    'developer.savingPin': 'جارٍ الحفظ…',
+    'developer.later': 'لاحقاً',
+    'developer.pinChanged': 'تم تحديث الرقم — استخدم رقمك الجديد المرة الجاية',
+    'developer.sameAsOld': 'لازم الرقم الجديد يختلف عن الحالي',
+    'developer.defaultPinBanner':
+      'لسه بتستخدم الرقم الافتتاحي 111111 — حدد رقمك الخاص دلوقتي.',
+    'developer.setPinNow': 'حدد رقمي',
   },
 }

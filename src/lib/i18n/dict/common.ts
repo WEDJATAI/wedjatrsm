@@ -100,6 +100,8 @@ export const common: DictPair = {
 
     // roles
     'role.admin': 'Admin',
+    // p11-d: the developer role (launcher hero label)
+    'role.developer': 'Developer',
     'role.waiter': 'Waiter',
     'role.kitchen': 'Kitchen',
     'role.custom': 'Custom',
@@ -330,6 +332,7 @@ export const common: DictPair = {
 
     // roles
     'role.admin': 'مدير النظام',
+    'role.developer': 'المطور',
     'role.waiter': 'نادل',
     'role.kitchen': 'مطبخ',
     'role.custom': 'مخصص',

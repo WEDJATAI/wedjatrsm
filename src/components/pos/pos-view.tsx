@@ -2,7 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, Ban, Check, ChevronLeft, Combine, Loader2, Minus, Plus, Users } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  Ban,
+  Check,
+  ChevronLeft,
+  Combine,
+  Hourglass,
+  Loader2,
+  Minus,
+  Plus,
+  UserRound,
+  Users,
+} from 'lucide-react'
 
 import {
   AlertDialog,
@@ -24,10 +36,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { apiFetch, fetcher } from '@/lib/api'
 import { MAX_GUESTS, MIN_GUESTS } from '@/lib/constants'
-import { elapsedSince, formatCurrency } from '@/lib/format'
+import { elapsedSince, formatCurrency, formatDateTime } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
+import { avatarColor, initialsOf } from '@/lib/person-style'
 import { currentNav, onNav, pushNav, replaceNav, type NavHash } from '@/lib/nav'
 import { enqueueOfflineAction } from '@/lib/offline-queue'
 import { cn } from '@/lib/utils'
@@ -162,6 +176,211 @@ function HybridSyncPill() {
   )
 }
 
+// ── p11-b: deferred-payments header indicator ──────────────────────
+/**
+ * Outstanding deferred checks (client left, payment pending) — a count
+ * badge on the POS order header. The popover lists every check (table,
+ * amount, waiter, issue time) and tapping a row opens the payment modal
+ * to settle it (the same flow as the floor chips). With no deferred
+ * checks the icon stays visible but dimmed, without a badge.
+ */
+function DeferredChecksIndicator({
+  orders,
+  loading,
+  onSettle,
+}: {
+  /** null while the first load is in flight (unknown ≠ none). */
+  orders: Order[] | null
+  loading: boolean
+  onSettle: (order: Order) => void
+}) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const list = orders ?? []
+  const count = list.length
+  const triggerLabel =
+    count > 0 ? t('pos.deferredPaymentsAria', { n: count }) : t('pos.deferredPayments')
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={triggerLabel}
+          title={triggerLabel}
+          className={cn(
+            'relative inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border px-3 transition-colors',
+            count > 0
+              ? 'border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100'
+              : 'border-border bg-white text-muted-foreground/50 hover:text-muted-foreground',
+          )}
+        >
+          <Hourglass className="size-5" aria-hidden />
+          {/* count badge is aria-hidden: the trigger's aria-label carries it */}
+          {count > 0 && (
+            <span
+              aria-hidden
+              className="absolute -end-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-violet-600 px-1 text-[11px] font-bold tabular-nums text-white shadow"
+            >
+              {count}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-3">
+        <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-violet-800">
+          <Hourglass className="size-4" aria-hidden /> {t('pos.deferredChecks')}
+        </p>
+        {loading && orders == null ? (
+          <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
+          </p>
+        ) : count === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">{t('pos.deferredNone')}</p>
+        ) : (
+          <>
+            <div className="rms-scroll max-h-72 space-y-1.5 overflow-y-auto">
+              {list.map((o) => {
+                // Waiter = the R19 check issuer when stamped, else the
+                // creating account (same hierarchy as the printed check).
+                const waiter = o.checkIssuedByPerson?.name ?? o.user?.name ?? '—'
+                // Deferred time: the R19 check-issue stamp when present,
+                // else when the order was opened (defer predates nothing).
+                const when = o.checkIssuedAt ?? o.createdAt
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => {
+                      setOpen(false)
+                      onSettle(o)
+                    }}
+                    title={t('pos.deferredSettleHint')}
+                    className="flex w-full flex-col gap-0.5 rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2 text-start transition-colors hover:border-violet-400 hover:bg-violet-100"
+                  >
+                    <span className="flex w-full items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-semibold text-violet-900">
+                        {o.table?.name ?? t('common.takeaway')} · #{o.id}
+                      </span>
+                      <span className="shrink-0 text-sm font-bold tabular-nums text-violet-700">
+                        {formatCurrency(o.remainingAmount)}
+                      </span>
+                    </span>
+                    <span className="flex w-full items-center justify-between gap-2 text-xs text-violet-700/90">
+                      <span className="min-w-0 truncate">{o.clientName ?? waiter}</span>
+                      <span className="shrink-0 truncate">
+                        {t('pos.waiter')}: {waiter}
+                      </span>
+                    </span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      {t('pos.checkIssued')}: {formatDateTime(when)}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-center text-[11px] text-muted-foreground">
+              {t('pos.deferredTapHint')}
+            </p>
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ── p11-b: check-issuer header chip ────────────────────────────────
+/**
+ * WHO issued/ordered the guest check for the active order (R19 stamp),
+ * rendered with the shared warm avatar identity (deterministic color +
+ * initials — same system as the login team wall / customer cards).
+ * Attribution mirrors the printed check exactly: the stamped person →
+ * this session's person → the creating account. Dimmed until the check
+ * has actually been issued; click (or title hover) reveals the full
+ * name and the issue time.
+ */
+function CheckIssuerChip({
+  order,
+  sessionPersonName,
+}: {
+  order: Order | null
+  sessionPersonName: string | null
+}) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  if (!order) return null
+
+  const stampedName = order.checkIssuedByPerson?.name ?? null
+  // Same fallback chain as the printed check (check-modal) so the header
+  // chip always matches what the paper would say.
+  const name = stampedName ?? sessionPersonName ?? order.user?.name ?? null
+  if (!name) return null
+  const issuedAt = order.checkIssuedAt ?? null
+  const hoverTitle = issuedAt
+    ? t('pos.checkIssuedChip', { name, time: formatDateTime(issuedAt) })
+    : t('pos.checkNotIssued')
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={hoverTitle}
+          title={hoverTitle}
+          className={cn(
+            'inline-flex h-11 min-w-11 shrink-0 items-center gap-2 rounded-xl border px-2 transition-colors',
+            stampedName
+              ? 'border-primary/40 bg-primary/[0.07] text-primary hover:bg-primary/15'
+              : 'border-border bg-white text-muted-foreground/60 hover:bg-muted',
+          )}
+        >
+          <span
+            className={cn(
+              'grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white',
+              avatarColor(name),
+            )}
+            aria-hidden
+          >
+            {initialsOf(name)}
+          </span>
+          <span className="hidden max-w-[130px] truncate text-sm font-semibold md:inline">
+            {name}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-3">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+          <UserRound className="size-3.5" aria-hidden /> {t('pos.checkIssuer')}
+        </p>
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              'grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white',
+              avatarColor(name),
+            )}
+            aria-hidden
+          >
+            {initialsOf(name)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold">{name}</p>
+            {issuedAt ? (
+              <p className="text-xs text-muted-foreground">
+                {t('pos.checkIssued')}:{' '}
+                <span className="tabular-nums">{formatDateTime(issuedAt)}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {t('pos.checkNotIssuedHint', { name })}
+              </p>
+            )}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** `active` — true while the POS view is the visible top-level view. page.tsx
  *  keeps PosView mounted (hidden) when the user switches views so the order
  *  state survives; defaults to true when the prop is not passed. */
@@ -285,6 +504,17 @@ export default function PosView({ active = true }: { active?: boolean }) {
     staleTime: 5 * 60 * 1000,
   })
   const user = sessionData?.user
+
+  // ── p11-b: outstanding deferred checks (header indicator) ────────
+  // Shares the ['orders','deferred'] cache with the floor screen
+  // (TableSelect polls the same key while the floor is visible) — every
+  // order mutation invalidates it via invalidateShared().
+  const { data: deferredHeaderData, isLoading: deferredHeaderLoading } = useQuery({
+    queryKey: ['orders', 'deferred'],
+    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=deferred'),
+    enabled: mode === 'order',
+    refetchInterval: active && mode === 'order' ? 10_000 : false,
+  })
 
   // ── Live order (poll while open) ─────────────────────────────────
   const { data: orderData, isLoading: orderLoading } = useQuery({
@@ -1244,6 +1474,14 @@ export default function PosView({ active = true }: { active?: boolean }) {
               <span className="hidden md:inline">{t('common.cancel')}</span>
             </Button>
           )}
+          {/* p11-b: deferred payments (outstanding pay-later checks) +
+              waiter who issued/ordered this table's check — header indicators */}
+          <DeferredChecksIndicator
+            orders={deferredHeaderData?.orders ?? null}
+            loading={deferredHeaderLoading}
+            onSettle={handleSettleDeferred}
+          />
+          <CheckIssuerChip order={order} sessionPersonName={user?.personName ?? null} />
           {/* R30: hybrid sync status — calm presence chip (details live in
               Settings → Hybrid Sync Center; no interaction by design) */}
           <HybridSyncPill />

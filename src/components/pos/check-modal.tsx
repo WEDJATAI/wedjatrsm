@@ -65,6 +65,14 @@ const CHECK_TITLE_LABEL_KEYS: Record<CheckTitleKey, string> = {
 
 type SplitKind = 'rows' | 'equal' | 'items'
 
+/** p11: max whole units of a line that can go on one By-Items check
+ * (p8's payment-side convention). A fractional-only line (weighed goods
+ * under 1 unit) is selectable as the line itself. */
+function checkMaxUnits(qty: number): number {
+  const whole = Math.floor(qty)
+  return whole > 0 ? whole : qty
+}
+
 // ── Bilingual label helpers (the paper ALWAYS shows EN + AR) ─────────
 
 /** "English · العربية" from a template key with its {vars} filled in. */
@@ -156,6 +164,9 @@ function buildCheckModel(
     rows: CheckSplitRow[] | undefined
     eqPayers: number
     selectedIds: Set<number>
+    /** p11: per-line unit overrides for By-Items (how many units of each line
+     * go on THIS check; default = the line's whole units). */
+    itemQtys: Record<number, number>
     lang: Lang
     sessionPersonName?: string | null
   },
@@ -207,8 +218,21 @@ function buildCheckModel(
   const isSplit = opts.mode === 'split'
 
   // ── By items: the check covers ONLY the selected items ──
+  // p11: quantity-level selection — a "3 × Water" line can put 1 water on
+  // this check and leave 2 for the next one. Fractional tails stay off the
+  // paper (mirrors the p8 payment-side whole-units convention).
   if (isSplit && opts.splitKind === 'items') {
-    const items = allItems.filter((_, i) => opts.selectedIds.has(order.items[i].id))
+    const unitsOf = (i: number): number => {
+      const line = order.items[i]
+      const max = checkMaxUnits(line.quantity)
+      const override = opts.itemQtys[line.id]
+      if (typeof override === 'number') return Math.min(override, max)
+      return opts.selectedIds.has(line.id) ? max : 0
+    }
+    const items = allItems
+      .map((paper, i) => ({ paper, units: unitsOf(i), unitPrice: order.items[i].unitPrice }))
+      .filter((x) => x.units > 0)
+      .map((x) => ({ ...x.paper, qty: formatQty(x.units), total: round2(x.units * x.unitPrice) }))
     const lineSum = round2(items.reduce((s, it) => s + it.total, 0))
     const ratio = orderSubtotal > 0 ? lineSum / orderSubtotal : 0
     const discount = round2(orderDiscount * ratio)
@@ -359,6 +383,30 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
   const [selectedIds, setSelectedIds] = useState<Set<number>>(
     () => new Set(order.items.map((it) => it.id)),
   )
+  // p11: per-line unit selection for By-Items checks — "how many of this
+  // line go on THIS check". Override map; default = the line's whole units.
+  const [itemQtys, setItemQtys] = useState<Record<number, number>>({})
+
+  /** Chosen units of a line for this check (0 when the line is off). */
+  const effUnits = (it: Order['items'][number]): number => {
+    const max = checkMaxUnits(it.quantity)
+    const o = itemQtys[it.id]
+    if (typeof o === 'number') return Math.min(o, max)
+    return selectedIds.has(it.id) ? max : 0
+  }
+
+  /** Stepper −/+ on an active line: 1..max whole units (1 minimum — use the
+   * row tap to take the whole line off the check). */
+  const bumpLineUnits = (it: Order['items'][number], delta: number) => {
+    setItemQtys((prev) => {
+      const max = checkMaxUnits(it.quantity)
+      const cur =
+        typeof prev[it.id] === 'number' ? (prev[it.id] as number) : selectedIds.has(it.id) ? max : 0
+      const next = Math.min(max, Math.max(1, cur + delta))
+      if (next === cur) return prev
+      return { ...prev, [it.id]: next }
+    })
+  }
 
   const hasRows = (rows?.length ?? 0) > 0
   const effSplitKind: SplitKind = hasRows ? splitKind : splitKind === 'rows' ? 'equal' : splitKind
@@ -374,6 +422,7 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
     rows,
     eqPayers,
     selectedIds,
+    itemQtys,
     lang,
     sessionPersonName,
   })
@@ -390,13 +439,22 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
       else next.add(itemId)
       return next
     })
+    // p11: a fresh toggle always starts from the line's full units — drop any
+    // stale per-line override from an earlier selection state.
+    setItemQtys((prev) => {
+      if (!(itemId in prev)) return prev
+      const next = { ...prev }
+      delete next[itemId]
+      return next
+    })
   }
 
   const selectedCount = order.items.filter((it) => selectedIds.has(it.id)).length
+  // p11: quantity-aware — a stepped-down line contributes only its chosen units
   const selectedSum = round2(
     order.items
       .filter((it) => selectedIds.has(it.id))
-      .reduce((s, it) => s + it.quantity * it.unitPrice, 0),
+      .reduce((s, it) => s + effUnits(it) * it.unitPrice, 0),
   )
 
   const handlePrint = () => {
@@ -568,37 +626,83 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
                     <div className="rms-scroll max-h-44 space-y-1.5 overflow-y-auto">
                       {order.items.map((it) => {
                         const active = selectedIds.has(it.id)
+                        // p11: quantity-level selection — steppers appear when
+                        // the line has more than one whole unit; the amount
+                        // follows the chosen units (not the whole line).
+                        const max = checkMaxUnits(it.quantity)
+                        const units = effUnits(it)
+                        const amount = round2((active ? units : it.quantity) * it.unitPrice)
                         return (
-                          <button
+                          <div
                             key={it.id}
-                            type="button"
-                            onClick={() => toggleItem(it.id)}
-                            aria-pressed={active}
                             className={cn(
-                              'flex h-11 w-full items-center justify-between gap-2 rounded-lg border px-3 text-start text-sm transition-colors',
-                              active
-                                ? 'border-primary bg-primary/10 font-semibold text-primary'
-                                : 'border-border bg-white text-muted-foreground',
+                              'flex items-center gap-2 rounded-lg border px-2 transition-colors',
+                              active ? 'border-primary bg-primary/10' : 'border-border bg-white',
                             )}
                           >
-                            <span className="min-w-0 truncate">
-                              {formatQty(it.quantity)} ×{' '}
-                              {it.product
-                                ? localizedName(it.product.name, it.product.nameAr, lang)
-                                : t('pos.item')}
-                              {it.selectedModifiers?.length ? (
-                                <span className="ms-1 text-xs text-muted-foreground">
-                                  +{' '}
-                                  {it.selectedModifiers
-                                    .map((m) => localizedName(m.name, m.nameAr, lang))
-                                    .join(', ')}
+                            <button
+                              type="button"
+                              onClick={() => toggleItem(it.id)}
+                              aria-pressed={active}
+                              className={cn(
+                                'flex h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg text-start text-sm transition-colors',
+                                active ? 'font-semibold text-primary' : 'text-muted-foreground',
+                              )}
+                            >
+                              <span className="min-w-0 truncate">
+                                {formatQty(it.quantity)} ×{' '}
+                                {it.product
+                                  ? localizedName(it.product.name, it.product.nameAr, lang)
+                                  : t('pos.item')}
+                                {it.selectedModifiers?.length ? (
+                                  <span className="ms-1 text-xs text-muted-foreground">
+                                    +{' '}
+                                    {it.selectedModifiers
+                                      .map((m) => localizedName(m.name, m.nameAr, lang))
+                                      .join(', ')}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="shrink-0 tabular-nums">
+                                {formatCurrency(amount)}
+                              </span>
+                            </button>
+                            {active && max > 1 && (
+                              <div
+                                role="group"
+                                aria-label={t('pos.checkLineUnits')}
+                                className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-white p-0.5"
+                              >
+                                <button
+                                  type="button"
+                                  disabled={units <= 1}
+                                  onClick={() => bumpLineUnits(it, -1)}
+                                  aria-label={t('pos.checkRemoveUnit')}
+                                  className="grid size-9 place-items-center rounded-md text-muted-foreground transition hover:bg-primary/10 disabled:opacity-30"
+                                >
+                                  <Minus className="size-4" />
+                                </button>
+                                <span
+                                  className="w-10 text-center text-sm font-bold tabular-nums text-primary"
+                                  title={t('pos.checkLineUnits')}
+                                >
+                                  {formatQty(units)}
+                                  <span className="text-[10px] font-normal text-muted-foreground">
+                                    /{formatQty(max)}
+                                  </span>
                                 </span>
-                              ) : null}
-                            </span>
-                            <span className="shrink-0 tabular-nums">
-                              {formatCurrency(round2(it.quantity * it.unitPrice))}
-                            </span>
-                          </button>
+                                <button
+                                  type="button"
+                                  disabled={units >= max}
+                                  onClick={() => bumpLineUnits(it, 1)}
+                                  aria-label={t('pos.checkAddUnit')}
+                                  className="grid size-9 place-items-center rounded-md text-muted-foreground transition hover:bg-primary/10 disabled:opacity-30"
+                                >
+                                  <Plus className="size-4" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )
                       })}
                     </div>

@@ -7,6 +7,7 @@
 import { Database } from 'bun:sqlite'
 import { Pool } from 'pg'
 import { createHash, randomUUID } from 'node:crypto'
+import { neonPooledUrl } from './lib/env-local'
 
 const LOCAL = '/home/z/my-project/db/custom.db'
 const CATEGORY_REMAP: Record<number, number> = { 9: 29 }
@@ -31,7 +32,7 @@ const cats = db.query('SELECT id, name, name_ar, display_order, prep_destination
 const prods = db.query('SELECT id, name, name_ar, category_id, price, cost, is_stockable, is_sellable, sku, image_url, active, low_stock_threshold, stock, sold_out, allergens, dietary, description, created_at FROM products WHERE id >= 50 ORDER BY id').all() as any[]
 console.log('local Lelo categories:', cats.length, '| local Lelo products:', prods.length)
 
-const neon = new Pool({ connectionString: 'postgresql://neondb_owner:npg_8r0cMUtoipnQ@ep-flat-bonus-au9hoj3b-pooler.c-10.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require', ssl: { rejectUnauthorized: false } })
+const neon = new Pool({ connectionString: neonPooledUrl(), ssl: { rejectUnauthorized: false } })
 
 // device attribution: this machine's registered terminal on Neon
 const devRes = await neon.query("SELECT \"deviceId\" FROM hybrid_devices WHERE name = 'Local Terminal' LIMIT 1")

@@ -213,6 +213,10 @@ export const posDict: DictPair = {
     'pos.spreadEvenly': '1 each',
     'pos.spreadEvenlyHint': 'Hand out this line whole units evenly across the payers',
     'pos.unitsLeft': '{n} left',
+    // p11: quantity-level By-Items check selection (check modal)
+    'pos.checkLineUnits': 'Units on this check',
+    'pos.checkAddUnit': 'More on this check',
+    'pos.checkRemoveUnit': 'Fewer on this check',
     'pos.qtySplitHint':
       '− / + moves units between payers · tap P1–Pn to choose who gets the leftovers',
     'pos.basePayerHint': 'Leftover units of this line follow this payer',
@@ -363,6 +367,16 @@ export const posDict: DictPair = {
     'pos.deferredStamp': 'DEFERRED',
     'pos.deferredClientLabel': 'Client',
 
+    // p11-b: POS header indicators (deferred payments + check issuer)
+    'pos.deferredPayments': 'Deferred payments',
+    'pos.deferredPaymentsAria': 'Deferred payments — {n} outstanding check(s)',
+    'pos.deferredNone': 'No deferred checks right now.',
+    'pos.deferredTapHint': 'Tap a check to settle it.',
+    'pos.checkIssuer': 'Waiter who issued the check',
+    'pos.checkIssuedChip': 'Check issued by {name} · {time}',
+    'pos.checkNotIssued': 'Check not issued yet',
+    'pos.checkNotIssuedHint': 'Not issued yet — printing the check will attribute it to {name}.',
+
     // round5: PIN-gated item deletion
     'pos.pinTitle': 'PIN required',
     'pos.pinDesc': 'Enter the 6-digit PIN to remove {name} from the order.',
@@ -493,6 +507,10 @@ export const posDict: DictPair = {
     'pos.spreadEvenly': 'واحد لكل ضيف',
     'pos.spreadEvenlyHint': 'توزيع وحدات هذا الصنف بالتساوي على الدافعين',
     'pos.unitsLeft': 'باقي {n}',
+    // p11: quantity-level By-Items check selection (check modal)
+    'pos.checkLineUnits': 'عدد الوحدات في هذا الحساب',
+    'pos.checkAddUnit': 'زيادة وحدة في هذا الحساب',
+    'pos.checkRemoveUnit': 'إنقاص وحدة من هذا الحساب',
     'pos.qtySplitHint': '− / + لنقل الوحدات بين الدافعين · اضغط P1–Pn لاختيار من يأخذ المتبقي',
     'pos.basePayerHint': 'الوحدات المتبقية من هذا الصنف تُحسب على هذا الدافع',
     'pos.addUnit': 'أعطِ وحدة إضافية للدافع {n}',
@@ -641,6 +659,16 @@ export const posDict: DictPair = {
     'pos.deferredToast': 'تم تأجيل الحساب #{order} باسم {client}',
     'pos.deferredStamp': 'مؤجل',
     'pos.deferredClientLabel': 'العميل',
+
+    // p11-b: مؤشرات رأس شاشة النقاط (المدفوعات المؤجلة + مُصدر الحساب)
+    'pos.deferredPayments': 'المدفوعات المؤجلة',
+    'pos.deferredPaymentsAria': 'مدفوعات مؤجلة — {n} حسابات غير مسددة',
+    'pos.deferredNone': 'لا توجد حسابات مؤجلة الآن.',
+    'pos.deferredTapHint': 'اضغط على أي حساب لتسويته.',
+    'pos.checkIssuer': 'النادل الذي أصدر الحساب',
+    'pos.checkIssuedChip': 'أصدر الحساب: {name} · {time}',
+    'pos.checkNotIssued': 'لم يُصدر الحساب بعد',
+    'pos.checkNotIssuedHint': 'لم يُصدر الحساب بعد — سيُنسب إلى {name} عند طباعته.',
 
     // round5: PIN-gated item deletion
     'pos.pinTitle': 'الرمز مطلوب',

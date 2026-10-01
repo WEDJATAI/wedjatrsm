@@ -81,8 +81,10 @@ export async function POST(req: NextRequest) {
       // R27: the manager's PIN is NOT accepted here — the super admin
       // signs in exclusively through the Manager corner
       // (POST /api/auth/manager-login), never the generic doors.
+      // p11-d: same isolation for the developer — his PIN works only on
+      // the Developer corner (POST /api/auth/developer-login).
       user = await db.user.findFirst({
-        where: { pin, active: true, isSuperAdmin: false },
+        where: { pin, active: true, isSuperAdmin: false, role: { not: 'developer' } },
         include: {
           roleRecord: { select: { name: true, permissions: true, active: true } },
           people: { where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } },

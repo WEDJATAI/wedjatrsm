@@ -12,6 +12,8 @@ import { resolveRoleLabel } from '@/lib/attendance'
 // rate limiting) happens on POST /api/attendance/wall.
 // R27: the super admin (the manager) is EXCLUDED — his door is the
 // Manager corner, not the staff wall.
+// p11-d: the developer is EXCLUDED too — his door is the Developer
+// corner; he is not wall staff.
 
 export type WallUser = {
   id: number
@@ -34,7 +36,14 @@ export async function GET() {
   try {
     const [users, openRecords] = await Promise.all([
       db.user.findMany({
-        where: { active: true, pin: { not: null }, isSuperAdmin: false },
+        // R27 + p11-d: both private-door accounts (manager = super admin,
+        // developer role) are hidden from the staff wall roster.
+        where: {
+          active: true,
+          pin: { not: null },
+          isSuperAdmin: false,
+          role: { not: 'developer' },
+        },
         select: {
           id: true,
           name: true,

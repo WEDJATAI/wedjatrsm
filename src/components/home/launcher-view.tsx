@@ -25,6 +25,7 @@ import {
   ChefHat,
   CircleDollarSign,
   ClipboardCheck,
+  Code2,
   Hand,
   KeyRound,
   LayoutDashboard,
@@ -53,6 +54,7 @@ import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order, SessionUser } from '@/lib/types'
 import { ManagerPinDialog } from '@/components/auth/manager-pin-dialog'
+import { DeveloperPinDialog } from '@/components/auth/developer-pin-dialog'
 
 // ── warm palette (deterministic per module; literals so Tailwind sees them)
 type TileDef = {
@@ -168,6 +170,8 @@ export default function LauncherView({
 
   const isAdmin = user.role === 'admin'
   const isManager = user.isSuperAdmin === true
+  // p11-d: the developer role session — admin-equivalent grants, own PIN tools
+  const isDeveloper = user.role === 'developer'
   const perms = user.permissions ?? []
   const can = useMemo(
     () => (view: string) => isAdmin || perms.includes(VIEW_PERMISSION[view] ?? ''),
@@ -253,6 +257,33 @@ export default function LauncherView({
   }
   const showPinBanner = onDefaultPin && !pinDialogOpen
 
+  // ── p11-d: the developer's PIN status — the exact same pattern as the
+  // manager above (shared ['developer-status'] key with the sign-in
+  // screen; auto-dialog while on the starting PIN 111111, then a teal
+  // banner until he sets his own number). ──
+  const [manualDevPinOpen, setManualDevPinOpen] = useState(false)
+  const [autoDevPinDismissed, setAutoDevPinDismissed] = useState(false)
+  const { data: developerStatus } = useQuery({
+    queryKey: ['developer-status'],
+    queryFn: () => fetcher<{ name: string | null; usingDefaultPin: boolean }>(
+      '/api/auth/developer-login',
+    ),
+    staleTime: 30_000,
+    enabled: isDeveloper,
+  })
+  const onDefaultDevPin = isDeveloper && (developerStatus?.usingDefaultPin ?? false)
+  const devPinDialogOpen = manualDevPinOpen || (onDefaultDevPin && !autoDevPinDismissed)
+  const openDevPinDialog = () => setManualDevPinOpen(true)
+  const handleDevPinDialogChange = (open: boolean) => {
+    if (open) {
+      openDevPinDialog()
+    } else {
+      setManualDevPinOpen(false)
+      setAutoDevPinDismissed(true) // closing the first-time dialog → banner
+    }
+  }
+  const showDevPinBanner = onDefaultDevPin && !devPinDialogOpen
+
   const badges: Record<string, number> = {
     openOrders: openOrdersCount,
     pendingItems: pendingItemsCount,
@@ -337,6 +368,29 @@ export default function LauncherView({
                   <span className="hidden sm:inline">{t('manager.changePinShort')}</span>
                 </button>
               )}
+              {/* p11-d: the developer's own PIN tool — same pattern, teal accent */}
+              {isDeveloper && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sndTap()
+                    haptic(8)
+                    openDevPinDialog()
+                  }}
+                  aria-label={t('developer.changePinTitle')}
+                  title={t('developer.changePinTitle')}
+                  className={cn(
+                    'flex min-h-11 items-center gap-1.5 rounded-xl border px-3 text-sm font-semibold transition active:scale-95',
+                    onDefaultDevPin
+                      ? 'border-teal-300 bg-teal-50 text-teal-800 hover:bg-teal-100'
+                      : 'border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  )}
+                >
+                  <Code2 className="size-4" aria-hidden />
+                  <span className="hidden sm:inline">{t('developer.changePinShort')}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -368,6 +422,37 @@ export default function LauncherView({
               className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-medium text-amber-800/80 transition hover:text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
             >
               {t('manager.later')}
+            </button>
+          </div>
+        )}
+
+        {/* p11-d: developer first-time banner — still on the starting PIN 111111 */}
+        {showDevPinBanner && (
+          <div
+            className="flex flex-wrap items-center gap-3 border-b border-teal-200 bg-teal-50 px-4 py-3 text-teal-900 sm:px-6"
+            role="status"
+          >
+            <Sparkles className="size-5 shrink-0" aria-hidden />
+            <p className="min-w-0 flex-1 text-sm font-medium leading-relaxed">
+              {t('developer.defaultPinBanner')}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                sndTap()
+                haptic(8)
+                openDevPinDialog()
+              }}
+              className="min-h-11 shrink-0 rounded-lg bg-teal-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+            >
+              {t('developer.setPinNow')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoDevPinDismissed(true)}
+              className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-medium text-teal-800/80 transition hover:text-teal-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+            >
+              {t('developer.later')}
             </button>
           </div>
         )}
@@ -415,6 +500,12 @@ export default function LauncherView({
           while he is still on the starting PIN) */}
       {isManager && (
         <ManagerPinDialog open={pinDialogOpen} onOpenChange={handlePinDialogChange} />
+      )}
+
+      {/* p11-d: the developer's change-PIN dialog (same auto-open pattern
+          while he is still on the starting PIN 111111) */}
+      {isDeveloper && (
+        <DeveloperPinDialog open={devPinDialogOpen} onOpenChange={handleDevPinDialogChange} />
       )}
     </section>
   )

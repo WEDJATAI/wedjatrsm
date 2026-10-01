@@ -202,7 +202,23 @@ export async function GET(req: NextRequest) {
     }
     byWaiter.sort((a, b) => b.net - a.net)
 
-    // 5. Deferred outstanding — LIVE liability snapshot (all deferred checks,
+    // 5. Manual drawer entries today (R8 CashDrawerEntry rows: paid-in = cash
+    //    ADDED to the drawer, paid_out = WITHDRAWAL — cash pulled out by the
+    //    manager). They move physical cash exactly like change does, so the
+    //    day's expected-in-drawer must net them (mirrors the session-level
+    //    math in /api/cash-drawer — float/tips stay excluded there by design).
+    const drawerEntries = await db.cashDrawerEntry.findMany({
+      where: { createdAt: { gte: dayStart, lt: dayEnd } },
+      select: { type: true, amount: true },
+    })
+    let paidInRaw = 0
+    let paidOutRaw = 0
+    for (const entry of drawerEntries) {
+      if (entry.type === 'paid_in') paidInRaw += entry.amount
+      else if (entry.type === 'paid_out') paidOutRaw += entry.amount
+    }
+
+    // 6. Deferred outstanding — LIVE liability snapshot (all deferred checks,
     //    regardless of date), remainder rounded per order then summed.
     const deferredOrders = await db.order.findMany({
       where: { status: 'deferred' },
@@ -250,11 +266,18 @@ export async function GET(req: NextRequest) {
       },
       // R26 Payment Pro: cash-drawer reconciliation for the day — bill
       // portions only (float/tips are reconciled on the cash-drawer screen);
-      // expected in drawer = cash payments − change given.
+      // expected in drawer = cash payments − change given + paid-ins −
+      // withdrawals (p11-c: paid-outs are cash the manager pulled OUT of the
+      // drawer today — without them the count would look short by exactly the
+      // withdrawal total).
       cashDrawer: {
         cashPayments: round2(cashPaymentsRaw),
         changeGiven: round2(changeGivenRaw),
-        expectedInDrawer: round2(cashPaymentsRaw - changeGivenRaw),
+        paidIn: round2(paidInRaw),
+        paidOut: round2(paidOutRaw),
+        expectedInDrawer: round2(
+          cashPaymentsRaw - changeGivenRaw + paidInRaw - paidOutRaw,
+        ),
       },
     }
 

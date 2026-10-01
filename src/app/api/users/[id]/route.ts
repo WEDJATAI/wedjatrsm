@@ -132,6 +132,17 @@ export async function PUT(
       )
     }
 
+    // p11-d: the developer's account belongs to the developer alone —
+    // same protection as the manager's row. No other admin (or anyone
+    // else) may edit, re-pin or deactivate the one developer; he manages
+    // his account through his own PIN tools.
+    if (existing.role === 'developer' && userId !== sessionUserId) {
+      throw new ApiError(
+        'The developer account can only be modified by the developer himself',
+        403,
+      )
+    }
+
     const body = await readBody(req)
     const data: Prisma.UserUncheckedUpdateInput = {}
 

@@ -5,6 +5,7 @@
 import { Database } from 'bun:sqlite'
 import { Pool } from 'pg'
 import { createHash, randomUUID } from 'node:crypto'
+import { neonPooledUrl } from './lib/env-local'
 
 const CAT_REMAP: Record<number, number> = { 9: 29 }
 function canon(v: any): any {
@@ -22,7 +23,7 @@ const db = new Database('/home/z/my-project/db/custom.db', { readonly: true })
 const four = db.query('SELECT id, name, name_ar, category_id, price, cost, is_stockable, is_sellable, sku, image_url, active, low_stock_threshold, stock, sold_out, allergens, dietary, description, created_at FROM products WHERE id IN (50,51,52,53) ORDER BY id').all() as any[]
 console.log('re-iding 4 Lelo items:', four.map(f => f.name).join(' | '))
 
-const neon = new Pool({ connectionString: 'postgresql://neondb_owner:npg_8r0cMUtoipnQ@ep-flat-bonus-au9hoj3b-pooler.c-10.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require', ssl: { rejectUnauthorized: false } })
+const neon = new Pool({ connectionString: neonPooledUrl(), ssl: { rejectUnauthorized: false } })
 const devRes = await neon.query("SELECT \"deviceId\" FROM hybrid_devices WHERE name = 'Local Terminal' LIMIT 1")
 const deviceId = (devRes.rows[0] as any).deviceId
 const now = new Date()

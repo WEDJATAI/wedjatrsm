@@ -1,8 +1,7 @@
-import { writeFileSync, readFileSync } from 'node:fs'
-const raw = readFileSync('/home/z/my-project/.env.deploy-local', 'utf8')
-const m = raw.match(/^TURSO_AUTH_TOKEN=(.+)$/m)
-const tok = m ? m[1].trim() : ''
-const TURL = 'https://wedjatrsm-vercel-icfg-fk7nzkekcm9ddsa6farl6t5h.aws-us-east-1.turso.io/v2/pipeline'
+import { writeFileSync } from 'node:fs'
+import { tursoAuthToken, tursoPipelineUrl } from './lib/env-local'
+const tok = tursoAuthToken()
+const TURL = tursoPipelineUrl()
 const hdr = { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }
 
 async function tursoQuery(sql: string) {

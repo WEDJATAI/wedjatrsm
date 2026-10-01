@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { Pool } from 'pg'
-import { writeFileSync, statSync, readFileSync } from 'node:fs'
+import { writeFileSync, statSync } from 'node:fs'
+import { neonPooledUrl, tursoAuthToken, tursoPipelineUrl } from './lib/env-local'
 
 const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)
 const dir = '/home/z/my-project/backups'
@@ -12,7 +13,7 @@ local.exec("VACUUM INTO '" + localPath + "'")
 console.log('LOCAL backup: ' + localPath + ' (' + (statSync(localPath).size / 1024).toFixed(1) + ' KB)')
 
 // 2) NEON: full JSON dump of all public tables
-const neon = new Pool({ connectionString: 'postgresql://neondb_owner:npg_8r0cMUtoipnQ@ep-flat-bonus-au9hoj3b-pooler.c-10.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require', ssl: { rejectUnauthorized: false } })
+const neon = new Pool({ connectionString: neonPooledUrl(), ssl: { rejectUnauthorized: false } })
 const tr = await neon.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")
 const neonTables: string[] = tr.rows.map((r: any) => r.table_name)
 const neonDump: Record<string, any[]> = {}
@@ -27,8 +28,8 @@ console.log('NEON backup: ' + neonPath + ' (' + neonTables.length + ' tables, ' 
 await neon.end()
 
 // 3) TURSO: full JSON dump via Hrana pipeline
-const tok = readFileSync('/home/z/my-project/.env.deploy-local', 'utf8').match(/^TURSO_AUTH_TOKEN=(.+)$/m)![1].trim()
-const TURL = 'https://wedjatrsm-vercel-icfg-fk7nzkekcm9ddsa6farl6t5h.aws-us-east-1.turso.io/v2/pipeline'
+const tok = tursoAuthToken()
+const TURL = tursoPipelineUrl()
 const hdr = { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }
 async function tursoQuery(sql: string): Promise<{ cols: string[]; rows: any[][] }> {
   const body = JSON.stringify({ requests: [{ type: 'execute', stmt: { sql } }, { type: 'close' }] })

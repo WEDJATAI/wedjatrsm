@@ -5,11 +5,16 @@ export const SERVICE_TAX_RATE = Number(process.env.SERVICE_TAX_RATE ?? 0.12) // 
 
 // ─── Roles ──────────────────────────────────────────────────────────
 // 'custom' users get their module permissions from a CustomRole record (roleId).
+// p11-d: the 'developer' role is deliberately NOT in this list — it is never
+// creatable/editable through the users API; the ONE developer row is
+// provisioned exclusively by ensureDeveloper() in src/lib/auth.ts.
 export const ROLES = ['admin', 'waiter', 'kitchen', 'custom'] as const
 export type Role = (typeof ROLES)[number]
 
 export const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
+  // p11-d: the developer role (display label — kept additive)
+  developer: 'Developer',
   waiter: 'Waiter',
   kitchen: 'Kitchen',
   custom: 'Custom',
@@ -86,6 +91,8 @@ export const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as
 /** built-in module grants per classic role (custom users read theirs from CustomRole) */
 export const BUILTIN_ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: [...PERMISSIONS],
+  // p11-d: the developer — technical super-user, admin-equivalent full grants
+  developer: [...PERMISSIONS],
   waiter: ['pos'],
   kitchen: ['kitchen'],
   custom: [], // resolved from CustomRole record

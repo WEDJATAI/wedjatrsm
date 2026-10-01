@@ -236,12 +236,20 @@ export function orderTableIds(order: { tableId: number | null; extraTableIds: st
  * Find an OPEN order that references the table — either as its primary
  * table OR as one of its merged-seating extra tables. Used to guard
  * transfer/destination tables and table release logic.
+ *
+ * p11-a: optional `tx` client. Callers that run INSIDE a transaction MUST
+ * pass it — a read on the global `db` pool inside a tx sees the PRE-tx
+ * snapshot (a second SQLite connection), so an order this tx already
+ * closed/moved still shows as open and tables wrongly stay 'occupied'
+ * (the merge ghost-table bug). Default keeps the classic behavior.
  */
 export async function findOpenOrderOnTable(
   tableId: number,
   excludeOrderId?: number,
+  tx?: Prisma.TransactionClient,
 ): Promise<{ id: number } | null> {
-  const candidates = await db.order.findMany({
+  const client = tx ?? db
+  const candidates = await client.order.findMany({
     where: {
       status: 'open',
       OR: [{ tableId }, { extraTableIds: { not: null } }],
@@ -891,7 +899,10 @@ export async function rehouseOpenOrder(
   })
   for (const previousTableId of previousTableIds) {
     if (previousTableId === targetTableId) continue
-    const stillOpen = await findOpenOrderOnTable(previousTableId, order.id)
+    // p11-a: tx-aware read — inside this tx the global pool would see the
+    // pre-move snapshot (excludeOrderId already masked that for this order,
+    // but concurrent moves by other terminals are only visible on `tx`).
+    const stillOpen = await findOpenOrderOnTable(previousTableId, order.id, tx)
     if (!stillOpen) {
       await tx.restaurantTable.update({
         where: { id: previousTableId },
@@ -1024,7 +1035,16 @@ export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise
       return base
     }
     const open = openOrderByTable.get(table.id)
-    if (!open) return base
+    if (!open) {
+      // p11-a self-heal: an 'occupied' table with NO open order anywhere is
+      // a ghost (historical merge left the source table stuck — see the
+      // merge-route fix). 'occupied' is not a manual turnover state (those
+      // are paid/deferred/dirty/free), so the payload normalizes it to
+      // 'free' read-only: the floor instantly re-offers the table for
+      // seating/transfer/merge without any data migration.
+      if (base.status === 'occupied') return { ...base, status: 'free' }
+      return base
+    }
     const itemCount = open.items.reduce((sum, item) => sum + item.quantity, 0)
     return {
       ...base,

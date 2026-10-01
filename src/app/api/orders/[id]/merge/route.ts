@@ -71,8 +71,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       // 4) Table statuses: free EVERY source seating table (primary +
       //    extras) when no open order remains on it; keep the target's
       //    table occupied.
+      //    p11-a fix: read via `tx` AND exclude the source order. The old
+      //    global-pool read inside this transaction saw the PRE-tx snapshot
+      //    (source still open on its table) and skipped the release — the
+      //    source table stayed ghost-'occupied' with no order, blocking
+      //    seating/transfer/merge on it until manual DB surgery.
       for (const sourceTableId of orderTableIds(source)) {
-        const openOnSourceTable = await findOpenOrderOnTable(sourceTableId)
+        const openOnSourceTable = await findOpenOrderOnTable(sourceTableId, source.id, tx)
         if (!openOnSourceTable) {
           await tx.restaurantTable.update({
             where: { id: sourceTableId },

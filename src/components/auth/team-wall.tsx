@@ -11,7 +11,8 @@
 //   4. CELEBRATE — full-screen success (chime), auto-returns to the wall.
 // Plus “MY SCREEN” for POS/KDS roles (reuses the already-verified PIN)
 // and a tucked-away Manager corner that opens the manager's private PIN
-// door (R27: Welcome, Dr Ihab → PIN only).
+// door (R27: Welcome, Dr Ihab → PIN only), with a sibling Developer
+// corner (p11-d) that opens the developer's own private PIN door.
 // All labels are bilingual (EN + Egyptian Arabic) and icon-led.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -21,6 +22,7 @@ import {
   Briefcase,
   Check,
   ChefHat,
+  Code2,
   ConciergeBell,
   Delete,
   Languages,
@@ -44,6 +46,7 @@ import type { SessionUser } from '@/lib/types'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import ManagerSignIn from '@/components/auth/manager-sign-in'
+import DeveloperSignIn from '@/components/auth/developer-sign-in'
 
 const PIN_LENGTH = 6
 
@@ -144,6 +147,8 @@ export default function TeamWall({ onLogin }: { onLogin: () => void }) {
 
   // Manager corner → classic full sign-in card (email/PIN/demo/register)
   const [managerMode, setManagerMode] = useState(false)
+  // p11-d: Developer corner → the developer's private PIN door
+  const [developerMode, setDeveloperMode] = useState(false)
 
   // state machine: wall → pin → action → celebrate
   const [selected, setSelected] = useState<WallUser | null>(null)
@@ -392,6 +397,12 @@ export default function TeamWall({ onLogin }: { onLogin: () => void }) {
   // inside the manager screen (“More options”).
   if (managerMode) {
     return <ManagerSignIn onLogin={onLogin} onBackToWall={() => setManagerMode(false)} />
+  }
+
+  // ── Developer corner → the developer's private PIN door (p11-d),
+  // mirroring the manager corner with its own cool-palette screen.
+  if (developerMode) {
+    return <DeveloperSignIn onLogin={onLogin} onBackToWall={() => setDeveloperMode(false)} />
   }
 
   // ── Person picker (shared account, MY SCREEN) ─────────────────────
@@ -935,6 +946,15 @@ export default function TeamWall({ onLogin }: { onLogin: () => void }) {
             >
               <ShieldCheck className="h-4 w-4" aria-hidden />
               {t('wall.manager')}
+            </button>
+            {/* p11-d: the developer's own private corner (sibling button) */}
+            <button
+              type="button"
+              onClick={() => setDeveloperMode(true)}
+              className="flex min-h-11 items-center gap-2 rounded-lg border bg-card px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Code2 className="h-4 w-4" aria-hidden />
+              {t('wall.developer')}
             </button>
           </div>
         </div>

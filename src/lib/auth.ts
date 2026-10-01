@@ -73,12 +73,15 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
  * Derive the module permission list for a user.
  * - admin / waiter / kitchen use the built-in grants
  * - 'custom' users read their permissions from the CustomRole record
+ * - 'developer' (p11-d) gets the full built-in grants — the developer is
+ *   a technical super-user with admin-equivalent module access
  */
 export function derivePermissions(
   role: string,
   customPermissions: string | null | undefined,
 ): string[] {
   if (role === 'admin') return BUILTIN_ROLE_PERMISSIONS.admin
+  if (role === 'developer') return BUILTIN_ROLE_PERMISSIONS.developer
   if (role === 'waiter') return BUILTIN_ROLE_PERMISSIONS.waiter
   if (role === 'kitchen') return BUILTIN_ROLE_PERMISSIONS.kitchen
   if (!customPermissions) return []
@@ -272,6 +275,8 @@ export class ApiError extends Error {
  *  - module permission keys ('pos', 'reports', 'inventory', …) — satisfied when
  *    the user's derived permission list contains it
  * The admin role always passes. An empty/omitted list only requires a session.
+ * p11-d: the developer role is admin-equivalent — a technical super-user
+ * with full grants — so it passes every guarded route the admin passes.
  */
 export async function requireAuth(
   req: NextRequest,
@@ -280,7 +285,7 @@ export async function requireAuth(
   const user = await getSessionUser(req)
   if (!user) throw new ApiError('Unauthorized', 401)
   if (allowed && allowed.length > 0) {
-    if (user.role === 'admin') return user
+    if (user.role === 'admin' || user.role === 'developer') return user
     if (allowed.includes(user.role)) return user // classic role match
     const hasPermission = user.permissions.some((p) => allowed.includes(p))
     if (hasPermission) return user
@@ -346,6 +351,44 @@ export async function ensureSuperAdmin() {
       role: 'admin',
       pin: MANAGER_DEFAULT_PIN,
       isSuperAdmin: true,
+    },
+  })
+}
+
+/**
+ * p11-d: the developer sign-in invariant — exactly ONE user with the
+ * 'developer' role (the platform's technical super-user), mirroring the
+ * R27 manager invariant.
+ *
+ * Self-healing, idempotent, safe to call on every developer-corner request:
+ *  1. a user with role='developer' exists → return them as-is — an
+ *     existing developer's PIN is NEVER reset (that would advertise a
+ *     known credential on a public GET);
+ *  2. else provision a fresh developer account (Developer, PIN 111111,
+ *     random password — email/password stays as a recovery path only).
+ *
+ * A second developer can never appear from here: the users API validates
+ * `role` against ROLES (which deliberately excludes 'developer'), so the
+ * only provisioning path is this function.
+ */
+export const DEVELOPER_NAME = 'Developer'
+export const DEVELOPER_DEFAULT_PIN = '111111'
+
+export async function ensureDeveloper() {
+  const existing = await db.user.findFirst({
+    where: { role: 'developer' },
+    orderBy: { id: 'asc' },
+  })
+  if (existing) return existing
+
+  return db.user.create({
+    data: {
+      email: 'developer@rms.com',
+      passwordHash: await hashPassword(randomBytes(24).toString('hex')),
+      name: DEVELOPER_NAME,
+      role: 'developer',
+      pin: DEVELOPER_DEFAULT_PIN,
+      active: true,
     },
   })
 }

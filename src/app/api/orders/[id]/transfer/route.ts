@@ -44,6 +44,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     await db.$transaction(async (tx) => {
+      // p11-a hardening (same class as the p8 payments race): the
+      // destination check above ran OUTSIDE this tx — a concurrent transfer
+      // could have claimed the table in between. Re-assert authoritatively
+      // on `tx` (sees in-flight writes) before re-housing; a violation
+      // aborts the whole transaction.
+      const raced = await findOpenOrderOnTable(tableId, orderId, tx)
+      if (raced) {
+        throw new ApiError(`Table "${table.name}" already has an open order`, 400)
+      }
       // The whole seating (primary + merged extra tables) re-houses at the
       // single destination table: primary table moves, extras are released.
       // R9: shared with the human-confirmed AI movement flow (lib/vision.ts).
