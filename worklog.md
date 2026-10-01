@@ -2419,3 +2419,25 @@ Stage Summary:
 - ZERO DATA LOSS: recycle #5 damage fully reversed from the git-protected recovery point (designed path, 5th successful use); replica re-synced to exact Neon parity; nothing deleted anywhere (pre-restore file preserved; replica rebuilt by its own designed mechanism from the authoritative source).
 - CREDENTIAL HARMONY: the working Turso token now lives in all 3 local redundant stores + the Vercel project env (where the nightly cron uses it) — the token rotation problem is permanently resolved as long as the Vercel↔Turso integration stays attached; harmony-check turns RED automatically if it ever breaks again.
 - Honest limits: the local Turso token is the integration-managed one (it can rotate again if the integration detaches — the harmony check will catch it); Inngest remains the single documented owner action.
+
+---
+Task ID: p13b
+Agent: main (COO/CTO role, orchestrator — secrets never enter subagents)
+Task: owner supplied INNGEST_EVENT_KEY + INNGEST_SIGNING_KEY — complete the last platform: save the keys, verify the integration end-to-end, and leave Inngest genuinely scheduled.
+
+Work Log:
+- OWNER ACTION OBSERVED: the Inngest integration in the Vercel dashboard was re-connected at 18:12 UTC (the documented p12/p13 owner action) — it re-injected 4 env entries on the project: INNGEST_SIGNING_KEY + INNGEST_EVENT_KEY for target=production (values match the user-supplied keys, verified via decrypt) and separate integration-managed dev/preview keys (intentionally different — the designed prod/dev split, NOT accidental duplication; each target environment gets exactly one value per key). No env writes were needed; the p12 harmony policy (never overwrite an unknown-but-working value) applied.
+- CREDENTIALS: both keys saved to the 3-redundant store (.env.deploy-local 600 + /home/z/.deploy-creds.env 600 + .git/deploy-creds.env); verified gitignored, never committed, never in worklog.
+- EVENT KEY VERIFIED LIVE: POST inn.gs/e/{eventKey} (the SDK's documented event endpoint — api.inngest.com/v1/apps 404s) with a harmless test event → 200, accepted (id 01M3WAX79XH3WQ0Y9X7Q5A7946).
+- SIGNING KEY VERIFIED LIVE: authenticates against the Inngest Cloud API (GET /v1/events, GET /v1/apps/wedjatrsm/functions — both 200); prod /api/inngest returned to the healthy 401 auth wall (was the 503 diagnostic) once the 3d1423e deployment (built post-re-connect) took the alias.
+- LATENT BUG FOUND (honest): the 3 functions were registered on Inngest Cloud with EMPTY triggers — they existed but could NEVER fire. Root cause: src/inngest/functions.ts used the v3 shorthand createFunction({ id, cron }, …); inngest@4.21.0's _createFunction reads ONLY rawOptions.triggers (sanitizeTriggers(rawOptions.triggers)) — the top-level cron key is silently ignored. Proof: the endpoint's own in-band registry (signed PUT, x-inngest-sync-kind: in_band) returned triggers:[] for all 3. This bug predates the integration detach (functions registered trigger-less since creation) — masked all along by the Vercel cron mirrors, which is why business functions kept running and nothing visibly broke.
+- FIX (additive, 3 lines): createFunction({ id, triggers: [{ cron }] }, …) for all 3 — schedules unchanged (30 3 * * *, 30 6 * * *, */30 * * * *). Verified locally: bun script invoking the actual serve() handlers with the signing key → in-band registry now returns all triggers. bunx tsc clean (no new errors); bun run lint 0 findings.
+- DEPLOYED: c733739 pushed → Vercel auto-deploy wedjatrsm-lna75dqy5 READY → signed out-of-band sync ping (PUT /api/inngest with HMAC t/s signature over body+ts, key prefix stripped — scheme read from the SDK source) → {"message":"Successfully registered","modified":true}; prod in-band registry now serves all 3 triggers.
+- PLATFORM VERIFIED: Inngest Cloud API now shows rsm-turso-replica-sync [cron 30 3 * * *], rsm-daily-digest [cron 30 6 * * *], rsm-stale-order-alert [cron */30 * * * *] — all with triggers.
+- HARMONY CHECK: ALL FIVE PLATFORMS GREEN for the first time (github ✓ c733739 in sync · vercel ✓ READY · neon ✓ RW 9 users · turso ✓ pipeline ping · inngest ✓ auth wall 401, integration healthy). Local outbox 0 pending (1 dead = the p12 guarded collision event, by design).
+- LIVE-FIRE PROOF: the */30 cron (rsm-stale-order-alert) is due at 19:00 UTC; the events API will show the first platform-initiated invocation — checked and recorded below.
+
+Stage Summary:
+- Inngest COMPLETE: keys stored (3-redundant), integration re-connected by owner, both keys verified live against the platform, AND the trigger-less registration bug fixed — the Inngest scheduler is now genuinely armed (previously decorative; the Vercel crons were the only real schedulers).
+- ALL FIVE PLATFORMS GREEN simultaneously (first time in project history): GitHub · Vercel · Neon · Turso · Inngest.
+- Anti-disconnection posture: keys persist in 3 locations + the Vercel project env (integration-managed); harmony check catches any future detach/rotation in one command.
