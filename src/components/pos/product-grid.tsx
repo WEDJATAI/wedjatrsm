@@ -518,10 +518,18 @@ function ProductTile({
             <span className="flex w-full items-start justify-between gap-2">
               <span className="min-w-0 flex-1">
                 <span className="line-clamp-2 text-base font-semibold leading-tight">{label}</span>
-                {showEnglishHint && (
+                {showEnglishHint ? (
                   <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
                     {product.name}
                   </span>
+                ) : (
+                  // p14: one-line menu description — the upscaled house copy
+                  // gives waiters the dish script at a glance.
+                  product.description && (
+                    <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
+                      {product.description}
+                    </span>
+                  )
                 )}
               </span>
               <span className="shrink-0 pt-0.5 text-lg font-bold tabular-nums text-primary">
@@ -559,10 +567,17 @@ function ProductTile({
                 <span className="w-full text-center text-base font-semibold leading-tight line-clamp-2">
                   {label}
                 </span>
-                {showEnglishHint && (
+                {showEnglishHint ? (
                   <span className="w-full truncate text-center text-[11px] leading-tight text-stone-400">
                     {product.name}
                   </span>
+                ) : (
+                  // p14: one-line menu description (see photo-tile note)
+                  product.description && (
+                    <span className="w-full truncate text-center text-[11px] leading-tight text-stone-400">
+                      {product.description}
+                    </span>
+                  )
                 )}
               </span>
             </span>
@@ -856,10 +871,17 @@ function CompactCard({
         <span className="flex w-full items-start justify-between gap-1 pe-9">
           <span className="min-w-0 flex-1">
             <span className="line-clamp-2 text-[15px] font-semibold leading-tight">{label}</span>
-            {showEnglishHint && (
+            {showEnglishHint ? (
               <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
                 {product.name}
               </span>
+            ) : (
+              // p14: one-line menu description (see photo-tile note)
+              product.description && (
+                <span className="mt-0.5 block truncate text-[11px] leading-tight text-stone-400">
+                  {product.description}
+                </span>
+              )
             )}
           </span>
           <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground/70" aria-hidden />

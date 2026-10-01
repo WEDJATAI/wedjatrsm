@@ -96,6 +96,8 @@ export type Product = {
   dietary?: string[] | null
   /** R13: manual 86/sold-out flag (POS one-tap toggle) */
   soldOut?: boolean
+  /** p14: menu description — one subtle line on POS cards (waiter scripts) */
+  description?: string | null
   /** R8: option groups offered with this product (POS list endpoints) */
   modifierGroups?: ModifierGroupDTO[]
 }
