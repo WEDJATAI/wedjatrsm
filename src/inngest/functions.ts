@@ -16,7 +16,11 @@ import { runDailyDigest, runStaleOrderAlert } from '@/lib/digest'
 
 export const functions = [
   inngest.createFunction(
-    { id: 'rsm-turso-replica-sync', cron: '30 3 * * *' },
+    // v4 SDK syntax: triggers must be passed via `triggers`, not the v3 top-level
+    // `cron` shorthand (silently ignored by inngest@4 — the functions were
+    // registering with empty trigger lists; found p13 while re-verifying the
+    // reconnected integration). Schedules unchanged from the original spec.
+    { id: 'rsm-turso-replica-sync', triggers: [{ cron: '30 3 * * *' }] },
     async () => {
       const report = await syncAllToTurso()
       if (!report.ok) throw new Error(`Turso sync failed: ${report.error ?? 'unknown'}`)
@@ -25,7 +29,7 @@ export const functions = [
   ),
 
   inngest.createFunction(
-    { id: 'rsm-daily-digest', cron: '30 6 * * *' },
+    { id: 'rsm-daily-digest', triggers: [{ cron: '30 6 * * *' }] },
     async () => {
       const digest = await runDailyDigest()
       return { date: digest.date, skipped: digest.skipped ?? false, orders: digest.orderCount, gross: digest.gross }
@@ -33,7 +37,7 @@ export const functions = [
   ),
 
   inngest.createFunction(
-    { id: 'rsm-stale-order-alert', cron: '*/30 * * * *' },
+    { id: 'rsm-stale-order-alert', triggers: [{ cron: '*/30 * * * *' }] },
     async () => {
       return runStaleOrderAlert()
     },
