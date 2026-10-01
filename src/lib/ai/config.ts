@@ -85,8 +85,10 @@ export const AI_CHAT_TIMEOUT_MS = 25_000
 export const AI_CHAT_PRIMARY_TIMEOUT_MS = 15_000
 export const AI_EMBED_TIMEOUT_MS = 20_000
 /** Ceiling for a full consensus round (parallel fan-out + selection).
- * Stragglers past this deadline become abstentions — never block. */
-export const AI_CONSENSUS_TIMEOUT_MS = 20_000
+ * Stragglers past this deadline become abstentions — never block.
+ * 25s: cold serverless instances can see a first-model timeout (15s)
+ * + a second model landing at ~20s — the vote still counts. */
+export const AI_CONSENSUS_TIMEOUT_MS = 25_000
 
 // Embedding text cache (LRU-ish, in-process only).
 export const EMBED_CACHE_MAX_ENTRIES = 500
