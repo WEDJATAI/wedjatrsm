@@ -25,7 +25,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const orderId = parseId(id, 'order id')
 
     const order = await getOrderOr404(orderId)
-    if (session.role !== 'admin' && order.userId !== sessionUserId(session)) {
+    // r31 audit fix: the developer role is admin-equivalent by design (p11-d)
+    // — a manual `role !== 'admin'` check locked the developer out of
+    // cancelling anyone's orders. Use isSuperAdmin OR developer OR admin.
+    const privileged =
+      session.role === 'admin' || session.role === 'developer' || session.isSuperAdmin === true
+    if (!privileged && order.userId !== sessionUserId(session)) {
       throw new ApiError('Only an admin or the waiter who created this order can cancel it', 403)
     }
     if (order.status === 'paid') {
@@ -33,6 +38,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
     if (order.status === 'cancelled') {
       throw new ApiError('Order is already cancelled', 400)
+    }
+    // r31 audit fix (F9): a merged order's items live on in the target
+    // order — cancelling the emptied source would orphan the merge trail.
+    if (order.status === 'merged') {
+      throw new ApiError('Cannot cancel a merged order — it lives on in the merged target', 400)
     }
 
     // R30 hybrid sync: the cancel write + its outbox event commit together

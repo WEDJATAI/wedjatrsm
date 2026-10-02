@@ -374,7 +374,11 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       }))
     }
     return customRows.map(toSubmitRow)
-  }, [tab, singleRow, customRows, eqAmounts, eqMethods, itAmounts, itMethods])
+    // r31 audit fix: cashCharge/singleCash MUST be deps — a partial cash
+    // tender (tendered < remaining) otherwise keeps the STALE full-bill
+    // amount and the API 400s ('amount received < payment amount'), making
+    // partial cash payments impossible from the Single tab.
+  }, [tab, singleRow, customRows, eqAmounts, eqMethods, itAmounts, itMethods, singleCash, cashCharge])
 
   const sum = round2(submitRows.reduce((s, r) => s + r.amount, 0))
   const diff = round2(sum - remaining)
@@ -517,7 +521,9 @@ export default function PaymentModal({ order, open, onOpenChange, onSuccess, onD
       amount: parseAmount(r.amount),
       method: r.method,
     }))
-  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, itemLines, assignments, qtyAllocations, t])
+    // r31 audit fix: same staleness class as submitRows — the mirrored check
+    // row must follow the live cash tender portion (cashCharge).
+  }, [tab, singleRow, customRows, eqAmounts, eqMethods, eqPayers, itAmounts, itMethods, remaining, itemLines, assignments, qtyAllocations, t, singleCash, cashCharge])
 
   // ── Handlers ──────────────────────────────────────────────────────
   const clampPayers = (raw: number, min: number, max: number) => {

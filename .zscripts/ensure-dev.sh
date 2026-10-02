@@ -16,7 +16,9 @@ if curl -s -o /dev/null -m 3 http://localhost:3000/; then
 fi
 
 cd /home/z/my-project || exit 1
-setsid nohup bash -c 'exec bun run dev' < /dev/null > /tmp/dev-restart.log 2>&1 &
+# r31: strip the inherited param-less DATABASE_URL so next dev loads the
+# param'd URL from .env (socket_timeout etc. — see worklog r31)
+setsid nohup bash -c 'unset DATABASE_URL; exec bun run dev' < /dev/null > /tmp/dev-restart.log 2>&1 &
 disown
 
 for i in $(seq 1 40); do

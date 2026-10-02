@@ -977,8 +977,14 @@ export default function CartPanel({
                 {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
                 <span className="truncate">
                   {/* R17: promo-aware amount (mirrors the summary rows above —
-                      the server recomputes it authoritatively on payment) */}
-                  {t('pos.payment')} · {formatCurrency(displayTotals.total)}
+                      the server recomputes it authoritatively on payment).
+                      r31 audit fix: once payments exist, show the REMAINING
+                      balance — after a partial payment the button must not
+                      advertise the full bill again. */}
+                  {t('pos.payment')} ·{' '}
+                  {formatCurrency(
+                    order && order.paidAmount > 0 ? Math.max(0, order.remainingAmount) : displayTotals.total,
+                  )}
                 </span>
               </Button>
             </div>

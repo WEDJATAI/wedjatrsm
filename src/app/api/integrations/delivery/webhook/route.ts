@@ -19,6 +19,7 @@ import { logAudit } from '@/lib/audit'
 import { DELIVERY_PROVIDERS, DELIVERY_WEBHOOK_KEY_SETTING } from '@/lib/constants'
 import { normalizePersonName } from '@/lib/names'
 import { ORDER_INCLUDE, recomputeTotals, serializeOrder } from '@/lib/orders'
+import { withWriteLock } from '@/lib/write-mutex'
 
 type WebhookItem = {
   productId?: number
@@ -175,27 +176,38 @@ export async function POST(req: NextRequest) {
     }
 
     // ── create the delivery order (no session — system actor) ──
-    const created = await db.order.create({
-      data: {
-        orderType: 'delivery',
-        deliveryPhone: customerPhone,
-        deliveryAddress: address,
-        clientName: customerName,
-        externalRef,
-        guests: 1,
-        items: {
-          create: matched.map((m) => ({
-            productId: m.productId,
-            quantity: m.quantity,
-            unitPrice: m.unitPrice,
-            notes: m.notes,
-            status: 'new',
-            course: 'main',
-          })),
+    // r31 audit fix: create + totals in ONE transaction (same zombie-order
+    // class fixed in POST /api/orders — no second tx that can strand a
+    // committed order with totalAmount = 0 under write contention).
+    const order = await withWriteLock(() =>
+      db.$transaction(async (tx) => {
+      const created = await tx.order.create({
+        data: {
+          orderType: 'delivery',
+          deliveryPhone: customerPhone,
+          deliveryAddress: address,
+          clientName: customerName,
+          externalRef,
+          guests: 1,
+          items: {
+            create: matched.map((m) => ({
+              productId: m.productId,
+              quantity: m.quantity,
+              unitPrice: m.unitPrice,
+              notes: m.notes,
+              status: 'new',
+              course: 'main',
+            })),
+          },
         },
-      },
-    })
-    const order = await recomputeTotals(created.id)
+      })
+      return recomputeTotals(created.id, tx)
+    }, {
+      // r31: same write-contention fix as POST /api/orders (see there).
+      timeout: 30_000,
+      maxWait: 15_000,
+    }),
+    )
 
     await logAudit({
       user: null,

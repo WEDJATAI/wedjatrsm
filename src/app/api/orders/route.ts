@@ -8,6 +8,7 @@ import { logAudit } from '@/lib/audit'
 import { MAX_SEATING_TABLES, ORDER_TYPES } from '@/lib/constants'
 import { getLocalDevice } from '@/lib/hybrid-sync/device-identity'
 import { withOutboxEvents, type OutboxEventInput } from '@/lib/hybrid-sync/outbox'
+import { withWriteLock } from '@/lib/write-mutex'
 import {
   ORDER_INCLUDE,
   checkStockAvailability,
@@ -167,9 +168,18 @@ export async function POST(req: NextRequest) {
     // the origin-authority policy falls through to revision-aware).
     const localDevice = await getLocalDevice()
 
-    // Create order + items + occupy ALL seating tables atomically
-    const created = await db.$transaction(async (tx) => {
-      const order = await tx.order.create({
+    // Create order + items + occupy ALL seating tables atomically.
+    // r31 audit fixes (two layers):
+    //  1. recomputeTotals runs INSIDE the transaction — the order can never
+    //     commit with totalAmount = 0 again (the stress test produced
+    //     exactly those zombies when the old second transaction lost the
+    //     write race and 500'd after the first had already committed).
+    //  2. withWriteLock serializes write transactions process-wide — SQLite
+    //     is single-writer; without the queue, concurrent waiters busy-storm
+    //     the database and 8 parallel creates took ~60 s (measured).
+    const order = await withWriteLock(() =>
+      db.$transaction(async (tx) => {
+      const created = await tx.order.create({
         data: {
           userId: sessionUserId(session),
           tableId: table?.id ?? null,
@@ -200,9 +210,9 @@ export async function POST(req: NextRequest) {
       // R30 hybrid sync: outbox events ride the SAME transaction — the
       // order, its items (read back: createMany-style nested creates return
       // no rows) and every occupied table.
-      const createdItems = await tx.orderItem.findMany({ where: { orderId: order.id } })
+      const createdItems = await tx.orderItem.findMany({ where: { orderId: created.id } })
       const events: OutboxEventInput[] = [
-        { entity: 'Order', entityId: order.id, operation: 'create', row: order },
+        { entity: 'Order', entityId: created.id, operation: 'create', row: created },
         ...createdItems.map((item) => ({
           entity: 'OrderItem',
           entityId: item.id,
@@ -223,11 +233,20 @@ export async function POST(req: NextRequest) {
         })
       }
       await withOutboxEvents(tx, events)
-      return order
-    })
-
-    // Persist subtotal/tax/total from the created items
-    const order = await recomputeTotals(created.id)
+      // r31: fold the authoritative money write into THIS transaction
+      // (promo matching + tax/service computation + totals event).
+      return recomputeTotals(created.id, tx)
+    }, {
+      // r31 audit fix: an order-create transaction emits ~15-20 outbox
+      // queries; with 6+ concurrent waiters SQLite serializes writers, so
+      // the default 5 s interactive timeout aborted transactions mid-flight
+      // (P2024 'Transaction already closed' → POS 500s). 30 s lets queued
+      // writers complete; combined with WAL + socket_timeout the write
+      // path survives a real rush (verified r31 stress gate).
+      timeout: 30_000,
+      maxWait: 15_000,
+    }),
+    )
 
     // R11: auto-link a seated reservation on this table to its new order
     // (fire-and-forget — booking traceability must never block an order).

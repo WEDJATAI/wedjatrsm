@@ -331,8 +331,17 @@ export async function setTablesStatusForOrder(
  *  - only OPEN orders re-evaluate; paid/cancelled/deferred orders keep
  *    their settled totals untouched.
  */
-export async function recomputeTotals(orderId: number): Promise<Order> {
-  const order = await db.order.findUnique({
+export async function recomputeTotals(
+  orderId: number,
+  /** r31 audit fix: pass the SURROUNDING transaction's client to fold the
+   *  totals write into the caller's transaction. Previously order-create
+   * committed order+items in tx#1 then recomputed totals in tx#2 — under
+   * write contention tx#2 could time out after tx#1 committed, leaving a
+   * zombie open order with items but totalAmount = 0 (stress test: orders
+   * #335-337). With txScope the money write is atomic with the create. */
+  txScope?: Prisma.TransactionClient,
+): Promise<Order> {
+  const order = await (txScope ?? db).order.findUnique({
     where: { id: orderId },
     // R17: product → categoryId is needed for category-scoped promo matching
     include: { items: { include: { product: { select: { id: true, categoryId: true } } } } },
@@ -351,7 +360,7 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
     order.discountAmount > 0
 
   if (!hasManagerDiscount && order.status === 'open') {
-    const promoRows = await db.promotion.findMany({
+    const promoRows = await (txScope ?? db).promotion.findMany({
       where: { active: true },
       include: {
         category: { select: { id: true, name: true } },
@@ -386,7 +395,9 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
   // this is the single server-authoritative totals choke point (it runs at
   // order creation and after every item add/remove/update/transfer/merge),
   // so every recomputed order state rides an event with the FINAL totals.
-  const updated = await db.$transaction(async (tx) => {
+  // r31: when a txScope is provided the write joins the caller's open
+  // transaction instead of opening a second one (atomic create).
+  const writeTotals = async (tx: Prisma.TransactionClient) => {
     const saved = await tx.order.update({
       where: { id: orderId },
       data: {
@@ -405,7 +416,8 @@ export async function recomputeTotals(orderId: number): Promise<Order> {
       row: saved,
     })
     return tx.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE })
-  })
+  }
+  const updated = txScope ? await writeTotals(txScope) : await db.$transaction(writeTotals)
   if (!updated) throw new ApiError('Order not found', 404)
   return serializeOrder(updated)
 }
