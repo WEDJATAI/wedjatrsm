@@ -13,6 +13,21 @@
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // p19: recycle guard — FIRST at boot. Detects the sandbox-recycle
+  // signature (bare db / stripped .env), heals env files from the
+  // .git/env-vault.env vault, and stages a restore from the best recovery
+  // source (git HEAD's tracked recovery point first). Local SQLite only;
+  // kill-switch RMS_RECYCLE_GUARD=0.
+  let recycleReport: import('./lib/recycle-guard').RecycleGuardReport | null = null
+  if (process.env.RMS_RECYCLE_GUARD !== '0' && process.env.DATABASE_URL?.startsWith('file:')) {
+    try {
+      const guard = await import('./lib/recycle-guard');
+      recycleReport = await guard.runRecycleGuardAtBoot();
+    } catch (e) {
+      console.warn('[recycle-guard] instrumentation failed:', e instanceof Error ? e.message : e);
+    }
+  }
+
   // R30: hybrid sync engine + staged-restore applier — SQLite-only (the
   // engine exchanges events with the cloud; the cloud deployment itself is
   // the TARGET, not a sync initiator) and disable-able for CI/one-shot runs.
@@ -23,6 +38,19 @@ export async function register(): Promise<void> {
       hybrid.startHybridEngine();
     } catch (e) {
       console.warn('[hybrid-engine] instrumentation failed:', e instanceof Error ? e.message : e);
+    }
+  }
+
+  // p19: post-restore verification — when the guard staged a restore, the
+  // swap above just replaced the live file while this process may hold a
+  // stale pool on the renamed inode. One $disconnect() on the shared client
+  // makes the next query reopen the RESTORED file (no second restart).
+  if (recycleReport?.dbHealed) {
+    try {
+      const guard = await import('./lib/recycle-guard');
+      await guard.verifyRecycleRestore(recycleReport);
+    } catch (e) {
+      console.warn('[recycle-guard] post-restore verification failed:', e instanceof Error ? e.message : e);
     }
   }
 
