@@ -2520,3 +2520,23 @@ Stage Summary:
 - AI consensus proven live again: 3 voting providers (openrouter/nvidia/huggingface), model-level failover intact, copilot reached FULL 2/2 agreement with grounded data; nemotron prompt-echo bug found+fixed+verified on local and prod.
 - All five platforms GREEN and in harmony at 230ca44 with screenshots p16-01..11 as deployment proof.
 - Honest limits unchanged: groq/gemini keys rejected by their platforms (403/401) — both providers remain registered and re-arm the moment fresh keys land; OpenRouter works from sandbox but is region-blocked from Vercel egress (prod voters = NVIDIA+HF); NVIDIA cold serverless instances are slow (25s deadline accommodates).
+
+---
+Task ID: p17
+Agent: main (COO/CTO/PM/audit)
+Task: Owner directive — check if anything removed/deleted; check Turso+Inngest+Neon because "team wall and data can't be found"; verify all five platforms in harmony and connected; verify TWO-WAY pull+push without data loss.
+
+Work Log:
+- OWNER SYMPTOM DIAGNOSED: "team wall and data can't be found" = the local preview (local SQLite) had been wiped by RECYCLE #8 (struck between sessions, same signature: bare db/custom.db at 06:36 lazy-init, .env stripped to 199 bytes, .env.deploy-local + /home/z/.deploy-creds.env wiped, 636 mode flips staged). The CLOUD was never affected.
+- CLOUD FIRST (per directive, verified before recovery): NEON (production DB) — 9 users (Dr Ihab/Omar/Chef Layla/Demo User/Cloud Demo/Sara Cloud/مينا/Amira/Developer), 229 products, 28 categories, 160 orders, 480 items, 204 payments, 879 audit logs — ALL TEAM WALL DATA SAFE. TURSO (replica) — 9 users / 160 orders / 225 products parity. INNGEST — auth wall 401 (healthy), 3 functions registered with v4 triggers (rsm-turso-replica-sync 30 3 * * * · rsm-daily-digest 30 6 * * * · rsm-stale-order-alert */30 * * * *). VERCEL — prod READY, HTTP 200.
+- RECOVERY #8 (staged restore, 8th successful use): git show HEAD:download/rsm-platform-database.db (6,070 rows verified) → db/restore-pending.db + restore.pending marker → boot-1 swap ("restore applied (recycle-8 recovery from HEAD recovery point 8a6b6e1)") → boot-2 fresh Prisma. Verified: 9 users / 225 products / 160 orders, local HTTP 200.
+- NOTHING DELETED (integrity audit): git diff HEAD numstat — all 636 file changes were mode-only flips (0 content insertions/deletions except the 2 download files = lazy-init overwrite, re-refreshed post-restore); 636 flips normalized to 644; zero source deletions. Git guard OK (HEAD ≥ round12-stable, 16 stable tags). Branch protection remains ON (verified in p16 via live API: force-push blocked, deletion blocked, enforce_admins).
+- TWO-WAY SYNC VERIFIED END-TO-END: PULL (Neon → local via p12-cloud-pull): 9 row statements, 5 events, POST-VERIFY ALL PASS — users 9|9, orders 160|160, no duplicates, old menu still retired. PUSH (local → Neon): hybrid outbox 1,493 acked / 0 pending / 1 documented-dead (p12 collision guard). PUSH (local → Turso): 35/35 tables, ZERO mismatches.
+- E2E (browser, screenshots p17-01..06): LOCAL team wall — all 9 users back (p17-01); PROD team wall (Vercel+Neon) — all 9 users (p17-02 at 8a6b6e1, p17-03 at 230fadd new deploy); PROD manager login → "Good morning, Omar 👋" (p17-05); PROD POS floor live with real Neon data — open checks EGP 991.62/6,273.54/1,102.50 + takeaway #40 (p17-06). Zero console/page errors on local AND prod.
+- DEPLOY: recovery commit 230fadd pushed → Vercel auto-deployed → READY at 230fadd == HEAD. FINAL HARMONY ALL FIVE GREEN: GitHub ✓ (in sync) · Vercel ✓ (READY, crons) · Neon ✓ (RW, users=9) · Turso ✓ (pipeline ping) · Inngest ✓ (401 wall). Backups refreshed: git bundles ×2 (repo-p17), db snapshot, recovery point (6,070 rows, integrity ok).
+
+Stage Summary:
+- Answer to owner's question: NOTHING was removed or deleted — the cloud (Neon/Turso/Inngest/Vercel/GitHub) never lost anything; recycle #8 (the 8th sandbox wipe) emptied ONLY the local SQLite which is why the local preview showed no team wall. Fully recovered zero-loss via the 8th staged restore.
+- All three databases the owner named verified with real counts: Neon 9 users/160 orders/229 products (source of truth), Turso 9/160/225 (mirror parity), local 9/160/225 (restored+converged).
+- Two-way sync PROVEN live: pull converged with POST-VERIFY ALL PASS; push drained 0 pending; Turso mirror 35/35 zero mismatches.
+- All five platforms GREEN and connected at 230fadd; screenshots p17-01..06 as evidence.
