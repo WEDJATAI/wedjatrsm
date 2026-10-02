@@ -268,7 +268,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
   const hasAnyFavorite = favorites.size > 0
 
   return (
-    <div className={cn('flex min-h-0 flex-col', className)}>
+    <div className={cn('flex min-h-0 min-w-0 flex-col', className)}>
       {/* Search + R28 view-mode toggle (compact list ⇄ photo tiles) */}
       <div className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-3 sm:px-4">
         <div className="relative min-w-0 flex-1">
@@ -375,8 +375,10 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
         </div>
       )}
 
-      {/* Product tiles */}
-      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-4 sm:px-4">
+      {/* Product tiles — auto-fill keeps tiles ~170-230px on ANY screen width
+          (the old fixed cols-2/3/4 stretched tiles to 600px+ on wide monitors
+          and, without min-w-0, blew the pane out to 2600px+) */}
+      <div className="rms-scroll min-h-0 min-w-0 flex-1 overflow-y-auto px-3 pb-4 sm:px-4">
         {favOnly && !hasAnyFavorite ? (
           <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
             <Star className="size-8 opacity-40" />
@@ -393,7 +395,7 @@ export default function ProductGrid({ products, onAdd, className }: ProductGridP
             <p className="text-sm">{t('pos.noMatch', { search: search.trim() })}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
             {filtered.map((p) =>
               viewMode === 'compact' ? (
                 <CompactCard
