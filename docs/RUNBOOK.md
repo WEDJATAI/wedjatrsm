@@ -110,6 +110,13 @@ bun scripts/harden-verify.ts --cloud  # + five-platform harmony
 
 ## 5 · Known benign artifacts (do NOT "fix" these)
 
+- **PINs are intentionally NOT synced local↔cloud** — `User` rows are excluded from hybrid sync by design (passwordHash/PIN must never ride events; see `src/lib/hybrid-sync/entity-policy.ts`). The owner changed the manager PIN **on prod** and the developer PIN **locally**, so they differ BY OWNER ACTION:
+  | Account | Local PIN | Prod (Neon) PIN |
+  |---|---|---|
+  | admin@rms.com (Manager) | 123456 (default) | **270761** (owner-changed, audit 2026-09-29) |
+  | developer@rms.com | **180787** (owner-changed, audit 2026-10-01) | 111111 (default) |
+  | all other 7 users | identical both sides | identical |
+  Changing a PIN on one side does NOT change the other — do both deliberately if you want them matched.
 - **Neon 229 vs local 225 products** — the p9/p10 re-id policy on retired demo rows. Not drift.
 - **1 dead outbox letter** — the p12 collision guard doing its job.
 - **Turso audit_logs +1 row** — the sync's own heartbeat row (id = replication.tursoSync), self-healing by design.
