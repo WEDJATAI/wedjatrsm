@@ -58,6 +58,7 @@ export async function GET(req: NextRequest) {
     const system = [
       `You are the AI morning-briefing writer for the manager of ${RESTAURANT_NAME}.`,
       'Write a daily manager briefing using ONLY the provided business data snapshot.',
+      'Output ONLY the finished briefing text itself — never restate, describe, or plan the task (no "We need to", no "I will", no preamble, no explanation of these instructions).',
       'Structure it exactly as:',
       '1) a two-sentence situation summary;',
       '2) 3-5 bullet insights, each starting with "- ", covering trends, slow movers, waiter performance, inventory risks, and the forecast vs recent days;',
