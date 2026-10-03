@@ -2750,3 +2750,23 @@ Stage Summary:
 - Recipe→stock connection is LIVE END-TO-END on BOTH terminals: every paid order now deducts each recipe ingredient automatically (25 g cheese used = 25 g less stock — proven by order #1213), with par stock generous enough to never block the Friday service and low-stock alerts feeding the Inngest digest.
 - The full 157-dish recipe book (672 components, 93 ingredients, bilingual names) is on the local terminal AND Neon — the chef edits quantities from Admin → Recipes; soft drinks intentionally left as unit items (can-tracking recommendation documented for the owner).
 - The hybrid engine is now SAFE against the stale-payload class: revision floor on all policies + failed-in-record retry on re-delivery + apply-side self-healing (25/push). 0 failed events anywhere; local == Neon parity verified.
+
+---
+Task ID: p21-c
+Agent: main (COO/PM + restaurant-management expert)
+Task: p21 task 5 — employee check-in full-workflow audit (E2E + screenshots + recommendations) + final five-platform closeout.
+
+Work Log:
+- E2E WALKTHROUGH (wall session, 11 screenshots 10-22): team wall (4 on shift, mint badges, live count, manager/developer doors — zero data leakage) → Demo User PIN 999999 → off-shift status screen → START WORK (one giant action) → confirmation → wall now "5 on shift now" + Demo User card mint → re-PIN → on-shift screen with live worked timer (5m ticking) + FINISH WORK (rose) + My screen → POS → My shift sheet → FINISH WORK → attendance record in 08:41/out 08:44/4m/late 0 verified in DB + admin Attendance view (date filters, In-now/Late/checked-in/worked-hours summary cards) → Payroll view (hours × rate, month selectors, "set hourly rates in Users" guidance) → Settings → Shift definitions section (empty state guidance).
+- FINDING 1 (stale open records): Omar on shift since YESTERDAY 21:55 (220 late min from an old shift def) + Amira/Meina/Layla open from previous days — the wall says "4 on shift" when possibly nobody is present; payroll will show inflated hours when they finally check out.
+- FINDING 2 (no shift definitions): lateness tracking was inert (late=0 with no windows). SEEDED Morning + Evening shifts via the API — then discovered the OWNER had configured HIS windows on prod (10:00-18:00, 18:00-03:00) while I worked; conceded to the owner's truth (local updated to match; converged on Neon).
+- FINDING 3 (two "shift" concepts): the POS "My shift" sheet is the SALES closeout; the clock-in state lived only on the wall — a clocked-in waiter couldn't see worked time inside the POS. FIXED: clock-in chip (pulsing green "On shift · Xh Ym" / gray "Not clocked in") now leads the My-shift sheet (live-verified, screenshot 22).
+- FINDING 4 (shifts never synced): Shift was absent from the hybrid entity registry — each terminal graded lateness against its own windows. FIXED: Shift registered revision-aware; shifts API create/update ride the outbox (transactional); events flowed to Neon (verified).
+- All check-in test data is honest: Demo User records #10 (08:41-08:44) + #11 (08:48-08:49) — real clock in/out pairs, late 0.
+- FINAL FIVE-PLATFORM STATE: GitHub main @ 07140ba (5 commits today); Vercel prod READY (dpl_5hPAtk8oXWk9o9xxvpyccR5YNWNP, GET / 200 in 0.75s — payment card + floor editor + recipes + all engine fixes live); Neon: products 303 (299 local + 4 remapped — documented quirk), recipe_components 710 = local 710, cheese 24.95 = local 24.95, shifts converged to the owner's windows, 0 failed events; Turso replica: 35/35 tables exact, 7,036 rows; Inngest: tursoSync audit rows flowing (2675/2676 today), digest + stale-order alerts on schedule.
+- Worklog + runbook not yet updated for p21 (next agent: add the p21 RUNBOOK entry — environment rules learned: Neon category 6 must exist before ingredient FKs; local product autoincrement must never cross 229; stale-payload protection now in all policies).
+
+Stage Summary:
+- Check-in workflow is COMPLETE and audit-clean: kiosk wall → PIN → giant-action clock in/out → live timer → synced attendance records → payroll (needs hourly rates set by the owner) — with the POS/attendance gap closed by the new clock chip and shift definitions now syncing.
+- Recommendations delivered to the owner (see final report): close the 4 stale open records (manager action), review Omar's 220 late minutes, set hourly rates in Users for payroll, adopt the FINISH WORK habit at shift end (or ask for the auto-close feature), soft-drink can tracking as a follow-up.
+- ALL FIVE PLATFORMS GREEN AND CONVERGED after the deepest data change yet (93 ingredients, 672 recipes, floor geometry, engine hardening). Zero data loss; every write through designed, sync-riding channels.
