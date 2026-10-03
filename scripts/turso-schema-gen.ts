@@ -115,6 +115,12 @@ export const TURSO_DDL_MIGRATIONS: string[] = [
   'ALTER TABLE "users" ADD COLUMN "is_super_admin" BOOLEAN NOT NULL DEFAULT false',
   // R30 hybrid sync: Order.originDeviceId (origin-authority conflict policy)
   'ALTER TABLE "orders" ADD COLUMN "origin_device_id" TEXT',
+  // p10: Lelo dish description
+  'ALTER TABLE "products" ADD COLUMN "description" TEXT',
+  // p21: floor geometry — owner-controlled floor size & shape
+  'ALTER TABLE "floor_plans" ADD COLUMN "width_units" REAL NOT NULL DEFAULT 100',
+  'ALTER TABLE "floor_plans" ADD COLUMN "height_units" REAL NOT NULL DEFAULT 100',
+  "ALTER TABLE \"floor_plans\" ADD COLUMN \"floor_shape\" TEXT NOT NULL DEFAULT 'rectangle'",
 ]
 `
 

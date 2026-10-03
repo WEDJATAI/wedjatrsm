@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { TABLE_SHAPES } from '@/lib/constants'
 import { parseId, serializeTable } from '@/lib/orders'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -79,7 +80,18 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       data.active = Boolean(body.active)
     }
 
-    const table = await db.restaurantTable.update({ where: { id: tableId }, data })
+    // p21: table writes ride the hybrid outbox so floor-plan arrangements
+    // converge to every terminal (atomic with the business write).
+    const table = await db.$transaction(async (tx) => {
+      const updated = await tx.restaurantTable.update({ where: { id: tableId }, data })
+      await emitOutboxEvent(tx, {
+        entity: 'RestaurantTable',
+        entityId: updated.id,
+        operation: 'update',
+        row: updated,
+      })
+      return updated
+    })
     return NextResponse.json({ table: serializeTable(table) })
   } catch (err) {
     return errorResponse(err)

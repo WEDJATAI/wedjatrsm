@@ -259,6 +259,18 @@ export const adminDict: DictPair = {
     'admin.addTablesEmpty': 'Add tables to arrange your floor',
     'admin.statusPlaceholder': 'Status',
 
+    // p21: floor size & shape editor
+    'admin.floorSizeShape': 'Floor size & shape',
+    'admin.floorSizeShapeTitle': 'Floor size & shape — {name}',
+    'admin.floorSizeShapeDesc':
+      'Shape the floor to match the real dining area. Tables outside the new shape slide back inside automatically.',
+    'admin.floorWidth': 'Floor width',
+    'admin.floorHeight': 'Floor depth',
+    'admin.floorGeometrySaved': 'Floor updated',
+    'admin.floorGeometrySavedMoved': 'Floor updated — {n} table(s) moved inside the new floor',
+    'admin.floorShapeClampHint':
+      'Width and depth control how much of the canvas the floor occupies. Changes sync to every terminal.',
+
     // ── products ──
     'admin.productsSubtitle': 'Menu items and ingredients — prices, costs, availability',
     'admin.newProduct': 'New Product',
@@ -924,6 +936,18 @@ export const adminDict: DictPair = {
     'admin.positionY': 'الموضع رأسي (%)',
     'admin.addTablesEmpty': 'أضف طاولات لترتيب الصالة',
     'admin.statusPlaceholder': 'الحالة',
+
+    // p21: floor size & shape editor
+    'admin.floorSizeShape': 'مقاس وشكل الصالة',
+    'admin.floorSizeShapeTitle': 'مقاس وشكل الصالة — {name}',
+    'admin.floorSizeShapeDesc':
+      'شكّل الصالة لتطابق منطقة الطعام الحقيقية. الطاولات خارج الشكل الجديد تُعاد تلقائيًا إلى داخله.',
+    'admin.floorWidth': 'عرض الصالة',
+    'admin.floorHeight': 'عمق الصالة',
+    'admin.floorGeometrySaved': 'تم تحديث الصالة',
+    'admin.floorGeometrySavedMoved': 'تم تحديث الصالة — تم نقل {n} طاولة إلى داخل الشكل الجديد',
+    'admin.floorShapeClampHint':
+      'العرض والعمق يحددان مساحة لوحة الرسم التي تشغلها الصالة. التغييرات تُزامن مع كل الأجهزة.',
 
     // ── products ──
     'admin.productsSubtitle': 'أصناف القائمة والمكونات — الأسعار والتكاليف والتوفر',

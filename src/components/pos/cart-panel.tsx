@@ -755,8 +755,13 @@ export default function CartPanel({
         </div>
       </div>
 
-      {/* Body */}
-      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto px-4">
+      {/* Body: order items + the payment card in ONE scroll area — p21:
+          the payment card is a sticky-bottom element, so it sits right
+          under the last order line on short tickets and stays glued to
+          the visible bottom when the list grows (no more scrolling all
+          the way down to reach Pay). */}
+      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto">
+        <div className="px-4">
         {orderLoading && !order && draft.length === 0 ? (
           <div className="space-y-3 py-4">
             <Skeleton className="h-14 w-full" />
@@ -764,7 +769,7 @@ export default function CartPanel({
             <Skeleton className="h-14 w-full" />
           </div>
         ) : noItems ? (
-          <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
             <ShoppingBag className="size-10 opacity-30" />
             <p className="text-sm">{t('pos.tapToAdd')}</p>
           </div>
@@ -852,10 +857,11 @@ export default function CartPanel({
             )}
           </>
         )}
-      </div>
+        </div>
 
-      {/* Footer */}
-      <div className="shrink-0 space-y-1.5 border-t border-border p-4">
+        {/* Payment card — sticky bottom: hugs the last order line, never
+            leaves the screen (p21). */}
+        <div className="sticky bottom-0 space-y-1.5 border-t border-border bg-white p-4 shadow-[0_-6px_16px_-8px_rgba(0,0,0,0.28)]">
         <SummaryRow label={t('money.subtotal')} value={formatCurrency(displayTotals.subtotal)} />
         {/* R17: when the live promo preview applies, this row becomes the
             promo line — badge + promotion name (lang-aware) + −amount; the
@@ -990,6 +996,7 @@ export default function CartPanel({
             </div>
           </>
         )}
+        </div>
       </div>
 
       {/* Move-items target picker dialog */}

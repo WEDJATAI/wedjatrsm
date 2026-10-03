@@ -363,8 +363,20 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
     )
   }
 
+  // p21: the POS is a full-viewport workspace — its product grid and cart
+  // panel manage their own internal scrolling. For that to work the shell
+  // must give it a FIXED height context (h-dvh), otherwise the tall menu
+  // grid stretches the document, the cart panel follows it, and the payment
+  // card lands thousands of px below the fold. Every other view keeps the
+  // natural document flow (min-h-screen) untouched.
+  const posActive = allowed === 'pos'
+
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div
+      className={
+        posActive ? 'flex h-dvh flex-col bg-background' : 'min-h-screen flex flex-col bg-background'
+      }
+    >
       {/* R13 a11y: keyboard users can jump past the navbar to the content */}
       <a
         href="#rms-main"
@@ -373,7 +385,11 @@ function AppShell({ user, onLogout }: { user: SessionUser; onLogout: () => void 
         {t('a11y.skipToContent')}
       </a>
       <AppNavbar user={user} view={allowed} onNavigate={setView} onLogout={onLogout} />
-      <main id="rms-main" tabIndex={-1} className="flex-1 flex flex-col outline-none">
+      <main
+        id="rms-main"
+        tabIndex={-1}
+        className={posActive ? 'flex min-h-0 flex-1 flex-col outline-none' : 'flex flex-1 flex-col outline-none'}
+      >
         {/* Round 7: the POS stays mounted (hidden) while other views are
             open, so an in-progress order screen and unsent draft survive view
             switches — and the browser Back button can return to them. */}

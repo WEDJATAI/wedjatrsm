@@ -200,6 +200,12 @@ model FloorPlan {
   id              Int      @id @default(autoincrement())
   name            String
   backgroundImage String?  @map("background_image")
+  // p21: floor geometry — the owner controls the room's size & shape.
+  // widthUnits/heightUnits = the floor rectangle's size as a % of the canvas
+  // box (30–100); floorShape masks the walkable area (rectangle / L / T / U).
+  widthUnits      Float    @default(100) @map("width_units")
+  heightUnits     Float    @default(100) @map("height_units")
+  floorShape      String   @default("rectangle") @map("floor_shape")
   active          Boolean  @default(true)
   tables          RestaurantTable[]
   visionCameras   VisionCamera[] // R9 back-relation (additive)

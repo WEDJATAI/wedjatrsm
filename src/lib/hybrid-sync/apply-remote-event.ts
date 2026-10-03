@@ -88,7 +88,17 @@ function hashOfRow(row: Record<string, unknown> | null): string {
  */
 export async function ingestRemoteEvent(evt: RemoteEvent): Promise<IngestResult> {
   const existing = await db.hybridEvent.findUnique({ where: { eventId: evt.eventId } })
-  if (existing) return { outcome: 'skipped', reason: 'duplicate' }
+  if (existing) {
+    // p21: a RE-DELIVERY of an event whose recorded apply FAILED must never
+    // be acked as a duplicate no-op — the business write never landed, and
+    // acking it strands the sender (it stops retrying while this side keeps
+    // the failure). The usual cause (a missing FK parent) has often arrived
+    // in an earlier batch of this very push — retry right now.
+    if (existing.direction === 'in' && existing.status === 'failed') {
+      return retryInEvent(existing)
+    }
+    return { outcome: 'skipped', reason: 'duplicate' }
+  }
   return processRemoteEvent(evt, null)
 }
 

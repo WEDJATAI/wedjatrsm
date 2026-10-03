@@ -1085,6 +1085,10 @@ export async function serializeFloorPlans(plans: FloorPlanRow[]): Promise<FloorP
     id: plan.id,
     name: plan.name,
     backgroundImage: plan.backgroundImage,
+    // p21: floor geometry — size & silhouette of the dining area
+    widthUnits: plan.widthUnits,
+    heightUnits: plan.heightUnits,
+    floorShape: plan.floorShape,
     active: plan.active,
     tables: plan.tables
       .map((table) => extrasById.get(table.id))

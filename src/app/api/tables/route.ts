@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
 import { TABLE_SHAPES } from '@/lib/constants'
 import { serializeTable } from '@/lib/orders'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 
 function parsePercent(value: unknown, label: string): number {
   const num = Number(value)
@@ -51,8 +52,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const table = await db.restaurantTable.create({
-      data: { floorPlanId, name, capacity, positionX, positionY, shape },
+    // p21: table writes ride the hybrid outbox so floor-plan arrangements
+    // converge to every terminal (atomic with the business write).
+    const table = await db.$transaction(async (tx) => {
+      const created = await tx.restaurantTable.create({
+        data: { floorPlanId, name, capacity, positionX, positionY, shape },
+      })
+      await emitOutboxEvent(tx, {
+        entity: 'RestaurantTable',
+        entityId: created.id,
+        operation: 'create',
+        row: created,
+      })
+      return created
     })
     return NextResponse.json({ table: serializeTable(table) })
   } catch (err) {

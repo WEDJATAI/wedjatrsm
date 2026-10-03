@@ -16,7 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/auth'
 import { requireDevice } from '@/lib/hybrid-auth'
 import { db } from '@/lib/db'
-import { ingestRemoteEvent, type RemoteEvent } from '@/lib/hybrid-sync/apply-remote-event'
+import { ingestRemoteEvent, retryInEvent, type RemoteEvent } from '@/lib/hybrid-sync/apply-remote-event'
 import { resolvePolicy } from '@/lib/hybrid-sync/entity-policy'
 import { HYBRID_PUSH_MAX_EVENTS } from '@/lib/hybrid-sync/constants'
 
@@ -109,7 +109,30 @@ export async function POST(req: NextRequest) {
       data: { lastPushAt: new Date() },
     })
 
-    return NextResponse.json({ acked, rejected, conflicts })
+    // p21: APPLY-SIDE SELF-HEALING — this instance (the cloud, or any peer
+    // acting as an apply target) retries a few of its OWN previously-failed
+    // in-events on every push. Until now a failed in-event here had NO retry
+    // path (the local pull cycle only heals LOCAL in-events), so an FK parent
+    // that arrived after the first attempt left the event stuck 'failed'
+    // forever while the sender had already been acked on a later duplicate.
+    // Bounded to 25 events/push, honoring the attempts budget inside
+    // retryInEvent — terminal pushes are frequent, so queues drain fast.
+    let healed = 0
+    try {
+      const parked = await db.hybridEvent.findMany({
+        where: { direction: 'in', status: 'failed' },
+        orderBy: { id: 'asc' },
+        take: 25,
+      })
+      for (const row of parked) {
+        const result = await retryInEvent(row)
+        if (result.outcome !== 'failed') healed++
+      }
+    } catch {
+      // healing is best-effort — never fail the push response over it
+    }
+
+    return NextResponse.json({ acked, rejected, conflicts, healed })
   } catch (err) {
     return errorResponse(err)
   }

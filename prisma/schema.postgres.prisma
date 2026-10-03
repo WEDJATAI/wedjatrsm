@@ -204,6 +204,10 @@ model FloorPlan {
   id              Int      @id @default(autoincrement())
   name            String
   backgroundImage String?  @map("background_image")
+  // p21: floor geometry — the owner controls the room's size & shape
+  widthUnits      Float    @default(100) @map("width_units")
+  heightUnits     Float    @default(100) @map("height_units")
+  floorShape      String   @default("rectangle") @map("floor_shape")
   active          Boolean  @default(true)
   tables          RestaurantTable[]
   visionCameras   VisionCamera[] // R9 back-relation (additive)

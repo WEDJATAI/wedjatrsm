@@ -120,6 +120,14 @@ export const common: DictPair = {
     'shape.rectangle': 'Rectangle',
     'shape.oval': 'Oval',
 
+    // p21: floor shapes (dining-area silhouettes)
+    'floorShape.rectangle': 'Rectangle',
+    'floorShape.l_left': 'L — left wing',
+    'floorShape.l_right': 'L — right wing',
+    'floorShape.t_top': 'T — bar on top',
+    'floorShape.u_up': 'U — opens up',
+    'floorShape.u_down': 'U — opens down',
+
     // item statuses
     'status.item.new': 'New',
     'status.item.preparing': 'Preparing',
@@ -350,6 +358,14 @@ export const common: DictPair = {
     'shape.round': 'دائرية',
     'shape.rectangle': 'مستطيلة',
     'shape.oval': 'بيضاوية',
+
+    // p21: floor shapes (dining-area silhouettes)
+    'floorShape.rectangle': 'مستطيل',
+    'floorShape.l_left': 'حرف L — جناح أيسر',
+    'floorShape.l_right': 'حرف L — جناح أيمن',
+    'floorShape.t_top': 'حرف T — الشريط بالأعلى',
+    'floorShape.u_up': 'حرف U — مفتوح لأعلى',
+    'floorShape.u_down': 'حرف U — مفتوح لأسفل',
 
     // item statuses
     'status.item.new': 'جديد',

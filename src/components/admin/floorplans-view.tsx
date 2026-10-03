@@ -8,6 +8,7 @@ import {
   Brush,
   Clock,
   DoorOpen,
+  Frame,
   Hourglass,
   Loader2,
   Map,
@@ -50,10 +51,19 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { apiFetch, fetcher } from '@/lib/api'
 import { elapsedSince, formatCurrency } from '@/lib/format'
 import { TABLE_SHAPES } from '@/lib/constants'
+import {
+  FLOOR_SHAPES,
+  FLOOR_SIZE_MAX,
+  FLOOR_SIZE_MIN,
+  clampPointToFloor,
+  floorContainsPoint,
+  floorShapeClip,
+} from '@/lib/floor-geometry'
 import type { FloorPlan, RestaurantTable } from '@/lib/types'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -137,6 +147,17 @@ function ShapeGlyph({ shape, className }: { shape: string; className?: string })
   return <span className={cn('inline-block shrink-0 border-2 border-current', cls, className)} aria-hidden />
 }
 
+/** Floor shape preset tile — a mini silhouette sharing the real clip-path. */
+function FloorShapeTile({ shape, className }: { shape: string; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn('inline-block h-8 w-12 border-2 border-current bg-current/10', className)}
+      style={{ clipPath: floorShapeClip(shape) }}
+    />
+  )
+}
+
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
 const round1 = (value: number) => Math.round(value * 10) / 10
@@ -171,6 +192,12 @@ export default function FloorPlansView() {
   const [editX, setEditX] = useState('50')
   const [editY, setEditY] = useState('50')
   const [editStatus, setEditStatus] = useState('free')
+
+  // p21: floor size & shape editor state
+  const [floorEditOpen, setFloorEditOpen] = useState(false)
+  const [floorShape, setFloorShape] = useState('rectangle')
+  const [floorWidth, setFloorWidth] = useState(100)
+  const [floorHeight, setFloorHeight] = useState(100)
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['floorplans'],
@@ -253,6 +280,63 @@ export default function FloorPlansView() {
       toast.error(mutationError.message || t('error.generic')),
   })
 
+  // p21: save the floor's size & shape, then nudge any table that falls in a
+  // cut-away region back inside the walkable area (positions are preserved
+  // whenever they still fit — only genuinely stranded tables move).
+  const saveFloorGeometryMutation = useMutation({
+    mutationFn: async ({ plan, tables }: { plan: FloorPlan; tables: RestaurantTable[] }) => {
+      await apiFetch(`/api/floorplans/${plan.id}`, {
+        method: 'PUT',
+        body: { floorShape, widthUnits: floorWidth, heightUnits: floorHeight },
+      })
+      const stranded = tables
+        .map((table) => {
+          const target = clampPointToFloor(floorShape, table.positionX, table.positionY)
+          return { table, target, moved: target.x !== table.positionX || target.y !== table.positionY }
+        })
+        .filter((entry) => entry.moved)
+      // Spread clamped tables so they never stack on one point: each nudged
+      // table gets a ring offset around its clamp target, then re-clamped
+      // into the walkable area (the offset can't push it back into a notch).
+      stranded.forEach((entry, i) => {
+        const ring = Math.floor(i / 8)
+        const angle = (i % 8) * (Math.PI / 4)
+        const spread = 7 + ring * 7
+        entry.target = clampPointToFloor(
+          floorShape,
+          clampPercent(entry.target.x + Math.cos(angle) * spread, 4, 96),
+          clampPercent(entry.target.y + Math.sin(angle) * spread, 4, 96),
+        )
+      })
+      for (const entry of stranded) {
+        await apiFetch(`/api/tables/${entry.table.id}`, {
+          method: 'PUT',
+          body: { positionX: entry.target.x, positionY: entry.target.y },
+        })
+      }
+      return { moved: stranded.length }
+    },
+    onSuccess: ({ moved }) => {
+      toast.success(
+        moved > 0
+          ? t('admin.floorGeometrySavedMoved', { n: moved })
+          : t('admin.floorGeometrySaved'),
+      )
+      void queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+      setFloorEditOpen(false)
+    },
+    onError: (mutationError) =>
+      toast.error(mutationError.message || t('error.generic')),
+  })
+
+  /** Open the size & shape editor seeded from the selected plan. */
+  function openFloorDialog(plan: FloorPlan) {
+    setFloorShape(plan.floorShape ?? 'rectangle')
+    setFloorWidth(plan.widthUnits ?? 100)
+    setFloorHeight(plan.heightUnits ?? 100)
+    setFloorEditOpen(true)
+  }
+
   const updateTableMutation = useMutation({
     mutationFn: ({
       id,
@@ -324,10 +408,18 @@ export default function FloorPlansView() {
     if (!rect) return
     const pointerX = ((event.clientX - rect.left) / rect.width) * 100
     const pointerY = ((event.clientY - rect.top) / rect.height) * 100
+    // p21: clamp inside the walkable silhouette (tables can never be dropped
+    // into a cut-away region of a shaped floor)
+    const shape = selectedPlan?.floorShape ?? 'rectangle'
+    const candidate = clampPointToFloor(
+      shape,
+      clampPercent(pointerX - current.offX, 2, 98),
+      clampPercent(pointerY - current.offY, 2, 98),
+    )
     const next: DragState = {
       ...current,
-      x: clampPercent(pointerX - current.offX, 2, 98),
-      y: clampPercent(pointerY - current.offY, 2, 98),
+      x: candidate.x,
+      y: candidate.y,
       movedPx: Math.max(
         current.movedPx,
         Math.hypot(event.clientX - current.startX, event.clientY - current.startY),
@@ -378,9 +470,15 @@ export default function FloorPlansView() {
       1,
       Math.round(Number.isFinite(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : 2),
     )
-    // Spawn at a center-ish random spot (30-70%).
-    const positionX = round1(30 + Math.random() * 40)
-    const positionY = round1(30 + Math.random() * 40)
+    // Spawn at a center-ish random spot (30-70%), always inside the shape.
+    const shape = selectedPlan.floorShape ?? 'rectangle'
+    const spawn = clampPointToFloor(
+      shape,
+      round1(30 + Math.random() * 40),
+      round1(30 + Math.random() * 40),
+    )
+    const positionX = spawn.x
+    const positionY = spawn.y
     addTableMutation.mutate({
       floorPlanId: selectedPlan.id,
       name,
@@ -574,7 +672,112 @@ export default function FloorPlansView() {
                     {t('admin.dragHint')}
                   </p>
                 </div>
-                <Dialog open={addTableOpen} onOpenChange={setAddTableOpen}>
+                <div className='flex flex-wrap items-center gap-2'>
+                  {/* p21: floor size & shape editor */}
+                  <Button variant='outline' onClick={() => openFloorDialog(selectedPlan)}>
+                    <Frame className='size-4' />
+                    {t('admin.floorSizeShape')}
+                  </Button>
+                  <Dialog open={floorEditOpen} onOpenChange={setFloorEditOpen}>
+                    <DialogContent className='sm:max-w-md'>
+                      <DialogHeader>
+                        <DialogTitle>{t('admin.floorSizeShapeTitle', { name: selectedPlan.name })}</DialogTitle>
+                        <DialogDescription>{t('admin.floorSizeShapeDesc')}</DialogDescription>
+                      </DialogHeader>
+                      <div className='grid gap-4'>
+                        {/* Shape presets */}
+                        <div className='grid grid-cols-3 gap-2'>
+                          {FLOOR_SHAPES.map((shape) => (
+                            <button
+                              key={shape}
+                              type='button'
+                              onClick={() => setFloorShape(shape)}
+                              aria-pressed={floorShape === shape}
+                              className={cn(
+                                'flex flex-col items-center gap-1.5 rounded-xl border-2 p-2.5 text-xs font-semibold transition active:scale-95',
+                                floorShape === shape
+                                  ? 'border-primary bg-primary/10 text-primary'
+                                  : 'border-border bg-white text-stone-600 hover:border-primary/40',
+                              )}
+                            >
+                              <FloorShapeTile
+                                shape={shape}
+                                className={floorShape === shape ? 'text-primary' : 'text-stone-400'}
+                              />
+                              {t(`floorShape.${shape}`)}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Size controls */}
+                        <div className='grid gap-4 rounded-xl border border-border bg-muted/30 p-3'>
+                          <div className='grid gap-2'>
+                            <div className='flex items-center justify-between text-sm font-medium'>
+                              <Label htmlFor='floor-width'>{t('admin.floorWidth')}</Label>
+                              <span className='tabular-nums text-muted-foreground'>{floorWidth}%</span>
+                            </div>
+                            <Slider
+                              id='floor-width'
+                              min={FLOOR_SIZE_MIN}
+                              max={FLOOR_SIZE_MAX}
+                              step={5}
+                              value={[floorWidth]}
+                              onValueChange={([w]) => setFloorWidth(w)}
+                            />
+                          </div>
+                          <div className='grid gap-2'>
+                            <div className='flex items-center justify-between text-sm font-medium'>
+                              <Label htmlFor='floor-height'>{t('admin.floorHeight')}</Label>
+                              <span className='tabular-nums text-muted-foreground'>{floorHeight}%</span>
+                            </div>
+                            <Slider
+                              id='floor-height'
+                              min={FLOOR_SIZE_MIN}
+                              max={FLOOR_SIZE_MAX}
+                              step={5}
+                              value={[floorHeight]}
+                              onValueChange={([h]) => setFloorHeight(h)}
+                            />
+                          </div>
+                          {/* Live preview */}
+                          <div className='flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-white p-2'>
+                            <div
+                              className='h-full border-2 border-[#D6D0C4] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:14px_14px]'
+                              style={{
+                                width: `${Math.round(floorWidth * 0.9)}%`,
+                                height: `${Math.round(floorHeight * 0.9)}%`,
+                                clipPath: floorShapeClip(floorShape),
+                              }}
+                            />
+                          </div>
+                          <p className='text-[11px] leading-relaxed text-muted-foreground'>
+                            {t('admin.floorShapeClampHint')}
+                          </p>
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant='outline' onClick={() => setFloorEditOpen(false)}>
+                          {t('common.cancel')}
+                        </Button>
+                        <Button
+                          onClick={() =>
+                            saveFloorGeometryMutation.mutate({
+                              plan: selectedPlan,
+                              tables: activeTables,
+                            })
+                          }
+                          disabled={saveFloorGeometryMutation.isPending}
+                        >
+                          {saveFloorGeometryMutation.isPending ? (
+                            <Loader2 className='size-4 animate-spin' />
+                          ) : (
+                            <BadgeCheck className='size-4' />
+                          )}
+                          {t('admin.saveChanges')}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                  <Dialog open={addTableOpen} onOpenChange={setAddTableOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline">
                       <Plus className="size-4" />
@@ -645,12 +848,31 @@ export default function FloorPlansView() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
+                </div>
               </div>
 
-              <div className="relative">
+              {/* p21: the floor itself — size & silhouette owned by the
+                  manager. The canvas box centers the shaped floor; table
+                  coordinates are FLOOR-relative percentages. */}
+              <div className='relative flex justify-center pb-4'>
+                {/* Hall stats — above the floor (never clipped by the shape) */}
+                <div className='pointer-events-none absolute -top-2 left-0 z-10 flex items-center gap-3 rounded-full border border-border bg-white px-3 py-1 text-[11px] font-medium text-stone-500 shadow-sm'>
+                  <span>{t('admin.hallStatsTables', { n: activeTables.length })}</span>
+                  <span className='text-emerald-700'>
+                    {t('admin.hallStatsFree', { n: hallStats.free })}
+                  </span>
+                  <span className='text-amber-700'>
+                    {t('admin.hallStatsOccupied', { n: hallStats.occupied })}
+                  </span>
+                </div>
                 <div
                   ref={canvasRef}
-                  className="relative h-[460px] w-full touch-none overflow-hidden rounded-2xl border-2 border-[#D6D0C4] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] shadow-inner"
+                  className='relative touch-none overflow-hidden rounded-2xl border-2 border-[#D6D0C4] bg-[radial-gradient(circle,#ece7dc_1px,transparent_1px)] [background-size:22px_22px] shadow-inner'
+                  style={{
+                    width: `${selectedPlan.widthUnits ?? 100}%`,
+                    height: `${Math.round(460 * ((selectedPlan.heightUnits ?? 100) / 100))}px`,
+                    clipPath: floorShapeClip(selectedPlan.floorShape),
+                  }}
                 >
                   {activeTables.length === 0 ? (
                     <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
@@ -770,17 +992,6 @@ export default function FloorPlansView() {
                       )
                     })
                   )}
-
-                  {/* Hall stats — pinned inside the top of the canvas (never blocks dragging) */}
-                  <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-3 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-stone-500 backdrop-blur-sm">
-                    <span>{t('admin.hallStatsTables', { n: activeTables.length })}</span>
-                    <span className="text-emerald-700">
-                      {t('admin.hallStatsFree', { n: hallStats.free })}
-                    </span>
-                    <span className="text-amber-700">
-                      {t('admin.hallStatsOccupied', { n: hallStats.occupied })}
-                    </span>
-                  </div>
                 </div>
 
                 {/* Entrance marker — sits on the bottom border, mostly outside the canvas */}

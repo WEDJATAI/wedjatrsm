@@ -130,6 +130,10 @@ export type FloorPlan = {
   id: number
   name: string
   backgroundImage: string | null
+  /** p21: floor geometry — % of the canvas box (30–100) + walkable silhouette */
+  widthUnits: number
+  heightUnits: number
+  floorShape: string
   active: boolean
   tables: RestaurantTable[]
 }
