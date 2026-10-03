@@ -187,6 +187,64 @@ async function originAuthorityGuard(
   return null
 }
 
+/**
+ * p20 revision floor: the newest state already recorded for this entity row
+ * must never be overwritten by a stale (lower-revision) payload that arrives
+ * late — found live after the out-of-order batch race: final-gate orders'
+ * rev-1 create payloads landed on the cloud AFTER their rev-3 cancels and
+ * re-opened them. Returns 'no-op' when the event is an exact duplicate of the
+ * known state, or a Decision otherwise. Shared by the revision-aware policy
+ * and (as a floor under the guard) by origin-authority.
+ */
+async function revisionFloorDecision(
+  evt: RemoteEvent,
+  retryRowId: number | null,
+): Promise<Decision | 'no-op'> {
+  // P6 fix: when RETRYING a previously-failed in-event, the row being
+  // retried must NOT count as the "latest known revision" of itself —
+  // otherwise a same-rev/same-hash retry resolves to the no-op branch
+  // and the business write is silently lost (found by P6 failure
+  // testing: a malformed-payload apply failure, payload repaired, retry
+  // marked the row 'applied' without ever writing the data).
+  const latest = await db.hybridEvent.findFirst({
+    where: {
+      entity: evt.entity,
+      entityId: evt.entityId,
+      ...(retryRowId !== null ? { id: { not: retryRowId } } : {}),
+    },
+    orderBy: [{ revision: 'desc' }, { id: 'desc' }],
+  })
+  const localRev = latest?.revision ?? 0
+  if (evt.revision > localRev) {
+    return { kind: 'apply' }
+  }
+  if (evt.revision < localRev) {
+    return {
+      kind: 'skip',
+      reason: 'stale-revision',
+      resolution: 'local-wins',
+      details: `remote-rev-${evt.revision}-lt-local-${localRev}`,
+      localHash: latest?.payloadHash ?? '',
+    }
+  }
+  if (latest && latest.payloadHash === evt.payloadHash) return 'no-op'
+  if (latest && hexGreater(latest.payloadHash, evt.payloadHash)) {
+    return {
+      kind: 'skip',
+      reason: 'revision-tiebreak',
+      resolution: 'local-wins',
+      details: 'local-hash-wins',
+      localHash: latest.payloadHash,
+    }
+  }
+  return {
+    kind: 'apply-with-conflict',
+    resolution: 'remote-wins',
+    details: 'remote-hash-wins',
+    localHash: latest?.payloadHash ?? '',
+  }
+}
+
 async function processRemoteEvent(
   evt: RemoteEvent,
   retryRowId: number | null,
@@ -229,6 +287,14 @@ async function processRemoteEvent(
           details: guard.details,
           localHash: guard.localHash,
         }
+      } else {
+        // guard passed (we are the origin device, the order is closed, or no
+        // origin is stamped) — p20: still enforce the revision floor so a
+        // late-arriving stale payload (out-of-order batch delivery) can never
+        // overwrite a newer state. Mirrors revision-aware semantics.
+        const floor = await revisionFloorDecision(evt, retryRowId)
+        if (floor === 'no-op') return finalizeNoOp(evt, retryRowId)
+        decision = floor
       }
       break
     }
@@ -256,50 +322,9 @@ async function processRemoteEvent(
       break
     }
     case 'revision-aware': {
-      // P6 fix: when RETRYING a previously-failed in-event, the row being
-      // retried must NOT count as the "latest known revision" of itself —
-      // otherwise a same-rev/same-hash retry resolves to the no-op branch
-      // and the business write is silently lost (found by P6 failure
-      // testing: a malformed-payload apply failure, payload repaired, retry
-      // marked the row 'applied' without ever writing the data).
-      const latest = await db.hybridEvent.findFirst({
-        where: {
-          entity: evt.entity,
-          entityId: evt.entityId,
-          ...(retryRowId !== null ? { id: { not: retryRowId } } : {}),
-        },
-        orderBy: [{ revision: 'desc' }, { id: 'desc' }],
-      })
-      const localRev = latest?.revision ?? 0
-      if (evt.revision > localRev) {
-        decision = { kind: 'apply' }
-      } else if (evt.revision < localRev) {
-        decision = {
-          kind: 'skip',
-          reason: 'stale-revision',
-          resolution: 'local-wins',
-          details: `remote-rev-${evt.revision}-lt-local-${localRev}`,
-          localHash: latest?.payloadHash ?? '',
-        }
-      } else if (latest && latest.payloadHash === evt.payloadHash) {
-        // same revision, same content — nothing to do; record the event as processed
-        return finalizeNoOp(evt, retryRowId)
-      } else if (latest && hexGreater(latest.payloadHash, evt.payloadHash)) {
-        decision = {
-          kind: 'skip',
-          reason: 'revision-tiebreak',
-          resolution: 'local-wins',
-          details: 'local-hash-wins',
-          localHash: latest.payloadHash,
-        }
-      } else {
-        decision = {
-          kind: 'apply-with-conflict',
-          resolution: 'remote-wins',
-          details: 'remote-hash-wins',
-          localHash: latest?.payloadHash ?? '',
-        }
-      }
+      const floor = await revisionFloorDecision(evt, retryRowId)
+      if (floor === 'no-op') return finalizeNoOp(evt, retryRowId)
+      decision = floor
       break
     }
   }

@@ -42,11 +42,25 @@ export function isEngineRunning(): boolean {
   return g.__rmsHybridEngineStarted === true
 }
 
+// p20: ONE cycle at a time, always. The engine tick and admin "Sync now"
+// share this flag — concurrent cycles claim DIFFERENT outbox batches and push
+// them in parallel, so the receiver applies them out of order; a late-arriving
+// lower-revision payload can then overwrite a higher-revision state (found
+// live: final-gate orders #590-605 were re-opened on the cloud by their own
+// rev-1 create payloads arriving after the rev-3 cancels).
+let cycleRunning = false
+
 async function tick(): Promise<void> {
   try {
+    if (cycleRunning) return // a sync-now cycle is in flight — skip this tick
     if ((await getState(STATE_SYNC_PAUSED)) === '1') return
-    await runPushCycle()
-    await runPullCycle()
+    cycleRunning = true
+    try {
+      await runPushCycle()
+      await runPullCycle()
+    } finally {
+      cycleRunning = false
+    }
   } catch (e) {
     // the interval must NEVER throw out of itself — a failing cycle waits
     // for the next tick (and every error path inside the cycles already
@@ -73,8 +87,6 @@ export function startHybridEngine(): void {
 export type SyncNowResult =
   | { busy: true }
   | { busy: false; push: PushCycleResult; pull: PullCycleResult }
-
-let cycleRunning = false
 
 /** Run both cycles immediately (admin "Sync now"); busy when one is running. */
 export async function triggerHybridSyncNow(): Promise<SyncNowResult> {
