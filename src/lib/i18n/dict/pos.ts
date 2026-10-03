@@ -161,6 +161,9 @@ export const posDict: DictPair = {
     'pos.myShift': 'My shift',
     'shift.title': 'My shift — today',
     'shift.subtitle': 'Your sales and tips since midnight',
+    // p21: clock-in state chip (bridges wall attendance + sales closeout)
+    'shift.clockChipOn': 'On shift',
+    'shift.clockChipOff': 'Not clocked in',
     'shift.sales': 'Total sales',
     'shift.paidSales': 'Collected (paid)',
     'shift.openChecks': 'Open checks',
@@ -720,6 +723,9 @@ export const posDict: DictPair = {
     'pos.myShift': 'ورديتي',
     'shift.title': 'ورديتي — اليوم',
     'shift.subtitle': 'مبيعاتك وإكرامياتك منذ منتصف الليل',
+    // p21: clock-in state chip (bridges wall attendance + sales closeout)
+    'shift.clockChipOn': 'على الخدمة',
+    'shift.clockChipOff': 'لم يتم تسجيل الحضور',
     'shift.sales': 'إجمالي المبيعات',
     'shift.paidSales': 'المُحصّلة (مدفوعة)',
     'shift.openChecks': 'حسابات مفتوحة',

@@ -2730,3 +2730,23 @@ Stage Summary:
 - Hybrid sync gap closed: floor-plan/table CRUD previously NEVER synced (only order-driven table status did). Now FloorPlan + RestaurantTable events flow both ways.
 - Neon schema migrated ahead of code deploy (ADD COLUMN IF NOT EXISTS — safe on live prod). Turso DDL + migrations updated (generator template repaired).
 - Next: Tasks 3+4 (recipe→stock verification + full menu recipes with par stock levels — CAUTION: stock check gates live order creation; must set generous par stock BEFORE recipes sync out) and Task 5 (check-in workflow audit).
+
+---
+Task ID: p21-b
+Agent: main (restaurant-systems expert)
+Task: p21 tasks 3+4 — recipes connected to stock + full menu recipes (chef-editable).
+
+Work Log:
+- LIVE DISCOVERY: the owner (or waiter) was OPERATING MY SANDBOX POS via the preview panel during my session (orders 328 settled, 1212 created+paid, 87 paid, 98 paid — all pushed from THIS device at 07:40-07:45, human-speed sequence). Explains the floor changing between screenshots. All their data preserved; my only writes were the designed test order 1213 (paid then REFUNDED with documented reason).
+- DATA MODEL: 74 new stockable ingredients created at EXPLICIT ids 230-303 (Neon's product id space ends at 229 — local autoincrement would have collided and overwritten live prod rows) + par stock + low-stock thresholds for all 93 ingredients (19 existing brought to par, e.g. cheese 1.56→25 kg, flour 11.4→60, chicken 2.92→40). scripts/p21-data-recipes.ts holds the full chef-editable recipe book: 672 components covering ALL 157 cookable dishes (soft drinks are unit items by design), realistic per-serving quantities in ingredient base units (Cheese Fries = the owner's exact example: Cheese (kg) 0.025 = 25 g/serving). p14 dish-id remap (50→226..53→229) honored in event payloads.
+- THREE REAL DEFECTS FOUND & FIXED while converging to Neon:
+  (1) Neon had NO category 6 'Ingredients (internal)' — every new-ingredient FK failed. Created it (scripts/p21-neon-cat6.ts) + resynced sequences (products, recipe_components, inventory_transactions, categories).
+  (2) THE DUPLICATE-ACK TRAP: a re-delivered event whose in-record exists as 'failed' was acked as a duplicate no-op — the sender stopped retrying while the cloud kept the failure (546 events stranded exactly like this). FIXED in ingestRemoteEvent: re-delivery of a failed in-record now RETRIES it.
+  (3) THE REVISION-FLOOR GAP on cloud-authoritative: my new push-endpoint self-healing (25 failed in-events per push) then healed 252 HISTORICAL FK-era events — September-era Product payloads stomped TODAY's par stock on Neon (chicken 40→8.24, cheese 25→8.92, flour 60→13, +4 more). Orders were safe (revision-aware floor existed); Product/Category had no floor. FIXED: revisionFloorDecision now also guards cloud-authoritative applies (stale revision < local max → skip 'stale-revision'). Data repaired by re-emitting all 299 products + 28 categories + 47 modifiers + 15 groups (fresh revisions) — full parity restored: 19/19 stock match, 0 failed in-events left on Neon.
+- DEPLOYED: 2 production deployments this pass (dpl_FRD9pnibkpJwcWqzSRZ6FjcprCA9 + dpl_GRxk4wf7UfYytPQcTuR9CvUHLuLG — payment card, floor editor, self-healing, ingest fix, revision floor). GitHub main @ 304bc00.
+- LIVE VERIFICATION (task 3 — the owner's exact example): takeaway order #1213 with 2× Cheese Fries → paid cash → cheese stock 25 → 24.95 kg (exactly 2 × 25 g), potatoes 60 → 59.5 (2 × 0.25), order auto-closed, events synced to Neon. Stock guard proven: 3000× Cheese Fries blocked with 'Insufficient stock for Potatoes (kg) (available 59.5, needed 750)'. Test order refunded (books stay honest; refund documented).
+
+Stage Summary:
+- Recipe→stock connection is LIVE END-TO-END on BOTH terminals: every paid order now deducts each recipe ingredient automatically (25 g cheese used = 25 g less stock — proven by order #1213), with par stock generous enough to never block the Friday service and low-stock alerts feeding the Inngest digest.
+- The full 157-dish recipe book (672 components, 93 ingredients, bilingual names) is on the local terminal AND Neon — the chef edits quantities from Admin → Recipes; soft drinks intentionally left as unit items (can-tracking recommendation documented for the owner).
+- The hybrid engine is now SAFE against the stale-payload class: revision floor on all policies + failed-in-record retry on re-delivery + apply-side self-healing (25/push). 0 failed events anywhere; local == Neon parity verified.

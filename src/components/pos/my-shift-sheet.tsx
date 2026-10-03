@@ -5,7 +5,7 @@
 // Standalone component: the main agent mounts it in the POS view with
 // { open, onOpenChange } and a launch button (pos.myShift).
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { HandCoins, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -43,6 +43,35 @@ const SHIFT_POLL_MS = 30_000
 
 export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) {
   const { t } = useI18n()
+
+  // p21: the CLOCK-IN state (wall attendance) — "My shift" is the SALES
+  // closeout, but the waiter thinks of both as "my shift". Showing the
+  // attendance chip here unifies the two concepts: clocked-in servers see
+  // their live worked time without going back to the wall.
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (!open) return
+    const timer = setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [open])
+  const attendance = useQuery({
+    queryKey: ['attendance-me'],
+    queryFn: () =>
+      fetcher<{ today: { checkInAt: string } | null; onShift: boolean; workedMinutes: number | null }>(
+        '/api/attendance/me',
+      ),
+    enabled: open,
+    refetchInterval: open ? 60_000 : false,
+  })
+  const liveWorked =
+    attendance.data?.onShift && attendance.data.today
+      ? Math.max(
+          0,
+          Math.round((nowTick - new Date(attendance.data.today.checkInAt).getTime()) / 60000),
+        )
+      : attendance.data?.onShift
+        ? (attendance.data.workedMinutes ?? 0)
+        : null
 
   const { data, isPending, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ['my-shift'],
@@ -86,6 +115,30 @@ export default function MyShiftSheet({ open, onOpenChange }: MyShiftSheetProps) 
             </Button>
           </div>
           <SheetDescription>{t('shift.subtitle')}</SheetDescription>
+          {/* p21: clock-in state chip — bridges the wall attendance and the
+              sales closeout (two halves of "my shift"). */}
+          {attendance.data != null && (
+            <div className='mt-1 flex items-center gap-2'>
+              {attendance.data.onShift ? (
+                <span className='inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700'>
+                  <span className='relative flex size-2' aria-hidden>
+                    <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60' />
+                    <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
+                  </span>
+                  {t('shift.clockChipOn')}
+                  {liveWorked != null && (
+                    <span className='tabular-nums' dir='ltr'>
+                      · {Math.floor(liveWorked / 60)}h {liveWorked % 60}m
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className='inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1 text-xs font-medium text-muted-foreground'>
+                  {t('shift.clockChipOff')}
+                </span>
+              )}
+            </div>
+          )}
         </SheetHeader>
 
         <div className="space-y-4 px-4">

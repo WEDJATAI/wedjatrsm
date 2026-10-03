@@ -67,6 +67,10 @@ export const HYBRID_ENTITIES: Record<string, { policy: HybridEntityPolicy }> = {
   // may add composite addressing.
   RecipeComponent: { policy: 'cloud-authoritative' },
   CustomRole: { policy: 'cloud-authoritative' },
+  // p21: shift definitions (attendance reference windows) — previously
+  // NOT synced, so each terminal graded lateness against its own windows.
+  // Revision-aware keeps the latest definition winning everywhere.
+  Shift: { policy: 'revision-aware' },
 
   // ── revision-aware: operational data ─────────────────────────────────
   Customer: { policy: 'revision-aware' },

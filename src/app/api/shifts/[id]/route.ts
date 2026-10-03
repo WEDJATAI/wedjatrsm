@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 
 // Shift edits are partial; deactivation (active=false) is the ONLY delete
 // mechanism — attendance history keeps referencing the shift rows.
@@ -79,7 +80,13 @@ export async function PUT(
       data.active = body.active
     }
 
-    const shift = await db.shift.update({ where: { id: shiftId }, data })
+    // p21: shift edits ride the outbox (revision-aware) — same windows on
+    // every terminal.
+    const shift = await db.$transaction(async (tx) => {
+      const updated = await tx.shift.update({ where: { id: shiftId }, data })
+      await emitOutboxEvent(tx, { entity: 'Shift', entityId: updated.id, operation: 'update', row: updated })
+      return updated
+    })
     return NextResponse.json({
       shift: {
         id: shift.id,

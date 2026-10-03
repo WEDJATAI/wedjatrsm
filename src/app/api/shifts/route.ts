@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 
 // Shifts are attendance reference windows ("HH:MM" 24h). endTime < startTime
 // means the shift wraps past midnight (overnight) — allowed.
@@ -73,8 +74,14 @@ export async function POST(req: NextRequest) {
     const endTime = validateTime(body.endTime, 'endTime')
     // endTime < startTime = overnight shift — explicitly allowed, no extra check.
 
-    const shift = await db.shift.create({
-      data: { name, startTime, endTime },
+    // p21: shift definitions ride the outbox (revision-aware) so every
+    // terminal grades lateness against the same windows.
+    const shift = await db.$transaction(async (tx) => {
+      const created = await tx.shift.create({
+        data: { name, startTime, endTime },
+      })
+      await emitOutboxEvent(tx, { entity: 'Shift', entityId: created.id, operation: 'create', row: created })
+      return created
     })
     return NextResponse.json({ shift: serializeShift(shift) })
   } catch (err) {
