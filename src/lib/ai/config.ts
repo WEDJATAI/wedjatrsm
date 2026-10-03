@@ -47,8 +47,8 @@ export const OPENROUTER_MODELS = [
 export const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY ?? ''
 export const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions'
 export const NVIDIA_MODELS = [
-  'deepseek-ai/deepseek-v4.1-flash', // 1.2s verified
-  'nvidia/nemotron-3-super-120b-a12b', // reasoning model (3.4s)
+  'nvidia/nemotron-3.5-lightning-30b-a3b', // verified live 2.0s (reasoning model — 2026-10-03)
+  'deepseek-ai/deepseek-v4.1-flash', // currently hangs 30s+ — kept as fallback; breaker skips fast
 ] as const
 
 // ── Google Gemini (native generateContent) ──
