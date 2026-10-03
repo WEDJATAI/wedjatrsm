@@ -5,7 +5,20 @@
 // requester), ordered by the local autoincrement id (the cursor), newest
 // last. The requester applies them with its own policy engine; duplicate
 // deliveries are absorbed by eventId dedupe on every side.
+//
+// p20 harmony fix: on the CLOUD data plane (Postgres — this same codebase
+// deployed on Vercel), the owner's own POS writes made THROUGH the cloud
+// deployment emit outbox events (deviceId 'unbound' — emitOutboxEvent's
+// marker when no local device identity exists) that no engine ever pushes:
+// instrumentation starts the engine on file: SQLite only. Those origin
+// writes are ALSO served here, interleaved into the same id-ordered stream,
+// so pulling terminals receive cloud-originated business actions (check
+// merges, defers, payments, table moves). Delivery stays exactly-once per
+// terminal: each terminal persists its own cursor, and eventId dedupe on
+// apply absorbs any duplicate. Local terminals (SQLite) keep the original
+// behaviour — their own outbox is pushed by their engine, never pulled.
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 
 import { errorResponse } from '@/lib/auth'
 import { requireDevice } from '@/lib/hybrid-auth'
@@ -25,13 +38,26 @@ export async function GET(req: NextRequest) {
     const cursor = Number.isInteger(cursorRaw) && cursorRaw >= 0 ? cursorRaw : 0
     const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, HYBRID_PULL_MAX_LIMIT) : 100
 
+    // stream shape: relay events from other terminals; the cloud data plane
+    // additionally serves its own origin writes (see module header). No status
+    // filter on the origin branch — those rows are only ever created by cloud
+    // writes (born 'pending', never mutated: no engine runs here to settle
+    // them; delivery is cursor-based, not status-based).
+    const isCloudDataPlane = !process.env.DATABASE_URL?.startsWith('file:')
+    const streamWhere: Prisma.HybridEventWhereInput = {
+      deviceId: { not: device.deviceId },
+      ...(isCloudDataPlane
+        ? {
+            OR: [
+              { direction: 'in', status: 'applied' },
+              { direction: 'out', deviceId: 'unbound' },
+            ],
+          }
+        : { direction: 'in', status: 'applied' }),
+    }
+
     const rows = await db.hybridEvent.findMany({
-      where: {
-        id: { gt: cursor },
-        direction: 'in',
-        status: 'applied',
-        deviceId: { not: device.deviceId },
-      },
+      where: { ...streamWhere, id: { gt: cursor } },
       orderBy: { id: 'asc' },
       take: limit,
       select: {
@@ -50,12 +76,7 @@ export async function GET(req: NextRequest) {
 
     const lastId = rows.length > 0 ? rows[rows.length - 1].id : cursor
     const remaining = await db.hybridEvent.count({
-      where: {
-        id: { gt: lastId },
-        direction: 'in',
-        status: 'applied',
-        deviceId: { not: device.deviceId },
-      },
+      where: { ...streamWhere, id: { gt: lastId } },
     })
 
     await db.hybridDevice.update({
