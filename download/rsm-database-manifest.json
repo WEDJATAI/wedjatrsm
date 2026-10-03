@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-03T15:17:12.636Z",
+  "generatedAt": "2026-10-03T16:42:27.906Z",
   "round": "R17 — Foodics/Odoo-level upgrade: purchasing (suppliers + POs + receiving), stock counts, waste management, promotions engine w/ live POS integration, payroll + forecast, refunds restored, R9 AI copilot/briefing re-wired",
   "database": {
     "file": "rsm-platform-database.db",
@@ -94,14 +94,14 @@
     "integrityChecked": true,
     "recoveryPoint": "download/rsm-platform-database.db (auto-refreshed by src/lib/db-snapshot.ts)"
   },
-  "reason": "manual",
+  "reason": "lazy-init",
   "bytes": 7335936,
   "tableCount": 39,
-  "totalRows": 15911,
+  "totalRows": 15926,
   "tables": {
     "app_settings": 8,
     "attendance": 10,
-    "audit_logs": 2722,
+    "audit_logs": 2737,
     "cash_drawer_entries": 4,
     "cash_drawer_sessions": 5,
     "categories": 28,
