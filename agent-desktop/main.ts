@@ -60,7 +60,7 @@ import { join } from 'node:path'
 // ─── constants ───────────────────────────────────────────────────────────────
 
 const IS_WINDOWS = process.platform === 'win32'
-const VERSION = '1.0.0'
+const VERSION = '1.1.0'
 const APP_TITLE = 'RSM Cloud Agent'
 const EMBEDDED_MARKER = 'RSMCFG1:'
 
@@ -104,6 +104,8 @@ type EmbeddedConfig = {
 
 type AgentConfig = {
   baseUrl: string
+  /** the durable cloud hub — the server we always prefer (v1.1) */
+  primaryUrl?: string
   fallbackUrl: string
   cloudUrl: string
   enrollKey?: string
@@ -573,10 +575,15 @@ async function cloudStatusCycle(): Promise<void> {
 
 let failStreak = 0
 
+/** Toggle between the cloud hub (preferred) and the download origin
+ *  (fallback). v1.1: the original primary is remembered in config.primaryUrl
+ *  so the agent returns to the hub once the fallback also starts failing —
+  * v1.0 could flip to the fallback and then get stuck there forever. */
 function switchServer(): void {
   const from = config.baseUrl
-  config.baseUrl = config.baseUrl === config.fallbackUrl ? state.server.baseUrl : config.fallbackUrl
-  state.server.usingFallback = config.baseUrl !== state.server.baseUrl
+  const primary = config.primaryUrl ?? config.fallbackUrl
+  config.baseUrl = config.baseUrl === primary ? config.fallbackUrl : primary
+  state.server.usingFallback = config.baseUrl !== primary
   saveConfig()
   state.server.baseUrl = config.baseUrl
   log(`server failover: ${from} → ${config.baseUrl}`)
@@ -611,6 +618,19 @@ async function syncCycle(): Promise<void> {
     state.server.lastError = msg
     state.sync.lastError = msg
     log(`sync failed (${failStreak}): ${msg}`)
+    // v1.1: each server keeps its OWN device registry — after a failover the
+    // credentials from the other server are rejected (401). When that
+    // happens, drop the credentials and let the next cycle re-enroll against
+    // the CURRENT server (bounded by the server's enrollment rate limit).
+    if (err instanceof HttpError && err.status === 401 && config.deviceId && config.enrollKey) {
+      log('credentials rejected by this server — re-enrolling as a new device here')
+      config.deviceId = undefined
+      config.deviceKey = undefined
+      config.enrolledAt = undefined
+      saveConfig()
+      state.device = { deviceId: null, enrolled: false, enrolledAt: null }
+      return
+    }
     if (isNetworkError(err) && failStreak >= FAIL_STREAK_BEFORE_FAILOVER) switchServer()
   } finally {
     if (mirrorDirty) {
@@ -701,7 +721,11 @@ function dashboardHtml(): string {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function tick() {
   try {
-    const s = await (await fetch('/api/state')).json();
+    // gateway-aware: when the dashboard is viewed through a port-transforming
+    // gateway (e.g. a sandbox preview at /?XTransformPort=9753), the /api/state
+    // fetch must carry the same query so the gateway routes it back here.
+    const gw = location.search.includes('XTransformPort') ? location.search : '';
+    const s = await (await fetch('/api/state' + gw)).json();
     document.getElementById('sub').textContent =
       (s.server.connected ? '● connected — two-way sync live' : '○ offline — retrying')
       + ' · ' + (s.device.deviceId ? 'device ' + s.device.deviceId.slice(0, 8) + '…' : 'not enrolled yet');
@@ -920,17 +944,41 @@ async function main(): Promise<void> {
   }
 
   // 3. configuration: embedded download-time config → saved config file
+  //
+  // HUB-FIRST (v1.1): the durable cloud deployment (Vercel, backed by Neon)
+  // is the hub every device exchanges events through. A local/preview origin
+  // can enroll + bootstrap an agent, but the origin's OWN POS writes ride its
+  // local→cloud outbox (they are never served on its pull stream), so an
+  // agent pointed at a local origin would never see the owner's changes.
+  // The agent therefore syncs with the cloud hub and keeps the download
+  // origin only as a failover.
   const embedded = readEmbeddedConfig()
   loadConfig()
   if (embedded) {
-    if (embedded.cloudUrl) {
-      config.cloudUrl = embedded.cloudUrl
-      if (config.baseUrl === DEFAULT_CLOUD_URL) config.baseUrl = embedded.cloudUrl
-      config.fallbackUrl = embedded.cloudUrl
+    const hub = embedded.cloudUrl ?? DEFAULT_CLOUD_URL
+    config.cloudUrl = hub
+    const origin = embedded.baseUrl ?? ''
+    if (!config.installedAt) {
+      // fresh install: hub primary, origin fallback
+      config.primaryUrl = hub
+      config.baseUrl = hub
+      config.fallbackUrl = origin && origin !== hub ? origin : hub
+    } else if (origin && config.baseUrl === origin && hub !== origin) {
+      // v1.0 upgrade: the old config pointed at the download origin —
+      // migrate to hub-first (a manually customized baseUrl is respected)
+      config.primaryUrl = hub
+      config.baseUrl = hub
+      config.fallbackUrl = origin
+    } else if (!config.primaryUrl) {
+      config.primaryUrl = config.baseUrl
     }
-    if (embedded.baseUrl && !config.installedAt) config.baseUrl = embedded.baseUrl
     if (embedded.enrollKey && !config.enrollKey) config.enrollKey = embedded.enrollKey
-    log(`download-time config: server ${embedded.baseUrl ?? embedded.cloudUrl ?? DEFAULT_CLOUD_URL}`)
+    log(
+      `download-time config: hub ${hub}` +
+        (origin && origin !== hub ? ` (origin fallback ${origin})` : ''),
+    )
+  } else if (!config.primaryUrl) {
+    config.primaryUrl = config.baseUrl
   }
   if (!config.installedAt) {
     config.installedAt = nowIso()

@@ -18,6 +18,7 @@ import { requireDevice } from '@/lib/hybrid-auth'
 import { db } from '@/lib/db'
 import { ingestRemoteEvent, retryInEvent, type RemoteEvent } from '@/lib/hybrid-sync/apply-remote-event'
 import { resolvePolicy } from '@/lib/hybrid-sync/entity-policy'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
 import { HYBRID_PUSH_MAX_EVENTS } from '@/lib/hybrid-sync/constants'
 
 export async function POST(req: NextRequest) {
@@ -45,6 +46,14 @@ export async function POST(req: NextRequest) {
     const acked: string[] = []
     const rejected: Array<{ eventId: string; reason: string }> = []
     const conflicts: Array<{ eventId: string; entity: string; entityId: number; resolution: string }> = []
+    // r35 local-hub echo: events whose business write LANDED here and must
+    // be carried on to the cloud hub (local SQLite plane only — see below).
+    const appliedForEcho: Array<{
+      entity: string
+      entityId: number
+      operation: 'create' | 'update' | 'delete'
+      payload: Record<string, unknown>
+    }> = []
 
     for (const raw of events) {
       const evt = raw as Partial<RemoteEvent>
@@ -94,6 +103,17 @@ export async function POST(req: NextRequest) {
         continue
       }
       acked.push(eventId)
+      if (
+        result.outcome === 'applied' ||
+        (result.outcome === 'conflict' && result.applied)
+      ) {
+        appliedForEcho.push({
+          entity: evt.entity as string,
+          entityId: evt.entityId as number,
+          operation: evt.operation as 'create' | 'update' | 'delete',
+          payload: evt.payload as Record<string, unknown>,
+        })
+      }
       if (result.outcome === 'conflict') {
         conflicts.push({
           eventId,
@@ -108,6 +128,31 @@ export async function POST(req: NextRequest) {
       where: { id: device.id },
       data: { lastPushAt: new Date() },
     })
+
+    // r35 LOCAL HUB ECHO — when a LOCAL SQLite instance acts as a device's
+    // apply target (the download-origin failover path), a device-pushed
+    // event applied here would otherwise stay local-only: this instance's
+    // pull stream never serves its own writes, and nothing else carries the
+    // applied row to the cloud. Re-emit every landed write as an outbox
+    // event so the engine pushes it to the hub (Neon) like any local POS
+    // write. On the CLOUD data plane (Vercel/Neon) the apply IS the cloud
+    // write — echoing there would double-push, so it is skipped.
+    // Best-effort by design: the local row is already applied and the
+    // sender was acked; an echo failure must not fail the response.
+    if (appliedForEcho.length > 0 && process.env.DATABASE_URL?.startsWith('file:')) {
+      for (const evt of appliedForEcho) {
+        try {
+          await emitOutboxEvent(db, {
+            entity: evt.entity,
+            entityId: evt.entityId,
+            operation: evt.operation,
+            row: evt.payload,
+          })
+        } catch {
+          // best-effort — see note above
+        }
+      }
+    }
 
     // p21: APPLY-SIDE SELF-HEALING — this instance (the cloud, or any peer
     // acting as an apply target) retries a few of its OWN previously-failed
