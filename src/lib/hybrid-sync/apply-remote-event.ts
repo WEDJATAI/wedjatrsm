@@ -310,7 +310,18 @@ async function processRemoteEvent(
     }
     case 'cloud-authoritative': {
       // reference/config: the cloud wins, but an un-acked LOCAL outbound edit
-      // with different content is recorded so the divergence is visible
+      // with different content is recorded so the divergence is visible.
+      // p21: ALSO enforce the revision floor — without it, a stale payload
+      // (an FK-failed event healed days later, or an out-of-order batch)
+      // applies over a NEWER revision of the row: today's par stock was
+      // stomped back to September values by exactly this. Menu fields are
+      // slow-moving so the bug hid until stock became fast-changing.
+      const floor = await revisionFloorDecision(evt, retryRowId)
+      if (floor === 'no-op') return finalizeNoOp(evt, retryRowId)
+      if (floor.kind === 'skip') {
+        decision = floor
+        break
+      }
       const divergent = await db.hybridEvent.findFirst({
         where: {
           direction: 'out',
