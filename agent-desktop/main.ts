@@ -1,18 +1,22 @@
 /**
- * RSM Cloud Agent — Windows 10 desktop companion (single self-contained .exe)
+ * RSM Cloud Agent — Windows 10 & macOS (Intel x64) desktop companion
  * ────────────────────────────────────────────────────────────────────────────
- * Built with `bun build --compile --target=bun-windows-x64` — the Bun runtime
- * is embedded inside the executable, so it runs on a clean Windows 10 PC with
- * ZERO dependencies and NO installer framework.
+ * Built with `bun build --compile` (targets: bun-windows-x64 / bun-darwin-x64)
+ * — the Bun runtime is embedded inside the executable, so it runs on a clean
+ * PC with ZERO dependencies and NO installer framework.
  *
- * What it does on a fresh PC (double-click the downloaded .exe):
- *   1. INSTALLS ITSELF   → copies to %LOCALAPPDATA%\RSMCloudAgent, creates a
- *      Desktop shortcut + a Start Menu shortcut and registers an HKCU Run
- *      entry so it starts with Windows, then relaunches the installed copy.
+ * What it does on a fresh machine (run the downloaded installer once):
+ *   1. INSTALLS ITSELF
+ *      · Windows: copies to %LOCALAPPDATA%\RSMCloudAgent, creates a Desktop
+ *        shortcut + a Start Menu shortcut and registers an HKCU Run entry.
+ *      · macOS (Intel x64): builds a proper "RSM Cloud Agent.app" bundle in
+ *        ~/Applications (no sudo), creates a Desktop alias, registers a Login
+ *        Item (starts with the Mac) and relaunches through LaunchServices.
+ *        If an agent is already running it just opens its dashboard instead.
  *   2. CONNECTS TO THE CLOUD → enrolls itself as a hybrid sync device
  *      (POST /api/hybrid/device/self with the enrollment key that was
- *      stamped into the .exe at download time) and receives its own device
- *      credentials (deviceId + deviceKey, shown exactly once).
+ *      stamped into the executable at download time) and receives its own
+ *      device credentials (deviceId + deviceKey, shown exactly once).
  *   3. TWO-WAY SYNC, AUTOMATICALLY → speaks the platform's native
  *      rsm-hybrid/1 protocol (the same one the POS terminals use):
  *        · PULL  GET /api/hybrid/pull   (cloud → local JSON mirror)
@@ -26,9 +30,11 @@
  *      one-click access to the cloud POS.
  *
  * Per-download configuration: the download route appends a small
- * `RSMCFG1:<base64>` JSON blob AFTER the executable bytes (a PE overlay —
- * the OS loader and the Bun runtime both ignore trailing data, verified by
- * test). The agent reads its own tail to learn its server URLs.
+ * `RSMCFG1:<base64>` JSON blob AFTER the executable bytes (a PE overlay on
+ * Windows / trailing data after the Mach-O segments on macOS — both loaders
+ * ignore it, verified by test). The agent reads its own tail to learn its
+ * server URLs. The tail travels with the binary through the macOS self-copy,
+ * so the installed agent keeps its configuration.
  *
  * Outbox (local → cloud changes): drop a JSON file into the agent's
  * `outbox` folder (path shown on the dashboard) with the shape
@@ -41,6 +47,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
   copyFileSync,
   existsSync,
@@ -52,25 +59,35 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { EOL, homedir, hostname, platform as osPlatform, release } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
 const IS_WINDOWS = process.platform === 'win32'
-const VERSION = '1.1.0'
+const IS_MACOS = process.platform === 'darwin'
+const VERSION = '1.2.0'
 const APP_TITLE = 'RSM Cloud Agent'
 const EMBEDDED_MARKER = 'RSMCFG1:'
+const PLATFORM_LABEL = IS_WINDOWS ? 'Windows 10' : IS_MACOS ? 'macOS (Intel x64)' : process.platform
 
+// macOS: the installed agent lives as a proper .app bundle in ~/Applications
+// (user-level — no sudo) with its data in ~/Library/Application Support.
+const MACOS_BUNDLE_DIR = join(homedir(), 'Applications', 'RSM Cloud Agent.app')
 const INSTALL_DIR = IS_WINDOWS
   ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'RSMCloudAgent')
-  : join(homedir(), '.rsm-cloud-agent')
+  : IS_MACOS
+    ? join(MACOS_BUNDLE_DIR, 'Contents', 'MacOS')
+    : join(homedir(), '.rsm-cloud-agent')
 const DATA_DIR = IS_WINDOWS
   ? join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'RSMCloudAgent')
-  : INSTALL_DIR
-const EXE_NAME = IS_WINDOWS ? 'RSM-CloudAgent.exe' : 'rsm-cloud-agent'
+  : IS_MACOS
+    ? join(homedir(), 'Library', 'Application Support', 'RSMCloudAgent')
+    : INSTALL_DIR
+const EXE_NAME = IS_WINDOWS ? 'RSM-CloudAgent.exe' : IS_MACOS ? 'RSMCloudAgent' : 'rsm-cloud-agent'
 const INSTALLED_EXE = join(INSTALL_DIR, EXE_NAME)
 const CONFIG_PATH = join(DATA_DIR, 'config.json')
 const MIRROR_PATH = join(DATA_DIR, 'mirror.json')
@@ -229,9 +246,26 @@ function canonicalize(value: unknown): unknown {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalize(value))
 const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
 
-// ─── embedded per-download config (PE overlay tail) ──────────────────────────
+// ─── embedded per-download config ────────────────────────────────────────────
+// TWO carriers, same shape:
+//   · Windows .exe / unsigned ELF: a `RSMCFG1:<base64>` tail AFTER the
+//     executable bytes (a PE overlay — the loader ignores trailing data).
+//   · macOS .app: the Mach-O is code-signed and the signature must stay the
+//     LAST thing in the file, so the config rides as a SIDE-CAR resource
+//     (Contents/Resources/RSMCFG.json inside the bundle, or a
+//     `<binary>.config.json` next to a bare executable).
+
+/** Side-car config locations, most specific first. */
+function sidecarConfigPaths(): string[] {
+  const exeDir = dirname(process.execPath)
+  return [
+    join(exeDir, '..', 'Resources', 'RSMCFG.json'), // inside a .app bundle
+    `${process.execPath}.config.json`, // next to a bare executable
+  ]
+}
 
 function readEmbeddedConfig(): EmbeddedConfig | null {
+  // 1. binary tail (Windows .exe — PE overlay; unsigned ELF builds)
   try {
     const fd = openSync(process.execPath, 'r')
     try {
@@ -241,14 +275,24 @@ function readEmbeddedConfig(): EmbeddedConfig | null {
       readSync(fd, buf, 0, len, size - len)
       const tail = buf.toString('utf8')
       const m = tail.match(/RSMCFG1:([A-Za-z0-9+/=._:-]+)/)
-      if (!m) return null
-      return JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')) as EmbeddedConfig
+      if (m) return JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')) as EmbeddedConfig
     } finally {
       closeSync(fd)
     }
   } catch {
-    return null
+    /* no readable tail — try the side-car */
   }
+  // 2. side-car resources (macOS .app bundle / bare-binary neighbour)
+  for (const p of sidecarConfigPaths()) {
+    try {
+      if (!existsSync(p)) continue
+      const cfg = JSON.parse(readFileSync(p, 'utf8')) as EmbeddedConfig
+      if (cfg && (cfg.baseUrl || cfg.cloudUrl)) return cfg
+    } catch {
+      /* malformed side-car — keep looking */
+    }
+  }
+  return null
 }
 
 // ─── config + mirror persistence (plain JSON — no native deps) ───────────────
@@ -390,7 +434,7 @@ async function ensureEnrolled(): Promise<void> {
     method: 'POST',
     auth: false,
     body: {
-      name: `${hostname()} · Windows Agent`,
+      name: `${hostname()} · ${IS_WINDOWS ? 'Windows Agent' : IS_MACOS ? 'macOS Agent' : 'Linux Agent'}`,
       platform: IS_WINDOWS ? 'windows-agent' : `${process.platform}-agent`,
       enrollKey: config.enrollKey,
     },
@@ -649,7 +693,17 @@ function cloudBadge(c: CloudStatus): string {
   return `<span class="pill bad">unreachable</span>`
 }
 
+/** Minimal HTML escaper for the locally rendered dashboard. */
+function escHtml(s: string): string {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] ?? c)
+}
+
 function dashboardHtml(): string {
+  const uninstallLine = IS_WINDOWS
+    ? `Keep this window (or the background process) running for continuous sync. Uninstall: remove the shortcut, delete <code>${escHtml(INSTALL_DIR)}</code> and the HKCU\\…\\Run "RSMCloudAgent" entry.`
+    : IS_MACOS
+      ? `Keep the agent running (it starts with your Mac) for continuous sync. Uninstall: drag "RSM Cloud Agent.app" in <code>~/Applications</code> to the Trash, remove the Desktop alias and the Login Item (System Settings → General → Login Items), then delete <code>${escHtml(DATA_DIR)}</code>.`
+      : `Keep this process running for continuous sync. Uninstall: delete <code>${escHtml(DATA_DIR)}</code>.`
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -712,9 +766,7 @@ function dashboardHtml(): string {
 
   <footer>
     ${APP_TITLE} — installs to <code id="installPath">…</code> · data in <code id="dataPath">…</code><br>
-    Two-way sync over the platform's native rsm-hybrid/1 protocol. Keep this window (or the
-    background process) running for continuous sync. Uninstall: remove the shortcut, delete
-    <code id="uninstPath">…</code> and the HKCU\\…\\Run "RSMCloudAgent" entry.
+    ${uninstallLine}
   </footer>
 </div>
 <script>
@@ -733,7 +785,6 @@ async function tick() {
     document.getElementById('outboxPath').textContent = s.outboxDir;
     document.getElementById('installPath').textContent = s.install.installDir;
     document.getElementById('dataPath').textContent = s.install.dataDir;
-    document.getElementById('uninstPath').textContent = s.install.installDir;
     document.getElementById('pending').textContent = s.sync.pendingOutbox;
     document.getElementById('stats').innerHTML = [
       ['Mirror rows', s.mirrorTotal.toLocaleString()],
@@ -802,7 +853,7 @@ function openBrowser(url: string): void {
   }
 }
 
-// ─── Windows self-install ────────────────────────────────────────────────────
+// ─── self-install (Windows + macOS) ──────────────────────────────────────────
 
 function run(cmd: string[], opts: { wait?: boolean } = {}): boolean {
   try {
@@ -829,9 +880,137 @@ function registerAutoStart(target: string): void {
   )
 }
 
+/** Probe the dashboard ports for an ALREADY RUNNING agent on this machine.
+ *  Returns its dashboard URL, or null when none answers. Used by the macOS
+ *  installer: double-clicking the app while an agent is live just opens the
+ *  dashboard (the Windows path detects this via the locked-file EBUSY). */
+async function probeRunningAgent(): Promise<string | null> {
+  for (let port = DASHBOARD_PORT_BASE; port < DASHBOARD_PORT_BASE + 10; port++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/state`, { signal: AbortSignal.timeout(800) })
+      if (!res.ok) continue
+      const s = (await res.json()) as { app?: { title?: string } }
+      if (s?.app?.title === APP_TITLE) return `http://127.0.0.1:${port}`
+    } catch {
+      /* nothing on this port */
+    }
+  }
+  return null
+}
+
+/** Info.plist for the installed macOS .app bundle (LSUIElement: background
+ *  agent — the dashboard is a browser page, so no Dock icon is needed). */
+function macosInfoPlist(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+        <key>CFBundleName</key><string>RSM Cloud Agent</string>
+        <key>CFBundleDisplayName</key><string>RSM Cloud Agent</string>
+        <key>CFBundleIdentifier</key><string>app.wedjatrsm.cloudagent</string>
+        <key>CFBundleVersion</key><string>${VERSION}</string>
+        <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+        <key>CFBundleExecutable</key><string>${EXE_NAME}</string>
+        <key>CFBundlePackageType</key><string>APPL</string>
+        <key>LSUIElement</key><true/>
+        <key>LSMinimumSystemVersion</key><string>10.13</string>
+        <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+`
+}
+
+/** macOS install: build ~/Applications/RSM Cloud Agent.app (user-level, no
+ *  sudo), copy self into Contents/MacOS (atomic: stage → chmod → rename, so
+ *  a live older copy keeps running off its old inode), symlink it onto the
+ *  Desktop, register a Login Item and relaunch through LaunchServices. */
+async function ensureInstalledMac(): Promise<boolean> {
+  const self = process.execPath
+  if (self === INSTALLED_EXE) {
+    state.install.installed = true
+    return true
+  }
+
+  // an agent already running? → open its dashboard, leave it be
+  const runningUrl = await probeRunningAgent()
+  if (runningUrl) {
+    console.log(`  ✓ ${APP_TITLE} is already installed and running on this Mac.`)
+    console.log('  ✓ Opening its dashboard — this window can close; the running agent keeps syncing.\n')
+    openBrowser(runningUrl)
+    sleep(2500).then(() => process.exit(0))
+    return false
+  }
+
+  console.log(`\n  Installing ${APP_TITLE}…`)
+  const contents = join(MACOS_BUNDLE_DIR, 'Contents')
+  try {
+    mkdirSync(join(contents, 'MacOS'), { recursive: true })
+    mkdirSync(join(contents, 'Resources'), { recursive: true })
+    writeFileSync(join(contents, 'Info.plist'), macosInfoPlist())
+  } catch (err) {
+    fatal(`cannot create ${MACOS_BUNDLE_DIR}: ${String(err)}`)
+  }
+
+  // atomic self-copy (the binary keeps its embedded signature intact)
+  const staged = `${INSTALLED_EXE}.new`
+  try {
+    copyFileSync(self, staged)
+    chmodSync(staged, 0o755)
+    renameSync(staged, INSTALLED_EXE)
+  } catch (err) {
+    fatal(`cannot install to ${INSTALLED_EXE}: ${String(err)}`)
+  }
+
+  // persist the bootstrap config into the installed bundle (side-car —
+  // the macOS executable must keep its code signature, so no binary tail;
+  // the installed .app carries the config the installer was built with)
+  try {
+    const embedded = readEmbeddedConfig()
+    if (embedded) writeFileSync(join(contents, 'Resources', 'RSMCFG.json'), `${JSON.stringify(embedded)}${EOL}`)
+  } catch {
+    /* non-fatal — the running copy already saved config.json */
+  }
+
+  // Desktop alias — double-click = agent running → dashboard opens
+  let desktopAlias = false
+  try {
+    const alias = join(homedir(), 'Desktop', 'RSM Cloud Agent.app')
+    if (!existsSync(alias)) symlinkSync(MACOS_BUNDLE_DIR, alias)
+    desktopAlias = true
+  } catch {
+    /* Desktop managed/unavailable (e.g. iCloud path quirks) — the app is
+       still in ~/Applications and LaunchServices finds it by name */
+  }
+
+  // Login Item (starts with the Mac). macOS may ask once for permission to
+  // control System Events — declining only disables auto-start.
+  const loginOk = run(
+    [
+      'osascript',
+      '-e',
+      `tell application "System Events" to make login item at end with properties {path:"${MACOS_BUNDLE_DIR}", hidden:true}`,
+    ],
+    { wait: true },
+  )
+  state.install.autoStart = loginOk
+
+  console.log(`  ✓ Installed to ${MACOS_BUNDLE_DIR}`)
+  console.log(desktopAlias ? '  ✓ Desktop shortcut created' : '  ⚠ Desktop shortcut skipped (find it in ~/Applications)')
+  console.log(
+    loginOk
+      ? '  ✓ Starts automatically when you log in (Login Items)'
+      : '  ⚠ Login Item not registered — start it from ~/Applications or the Desktop shortcut',
+  )
+  console.log('  ✓ Starting the agent…\n')
+  run(['open', MACOS_BUNDLE_DIR])
+  sleep(1500).then(() => process.exit(0))
+  return false
+}
+
 /** Returns true when the agent is already running from the installed location
  *  (or just installed itself and spawned the installed copy). */
-function ensureInstalled(): boolean {
+async function ensureInstalled(): Promise<boolean> {
+  if (IS_MACOS) return ensureInstalledMac()
   if (!IS_WINDOWS) {
     state.install.installed = true
     return true
@@ -927,12 +1106,12 @@ async function main(): Promise<void> {
   console.log(`
   ┌─────────────────────────────────────────────────────┐
   │        RSM Cloud Agent · وكيل سحابة RSM             │
-  │   Windows 10 companion — two-way cloud sync         │
+  │   ${PLATFORM_LABEL} companion — two-way cloud sync      │
   └─────────────────────────────────────────────────────┘
   version ${VERSION} · ${state.app.platform}`)
 
-  // 1. install (Windows) — may spawn the installed copy and exit
-  if (!ensureInstalled()) return
+  // 1. install (Windows/macOS) — may spawn the installed copy and exit
+  if (!(await ensureInstalled())) return
 
   // 2. prepare the data directory + outbox folders
   for (const dir of [DATA_DIR, OUTBOX_DIR, OUTBOX_SENT, OUTBOX_DEAD]) {

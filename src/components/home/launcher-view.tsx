@@ -55,7 +55,7 @@ import { cn } from '@/lib/utils'
 import type { Order, SessionUser } from '@/lib/types'
 import { ManagerPinDialog } from '@/components/auth/manager-pin-dialog'
 import { DeveloperPinDialog } from '@/components/auth/developer-pin-dialog'
-import { WindowsDownloadDialog, WindowsLogo } from '@/components/home/windows-download-dialog'
+import { AppleLogo, DesktopDownloadDialog, WindowsDownloadDialog, WindowsLogo } from '@/components/home/windows-download-dialog'
 
 // ── warm palette (deterministic per module; literals so Tailwind sees them)
 type TileDef = {
@@ -288,6 +288,8 @@ export default function LauncherView({
   // ── r32: Windows 10 agent download (password-gated .exe — installs +
   // two-way syncs with the 5-cloud stack) ──
   const [windowsOpen, setWindowsOpen] = useState(false)
+  // ── r36: macOS (Intel x64) agent download (password-gated .zip) ──
+  const [macosOpen, setMacosOpen] = useState(false)
 
   const badges: Record<string, number> = {
     openOrders: openOrdersCount,
@@ -367,6 +369,24 @@ export default function LauncherView({
               >
                 <WindowsLogo className="size-4" aria-hidden />
                 <span className="hidden sm:inline">{t('home.windowsApp')}</span>
+              </button>
+              {/* r36: macOS (Intel x64) agent — the downloadable .zip icon */}
+              <button
+                type="button"
+                onClick={() => {
+                  sndTap()
+                  haptic(8)
+                  setMacosOpen(true)
+                }}
+                aria-label={t('home.macosAppTitle')}
+                title={t('home.macosAppTitle')}
+                className={cn(
+                  'flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-muted-foreground transition hover:bg-accent hover:text-foreground active:scale-95',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                <AppleLogo className="size-4" aria-hidden />
+                <span className="hidden sm:inline">{t('home.macosApp')}</span>
               </button>
               {/* R27: the manager's own PIN tool — always one tap away */}
               {isManager && (
@@ -533,6 +553,8 @@ export default function LauncherView({
 
       {/* r32: Windows 10 agent download dialog (password-gated .exe) */}
       <WindowsDownloadDialog open={windowsOpen} onOpenChange={setWindowsOpen} />
+      {/* r36: macOS (Intel x64) agent download dialog (password-gated .zip) */}
+      <DesktopDownloadDialog platform="macos" open={macosOpen} onOpenChange={setMacosOpen} />
     </section>
   )
 }
