@@ -18,7 +18,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiFetch } from '@/lib/api'
 import { SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
-import { bilingualLabel, bothLabels, localizedName, useI18n, type Lang } from '@/lib/i18n'
+import { bilingualLabel, bothLabels, localizedName, useI18n } from '@/lib/i18n'
+import { paperCss } from '@/lib/print'
 import { useAppSettings } from '@/lib/use-settings'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
@@ -122,9 +123,12 @@ type CheckModel = {
   customer: string
   orderId: number
   tableName: string
-  /** R19: the actual person who issued the check (falls back to the
-   *  account name, then "—" when even that is unknown). */
+  /** p22: the WAITER WHO SERVED the order — the account that took the
+   *  order at the table (order.user). Distinct from the cashier below. */
   waiter: string
+  /** p22: who issued/handed over the check — the stamped issuer → the
+   *  person operating this device → the creating account → "—". */
+  cashier: string
   /** R19: when the check was presented/issued (null = not yet stamped) */
   issuedAt: string | null
   date: string
@@ -134,8 +138,10 @@ type CheckModel = {
     nameAr: string | null
     total: number
     notes: string | null
-    /** R8: selected options (localized names) shown as sub-lines */
+    /** p22: selected options — English names (paper shows BOTH languages) */
     mods: string | null
+    /** p22: selected options — Arabic names (null when identical to EN) */
+    modsAr: string | null
   }[]
   subtotal: number
   discount: number
@@ -167,7 +173,6 @@ function buildCheckModel(
     /** p11: per-line unit overrides for By-Items (how many units of each line
      * go on THIS check; default = the line's whole units). */
     itemQtys: Record<number, number>
-    lang: Lang
     sessionPersonName?: string | null
   },
 ): CheckModel {
@@ -178,10 +183,11 @@ function buildCheckModel(
     customer: opts.customer.trim(),
     orderId: order.id,
     tableName: order.table?.name ?? bilingualLabel('common.takeaway'),
-    // R19: person-level attribution — the real staff member who presented
-    // the check (stamped issuer → the person operating this device now →
-    // the shared account name for orders predating person tracking).
-    waiter:
+    // p22: TWO attribution rows on the paper — the waiter who SERVED the
+    // table (the account that took the order) and the cashier who hands
+    // the check over (stamped issuer → this session's person → account).
+    waiter: order.user?.name ?? '—',
+    cashier:
       order.checkIssuedByPerson?.name ??
       opts.sessionPersonName ??
       order.user?.name ??
@@ -194,18 +200,21 @@ function buildCheckModel(
     let nameAr: string | null = null
     if (it.product?.nameAr && it.product.nameAr.trim()) nameAr = it.product.nameAr.trim()
     else if (!it.product) nameAr = fallbackItem.ar
+    // p22: options print in BOTH languages (mirrors the receipt paper)
+    const modsList = it.selectedModifiers ?? []
+    const mods = modsList.length > 0 ? modsList.map((m) => m.name).join(', ') : null
+    const modsArJoined =
+      modsList.length > 0
+        ? modsList.map((m) => (m.nameAr && m.nameAr.trim() ? m.nameAr.trim() : m.name)).join(', ')
+        : null
     return {
       qty: formatQty(it.quantity),
       name,
       nameAr: nameAr && nameAr !== name ? nameAr : null,
       total: round2(it.quantity * it.unitPrice),
       notes: it.notes,
-      mods:
-        it.selectedModifiers && it.selectedModifiers.length > 0
-          ? it.selectedModifiers
-              .map((m) => localizedName(m.name, m.nameAr, opts.lang))
-              .join(', ')
-          : null,
+      mods,
+      modsAr: modsArJoined && modsArJoined !== mods ? modsArJoined : null,
     }
   })
   const orderSubtotal = round2(order.subtotalAmount)
@@ -317,7 +326,11 @@ function buildCheckHtml(
     )
   lines.push(dashed)
   lines.push(row(`${bilingualLabel('common.order')} #${m.orderId}`, m.tableName))
+  // p22: two attribution rows — the waiter who SERVED the table and the
+  // cashier who hands the check over (previously one row that blurred
+  // the two roles together).
   lines.push(row(bilingualLabel('pos.waiter'), m.waiter))
+  lines.push(row(bilingualLabel('pos.cashier'), m.cashier))
   if (m.issuedAt) lines.push(row(bilingualLabel('pos.checkIssued'), m.issuedAt))
   lines.push(row(bilingualLabel('common.date'), m.date))
   lines.push(dashed)
@@ -325,6 +338,7 @@ function buildCheckHtml(
     lines.push(row(`${it.qty}× ${it.name}`, formatCurrency(it.total)))
     if (it.nameAr) lines.push(`<p class="ar" dir="rtl">${escapeHtml(it.nameAr)}</p>`)
     if (it.mods) lines.push(`<p class="note">  + ${escapeHtml(it.mods)}</p>`)
+    if (it.modsAr) lines.push(`<p class="ar">+ ${escapeHtml(it.modsAr)}</p>`)
     if (it.notes) lines.push(`<p class="note">  * ${escapeHtml(it.notes)}</p>`)
   }
   lines.push(dashed)
@@ -423,7 +437,6 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
     eqPayers,
     selectedIds,
     itemQtys,
-    lang,
     sessionPersonName,
   })
 
@@ -459,8 +472,8 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
 
   const handlePrint = () => {
     // R19: printing/presenting the check = issuing it — stamp the current
-    // session person as the responsible waiter (fire-and-forget: the paper
-    // prints regardless; the first stamp wins and is never overwritten).
+    // session person as the cashier (fire-and-forget: the paper prints
+    // regardless; the first stamp wins and is never overwritten).
     void apiFetch(`/api/orders/${order.id}/check-issue`, {
       method: 'POST',
       body: {},
@@ -473,16 +486,23 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
       window.alert(t('pos.popupBlocked'))
       return
     }
-    const noteAlign = isRTL ? 'right' : 'left'
-    const arAlign = isRTL ? 'right' : 'left'
-    // Letter-spacing on the Latin part only (Arabic letters must stay joined),
-    // and only when the UI language is English.
-    const stampSpacing = isRTL ? 'normal' : '4px'
-    // p8: .sub = per-payer itemized sub-lines on the split paper
+    // p22: shared bilingual paper CSS — box-sizing, an Arabic-capable font
+    // stack and wrapping rules keep every line (Arabic included) inside
+    // the paper border; print rules target 80mm thermal stock.
+    const css = paperCss({
+      noteAlign: isRTL ? 'right' : 'left',
+      arAlign: isRTL ? 'right' : 'left',
+      // Letter-spacing on the Latin part only (Arabic letters must stay
+      // joined), and only when the UI language is English.
+      stampSpacing: isRTL ? 'normal' : '4px',
+      extra: `.cust{font-weight:bold;margin:2px 0;text-align:center}
+.sub{font-size:11px;opacity:.85;padding-inline-start:14px}
+.stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)}`,
+    })
     w.document.write(
       `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(
         model.title,
-      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .sub{font-size:11px;opacity:.85;padding-inline-start:14px} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .cust{font-weight:bold;margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold} .ar{font-size:11px;text-align:${arAlign};direction:rtl;margin:0} .arn{font-weight:bold;direction:rtl;margin:2px 0} .stampline{margin:10px 0;text-align:center} .stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stampd .se{letter-spacing:${stampSpacing}} .stampd .sar{direction:rtl} .stampd .sep{letter-spacing:normal}</style></head><body>${html}</body></html>`,
+      )}</title>${css}</head><body>${html}</body></html>`,
     )
     w.document.close()
     w.focus()
@@ -738,6 +758,7 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
               <div className="my-2 border-t border-dashed border-stone-400" />
               <CheckRow left={`${bilingualLabel('common.order')} #${model.orderId}`} right={model.tableName} />
               <CheckRow left={bilingualLabel('pos.waiter')} right={model.waiter} />
+              <CheckRow left={bilingualLabel('pos.cashier')} right={model.cashier} />
               {model.issuedAt && (
                 <CheckRow left={bilingualLabel('pos.checkIssued')} right={model.issuedAt} />
               )}
@@ -748,15 +769,24 @@ export default function CheckModal({ order, open, onOpenChange, rows, sessionPer
                   <CheckRow left={`${it.qty}× ${it.name}`} right={formatCurrency(it.total)} />
                   {it.nameAr && (
                     <p
-                      className="text-left rtl:text-right text-[10px] text-stone-600"
+                      className="break-words text-left rtl:text-right text-[10px] text-stone-600"
                       dir="rtl"
                       lang="ar"
                     >
                       {it.nameAr}
                     </p>
                   )}
-                  {it.mods && <p className="ps-3 text-[10px] text-stone-500">+ {it.mods}</p>}
-                  {it.notes && <p className="ps-3 text-[10px] text-stone-500">* {it.notes}</p>}
+                  {it.mods && <p className="break-words ps-3 text-[10px] text-stone-500">+ {it.mods}</p>}
+                  {it.modsAr && (
+                    <p
+                      className="break-words ps-3 text-left rtl:text-right text-[10px] text-stone-600"
+                      dir="rtl"
+                      lang="ar"
+                    >
+                      + {it.modsAr}
+                    </p>
+                  )}
+                  {it.notes && <p className="break-words ps-3 text-[10px] text-stone-500">* {it.notes}</p>}
                 </div>
               ))}
               <div className="my-2 border-t border-dashed border-stone-400" />
@@ -868,7 +898,9 @@ function SplitPill({
 function CheckRow({ left, right, bold }: { left: string; right: string; bold?: boolean }) {
   return (
     <div className={cn('flex items-baseline gap-1', bold && 'font-bold')}>
-      <span className="shrink-0">{left}</span>
+      {/* p22: the label wraps (long bilingual + Arabic labels must never
+       * push the amount out of the paper preview) */}
+      <span className="min-w-0 max-w-[68%] break-words">{left}</span>
       <span className="min-w-2 flex-1 border-b border-dotted border-stone-300" aria-hidden />
       <span className="shrink-0 tabular-nums">{right}</span>
     </div>

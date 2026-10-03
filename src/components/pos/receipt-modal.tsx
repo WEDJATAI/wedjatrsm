@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { formatCurrency, formatDateTime, formatQty } from '@/lib/format'
 import { bilingualLabel, bothLabels, useI18n } from '@/lib/i18n'
+import { paperCss } from '@/lib/print'
 import { useAppSettings } from '@/lib/use-settings'
 import type { Order } from '@/lib/types'
 import { escapeHtml, round2 } from './pos-utils'
@@ -20,12 +21,19 @@ type ReceiptModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onClose: () => void
+  /** p22: the person currently operating the device (session-level) —
+   *  printed as the Cashier on the paper (stamped check issuer wins). */
+  sessionPersonName?: string | null
 }
 
 type ReceiptModel = {
   orderId: number
   tableName: string
+  /** p22: the WAITER WHO SERVED the order (the account that took it). */
   waiter: string
+  /** p22: who took the payment / issued the check — stamped issuer →
+   *  session person → the creating account → "—". */
+  cashier: string
   date: string
   items: {
     qty: string
@@ -65,13 +73,18 @@ type ReceiptModel = {
   clientName: string | null
 }
 
-function buildReceiptModel(order: Order): ReceiptModel {
+function buildReceiptModel(order: Order, sessionPersonName?: string | null): ReceiptModel {
   // Paper item lines are bilingual: English primary + Arabic secondary.
   const fallbackItem = bothLabels('pos.item')
   return {
     orderId: order.id,
     tableName: order.table?.name ?? bilingualLabel('common.takeaway'),
+    // p22: two attribution rows — the waiter who served the table and the
+    // cashier who took the payment (stamped by the payments route when the
+    // first payment is tendered, else the person on this device).
     waiter: order.user?.name ?? '—',
+    cashier:
+      order.checkIssuedByPerson?.name ?? sessionPersonName ?? order.user?.name ?? '—',
     date: formatDateTime(order.createdAt),
     items: order.items.map((it) => {
       const name = it.product?.name ?? fallbackItem.en
@@ -147,7 +160,9 @@ function buildReceiptHtml(
   lines.push(`<p>${escapeHtml(bilingualLabel('pos.salesReceipt'))}</p>`)
   lines.push(dashed)
   lines.push(row(`${bilingualLabel('common.order')} #${m.orderId}`, m.tableName))
+  // p22: waiter who SERVED + cashier who took the payment (two rows)
   lines.push(row(bilingualLabel('pos.waiter'), m.waiter))
+  lines.push(row(bilingualLabel('pos.cashier'), m.cashier))
   lines.push(row(bilingualLabel('common.date'), m.date))
   lines.push(dashed)
   for (const it of m.items) {
@@ -196,10 +211,10 @@ function buildReceiptHtml(
   return lines.join('\n')
 }
 
-export default function ReceiptModal({ order, open, onOpenChange, onClose }: ReceiptModalProps) {
+export default function ReceiptModal({ order, open, onOpenChange, onClose, sessionPersonName }: ReceiptModalProps) {
   const { t, lang, isRTL } = useI18n()
   const { restaurantName, restaurantNameAr } = useAppSettings()
-  const model = buildReceiptModel(order)
+  const model = buildReceiptModel(order, sessionPersonName)
   const paidStamp = bothLabels('pos.paidStamp')
   const deferredStamp = bothLabels('pos.deferredStamp')
 
@@ -210,16 +225,23 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
       window.alert(t('pos.receiptPopupBlocked'))
       return
     }
-    const noteAlign = isRTL ? 'right' : 'left'
-    // Arabic secondary lines: RTL direction, aligned with the paper's text edge.
-    const arAlign = isRTL ? 'right' : 'left'
-    // Arabic stamps don't get letter-spacing (it breaks joined letters) —
-    // spacing applies to the Latin part only, and only in the English UI.
-    const stampSpacing = isRTL ? 'normal' : '4px'
+    // p22: shared bilingual paper CSS — box-sizing, an Arabic-capable font
+    // stack and wrapping rules keep every line (Arabic included) inside
+    // the paper border; print rules target 80mm thermal stock.
+    const css = paperCss({
+      noteAlign: isRTL ? 'right' : 'left',
+      // Arabic secondary lines: RTL direction, aligned with the paper's text edge.
+      arAlign: isRTL ? 'right' : 'left',
+      // Arabic stamps don't get letter-spacing (it breaks joined letters) —
+      // spacing applies to the Latin part only, and only in the English UI.
+      stampSpacing: isRTL ? 'normal' : '4px',
+      extra: `.stamp{font-weight:bold;border:2px solid #047857;color:#047857;display:inline-block;padding:2px 10px;transform:rotate(-6deg)}
+.stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)}`,
+    })
     w.document.write(
       `<html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${lang}"><head><meta charset="utf-8"><title>${escapeHtml(
         t('pos.receipt'),
-      )}</title><style>body{font-family:monospace;font-size:13px;padding:24px;width:320px} .r{display:flex;justify-content:space-between} .dashed{border-top:1px dashed #000;margin:8px 0} h3,p{margin:2px 0;text-align:center} .note{font-size:11px;text-align:${noteAlign};margin:0} .bold{font-weight:bold} .ar{font-size:11px;text-align:${arAlign};direction:rtl;margin:0} .arn{font-weight:bold;direction:rtl;margin:2px 0} .stampline{margin:10px 0;text-align:center} .stamp{font-weight:bold;border:2px solid #047857;color:#047857;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stamp .se{letter-spacing:${stampSpacing}} .stamp .sar{direction:rtl} .stamp .sep{letter-spacing:normal} .stampd{font-weight:bold;border:2px solid #7C3AED;color:#7C3AED;display:inline-block;padding:2px 10px;transform:rotate(-6deg)} .stampd .se{letter-spacing:${stampSpacing}} .stampd .sar{direction:rtl} .stampd .sep{letter-spacing:normal}</style></head><body>${html}</body></html>`,
+      )}</title>${css}</head><body>${html}</body></html>`,
     )
     w.document.close()
     w.focus()
@@ -245,6 +267,7 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
           <div className="my-2 border-t border-dashed border-stone-400" />
           <ReceiptRow left={`${bilingualLabel('common.order')} #${model.orderId}`} right={model.tableName} />
           <ReceiptRow left={bilingualLabel('pos.waiter')} right={model.waiter} />
+          <ReceiptRow left={bilingualLabel('pos.cashier')} right={model.cashier} />
           <ReceiptRow left={bilingualLabel('common.date')} right={model.date} />
           <div className="my-2 border-t border-dashed border-stone-400" />
           {model.items.map((it, i) => (
@@ -252,24 +275,24 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose }: Rec
               <ReceiptRow left={`${it.qty}× ${it.name}`} right={formatCurrency(it.total)} />
               {it.nameAr && (
                 <p
-                  className="text-left rtl:text-right text-[11px] text-stone-500"
+                  className="break-words text-left rtl:text-right text-[11px] text-stone-500"
                   dir="rtl"
                   lang="ar"
                 >
                   {it.nameAr}
                 </p>
               )}
-              {it.mods && <p className="ps-3 text-[11px] text-stone-500">+ {it.mods}</p>}
+              {it.mods && <p className="break-words ps-3 text-[11px] text-stone-500">+ {it.mods}</p>}
               {it.modsAr && (
                 <p
-                  className="ps-3 text-left rtl:text-right text-[11px] text-stone-500"
+                  className="break-words ps-3 text-left rtl:text-right text-[11px] text-stone-500"
                   dir="rtl"
                   lang="ar"
                 >
                   + {it.modsAr}
                 </p>
               )}
-              {it.notes && <p className="ps-3 text-[11px] text-stone-500">* {it.notes}</p>}
+              {it.notes && <p className="break-words ps-3 text-[11px] text-stone-500">* {it.notes}</p>}
             </div>
           ))}
           <div className="my-2 border-t border-dashed border-stone-400" />
@@ -387,7 +410,9 @@ function ReceiptRow({
 }) {
   return (
     <div className={`flex items-baseline gap-1 ${bold ? 'font-bold' : ''}`}>
-      <span className="shrink-0">{left}</span>
+      {/* p22: the label wraps (long bilingual + Arabic labels must never
+       * push the amount out of the paper preview) */}
+      <span className="min-w-0 max-w-[68%] break-words">{left}</span>
       <span className="min-w-2 flex-1 border-b border-dotted border-stone-300" aria-hidden />
       <span className="shrink-0 tabular-nums">{right}</span>
     </div>

@@ -13,7 +13,20 @@
 // without a screen get per-station prep tickets. Items without a station
 // (or an unknown one) land in the 'MAIN KITCHEN' section.
 
-import { STATIONS, STATION_LABELS } from '@/lib/constants'
+// p22: station vocabulary for the ticket builders below, defined LOCALLY.
+// The original `import { STATIONS, STATION_LABELS } from '@/lib/constants'`
+// pointed at names that never existed in the shared file (it only ever
+// grew the R11 PREP_STATION_* presets: kitchen/bar/shisha) — nothing
+// imported this module, so the broken link never fired. The check and
+// receipt papers now share paperCss() from this module, so the module
+// must be safe to import.
+const STATIONS: readonly string[] = ['hot', 'cold', 'bar', 'dessert']
+const STATION_LABELS: Record<string, string> = {
+  hot: 'HOT LINE',
+  cold: 'COLD LINE',
+  bar: 'BAR',
+  dessert: 'DESSERT',
+}
 
 /** Escape a string for safe inclusion in generated print-window HTML
  *  (user names, notes, table names…). Mirrors pos-utils.ts escapeHtml. */
@@ -395,4 +408,66 @@ export function printKitchenTicket(
   } catch {
     return false
   }
+}
+
+// ─── p22: shared bilingual thermal-paper CSS (guest check + receipt) ──
+
+/** Options for the shared paper CSS — alignments follow the UI's RTL state. */
+export type PaperCssOptions = {
+  /** alignment for item note sub-lines ('left' in the English UI, 'right' in Arabic) */
+  noteAlign: 'left' | 'right'
+  /** alignment for Arabic secondary lines (follows the UI's text edge) */
+  arAlign: 'left' | 'right'
+  /** letter-spacing for the Latin part of stamps — 'normal' in the Arabic
+   *  UI (spacing breaks joined Arabic letters; Latin-only by design). */
+  stampSpacing?: string
+  /** modal-specific extra rules (stamps, sub-lines…) appended verbatim */
+  extra?: string
+}
+
+/**
+ * Shared `<style>` for the printed guest check & sales receipt papers.
+ * Both papers are bilingual EN + AR on 80mm-style stock, and this CSS is
+ * what keeps EVERY line — Arabic included — inside the paper border:
+ *
+ *  · `box-sizing:border-box` everywhere + a fixed-width sheet (320px on
+ *    screen, 74mm in print). The old sheet stacked `width:320px` ON TOP of
+ *    48px padding → a 368px document that spilled past the paper edge.
+ *  · An Arabic-capable font stack: monospace fonts carry NO Arabic glyphs,
+ *    so the browser silently fell back to arbitrary system fonts with
+ *    wider metrics — Arabic runs then exceeded the sheet edge. Latin text
+ *    keeps the receipt look via 'Courier New'; Arabic runs resolve to
+ *    Tahoma / Segoe UI / Arial, which have real Arabic metrics.
+ *  · Flex rows (`.r`) wrap: the label span shrinks and wraps
+ *    (`overflow-wrap:anywhere`), the amount span stays pinned (`nowrap`) —
+ *    long bilingual labels can never push the amount off the sheet.
+ *  · Arabic lines (`.ar`/`.arn`) and notes wrap long words instead of
+ *    overflowing the paper border.
+ *  · Print rules target 80mm thermal stock: `@page 80mm×auto` with 3mm
+ *    margins and a 74mm body — exactly the printable width, so nothing is
+ *    clipped at the paper edge (A4 printers scale/center the same sheet).
+ */
+export function paperCss(opts: PaperCssOptions): string {
+  const stampSpacing = opts.stampSpacing ?? 'normal'
+  return `<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:'Courier New',Courier,Tahoma,'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.5;color:#000;background:#fff;width:320px;margin:0 auto;padding:16px 12px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+h3,p{margin:2px 0;text-align:center;overflow-wrap:anywhere}
+.r{display:flex;justify-content:space-between;gap:10px;margin:2px 0;text-align:start}
+.r>span:first-child{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.r>span:last-child{flex:0 0 auto;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dashed{border-top:1px dashed #000;margin:8px 0}
+.bold{font-weight:bold}
+.note{font-size:11px;text-align:${opts.noteAlign};margin:0;overflow-wrap:anywhere}
+.ar{font-size:12px;text-align:${opts.arAlign};direction:rtl;margin:0;overflow-wrap:anywhere;word-break:break-word}
+.arn{font-weight:bold;direction:rtl;margin:2px 0;overflow-wrap:anywhere}
+.stampline{margin:10px 0;text-align:center}
+.stamp .se,.stampd .se{letter-spacing:${stampSpacing}}
+.stamp .sar,.stampd .sar{direction:rtl}
+.stamp .sep,.stampd .sep{letter-spacing:normal}
+${opts.extra ?? ''}
+@page{size:80mm auto;margin:3mm}
+@media print{body{width:74mm;padding:4mm 2mm}}
+</style>`
 }

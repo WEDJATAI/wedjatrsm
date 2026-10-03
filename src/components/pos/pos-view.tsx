@@ -1390,6 +1390,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
           <ReceiptModal
             order={receiptOrder}
             open={!!receiptOrder}
+            sessionPersonName={user?.personName ?? null}
             onOpenChange={(o) => {
               if (!o) setReceiptOrder(null)
             }}
@@ -1600,6 +1601,7 @@ export default function PosView({ active = true }: { active?: boolean }) {
         <ReceiptModal
           order={receiptOrder}
           open={!!receiptOrder}
+          sessionPersonName={user?.personName ?? null}
           onOpenChange={(o) => {
             if (!o) setReceiptOrder(null)
           }}
