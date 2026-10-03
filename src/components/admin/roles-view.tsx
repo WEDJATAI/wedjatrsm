@@ -18,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   Tags,
+  Trash2,
   TriangleAlert,
   UsersRound,
   Utensils,
@@ -29,6 +30,16 @@ import { PERMISSIONS } from '@/lib/constants'
 import type { CustomRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -84,6 +95,8 @@ export default function RolesView() {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<CustomRole | null>(null)
   const [form, setForm] = useState<RoleForm>({ name: '', permissions: [] })
+  // r34: delete-role confirm
+  const [deleting, setDeleting] = useState<CustomRole | null>(null)
 
   const rolesQuery = useQuery({
     queryKey: ['roles'],
@@ -141,6 +154,20 @@ export default function RolesView() {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['roles'] })
     },
+  })
+
+  // r34: permanently delete a role — blocked server-side (409) while any
+  // user is still assigned; the confirm dialog disables itself in that case.
+  const deleteMutation = useMutation({
+    mutationFn: (role: CustomRole) =>
+      apiFetch<{ deleted: boolean }>(`/api/roles/${role.id}`, { method: 'DELETE' }),
+    onSuccess: (_data, role) => {
+      void queryClient.invalidateQueries({ queryKey: ['roles'] })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+      toast.success(t('admin.roleDeleted', { name: role.name }))
+      setDeleting(null)
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 
   function openCreate() {
@@ -280,19 +307,75 @@ export default function RolesView() {
                 >
                   {role.active ? t('common.active') : t('common.inactive')}
                 </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  onClick={() => openEdit(role)}
-                >
-                  <Pencil className="size-3.5" /> {t('common.edit')}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => openEdit(role)}
+                  >
+                    <Pencil className="size-3.5" /> {t('common.edit')}
+                  </Button>
+                  {/* r34: permanent delete — server blocks roles still in use */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive dark:border-destructive/50"
+                    onClick={() => setDeleting(role)}
+                    aria-label={t('admin.deleteRoleAria', { name: role.name })}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}
         </div>
       )}
+
+      {/* r34: delete-role confirmation */}
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleting(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="size-5 text-destructive" aria-hidden />
+              {t('admin.deleteRoleTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('admin.deleteRoleDesc', { name: deleting?.name ?? '' })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {(deleting?.userCount ?? 0) > 0 ? (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs font-medium text-destructive">
+              {t('admin.deleteRoleInUse', { count: deleting?.userCount ?? 0 })}
+            </p>
+          ) : (
+            <p className="rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+              {t('admin.deleteRoleNote')}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive"
+              disabled={deleteMutation.isPending || (deleting?.userCount ?? 0) > 0}
+              onClick={(e) => {
+                e.preventDefault() // keep the dialog open until the mutation settles
+                if (deleting) deleteMutation.mutate(deleting)
+              }}
+            >
+              {deleteMutation.isPending ? t('admin.saving') : t('admin.deleteRoleConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Create / edit dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>

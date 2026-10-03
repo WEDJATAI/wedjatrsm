@@ -177,6 +177,36 @@ export const adminDict: DictPair = {
     'admin.hidePinAria': 'Hide PIN of {name}',
     'admin.selfDeactivateAria': 'You cannot deactivate your own account',
     'admin.selfDeactivateHint': 'You can’t deactivate your own account',
+
+    // ── r34: delete user (hybrid — permanent when no history, archived when there is) ──
+    'admin.deleteUser': 'Delete user',
+    'admin.deleteUserTitle': 'Delete this user?',
+    'admin.deleteUserDesc':
+      'You are about to delete {name}. This cannot be undone.',
+    'admin.deleteUserHistoryNote':
+      'Accounts with operational history (orders, attendance, cash sessions, issued checks) are archived instead of erased — their financial records stay intact and the login is permanently revoked. Accounts without history are removed permanently.',
+    'admin.deleteUserConfirm': 'Delete user',
+    'admin.userDeletedPermanent': 'User {name} deleted permanently',
+    'admin.userDeletedArchived':
+      'User {name} archived (history preserved, login revoked)',
+    'admin.showDeleted': 'Deleted ({count})',
+    'admin.hideDeleted': 'Hide deleted',
+    'admin.deletedBadge': 'Deleted',
+    'admin.deletedOn': 'Deleted on {date}',
+    'admin.onlyDeletedUsers': 'Only deleted users here',
+    'admin.onlyDeletedUsersHint':
+      'All remaining accounts are deleted (archived) — toggle them visible below.',
+
+    // ── r34: delete role ──
+    'admin.deleteRoleTitle': 'Delete this role?',
+    'admin.deleteRoleDesc': 'You are about to permanently delete the role “{name}”.',
+    'admin.deleteRoleInUse':
+      'This role is still assigned to {count} user(s) — reassign them first, or deactivate the role instead.',
+    'admin.deleteRoleNote':
+      'The role has no users assigned and will be removed permanently. Its name disappears from the custom-type list.',
+    'admin.deleteRoleConfirm': 'Delete role',
+    'admin.deleteRoleAria': 'Delete role {name}',
+    'admin.roleDeleted': 'Role “{name}” deleted',
     'admin.activateAria': '{action} {name}',
     'admin.emailRequired': 'Email is required',
     'admin.emailInvalid': 'Enter a valid email address',
@@ -857,6 +887,33 @@ export const adminDict: DictPair = {
     'admin.hidePinAria': 'إخفاء الرمز السري لـ{name}',
     'admin.selfDeactivateAria': 'لا يمكنك إيقاف حسابك الخاص',
     'admin.selfDeactivateHint': 'لا يمكنك إيقاف حسابك الخاص',
+
+    // ── r34: حذف المستخدم (نهائي بلا سجل، أو أرشفة مع الحفاظ على السجل المالي) ──
+    'admin.deleteUser': 'حذف المستخدم',
+    'admin.deleteUserTitle': 'حذف هذا المستخدم؟',
+    'admin.deleteUserDesc': 'أنت على وشك حذف {name}.',
+    'admin.deleteUserHistoryNote':
+      'الحسابات التي لها سجل تشغيلي (طلبات، حضور، جلسات درج النقدية، شيكات صادرة) تُؤرشف بدلاً من حذفها — تبقى سجلاتها المالية سليمة ويُلغى تسجيل الدخول نهائياً. أما الحسابات بلا سجل فتُحذف نهائياً.',
+    'admin.deleteUserConfirm': 'حذف المستخدم',
+    'admin.userDeletedPermanent': 'تم حذف المستخدم {name} نهائياً',
+    'admin.userDeletedArchived': 'تمت أرشفة المستخدم {name} (السجل محفوظ والدخول ملغى)',
+    'admin.showDeleted': 'المحذوفون ({count})',
+    'admin.hideDeleted': 'إخفاء المحذوفين',
+    'admin.deletedBadge': 'محذوف',
+    'admin.deletedOn': 'حُذف في {date}',
+    'admin.onlyDeletedUsers': 'لا يوجد سوى مستخدمون محذوفون',
+    'admin.onlyDeletedUsersHint': 'جميع الحسابات المتبقية محذوفة (مؤرشفة) — اعرضها بالزر بالأسفل.',
+
+    // ── r34: حذف الدور ──
+    'admin.deleteRoleTitle': 'حذف هذا الدور؟',
+    'admin.deleteRoleDesc': 'أنت على وشك حذف الدور «{name}» نهائياً.',
+    'admin.deleteRoleInUse':
+      'هذا الدور ما زال مُعيّناً لـ{count} من المستخدمين — أعد تعيينهم أولاً، أو أوقف الدور بدلاً من حذفه.',
+    'admin.deleteRoleNote':
+      'لا يوجد مستخدمون على هذا الدور وسيُحذف نهائياً من قائمة الأنواع المخصصة.',
+    'admin.deleteRoleConfirm': 'حذف الدور',
+    'admin.deleteRoleAria': 'حذف الدور {name}',
+    'admin.roleDeleted': 'تم حذف الدور «{name}»',
     'admin.activateAria': '{action} {name}',
     'admin.emailRequired': 'البريد الإلكتروني مطلوب',
     'admin.emailInvalid': 'أدخل بريداً إلكترونياً صحيحاً',

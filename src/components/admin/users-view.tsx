@@ -3,7 +3,18 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Eye, EyeOff, MoreHorizontal, Pencil, Plus, ShieldCheck, TriangleAlert, UsersRound } from 'lucide-react'
+import {
+  Eye,
+  EyeOff,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  TriangleAlert,
+  UserX,
+  UsersRound,
+} from 'lucide-react'
 
 import { PeopleRoster } from '@/components/admin/people-roster'
 import { apiFetch, fetcher } from '@/lib/api'
@@ -16,6 +27,16 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Dialog,
   DialogContent,
@@ -65,6 +86,8 @@ type AdminUser = {
   /** R27: the manager's account — the one super admin */
   isSuperAdmin?: boolean
   createdAt: string
+  /** r34: archive-deletion marker (tombstone users are hidden by default) */
+  deletedAt?: string | null
   /** R19: actual people operating this account */
   people?: { id: number; name: string; active: boolean }[]
 }
@@ -138,6 +161,9 @@ export default function UsersView() {
   const [editing, setEditing] = useState<AdminUser | null>(null)
   const [form, setForm] = useState<UserForm>(EMPTY_USER_FORM)
   const [showPinId, setShowPinId] = useState<number | null>(null)
+  // r34: delete-user confirm + deleted-users visibility
+  const [deleting, setDeleting] = useState<AdminUser | null>(null)
+  const [showDeleted, setShowDeleted] = useState(false)
 
   const usersQuery = useQuery({
     queryKey: ['users'],
@@ -163,6 +189,17 @@ export default function UsersView() {
   const users = useMemo(
     () => [...(usersQuery.data?.users ?? [])].sort((a, b) => a.id - b.id),
     [usersQuery.data],
+  )
+
+  // r34: tombstoned (archive-deleted) users are hidden behind a toggle —
+  // the default list shows live accounts only.
+  const deletedCount = useMemo(
+    () => users.filter((u) => u.deletedAt != null).length,
+    [users],
+  )
+  const visibleUsers = useMemo(
+    () => (showDeleted ? users : users.filter((u) => u.deletedAt == null)),
+    [users, showDeleted],
   )
 
   const customRoles = useMemo(() => {
@@ -283,6 +320,29 @@ export default function UsersView() {
     },
   })
 
+  // r34: delete user — permanent when the account has no history,
+  // archive-tombstone when it does (server decides, mode rides the reply).
+  const deleteMutation = useMutation({
+    mutationFn: (user: AdminUser) =>
+      apiFetch<{ deleted: boolean; mode: 'permanent' | 'archived' }>(
+        `/api/users/${user.id}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: (data, user) => {
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+      // also refresh roles (custom-type counts may shift) + the team wall
+      void queryClient.invalidateQueries({ queryKey: ['roles'] })
+      void queryClient.invalidateQueries({ queryKey: ['team-wall'] })
+      toast.success(
+        data.mode === 'permanent'
+          ? t('admin.userDeletedPermanent', { name: user.name })
+          : t('admin.userDeletedArchived', { name: user.name }),
+      )
+      setDeleting(null)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
   function openCreate() {
     setEditing(null)
     setForm(EMPTY_USER_FORM)
@@ -316,9 +376,23 @@ export default function UsersView() {
           <h1 className="text-2xl font-bold">{t('nav.users')}</h1>
           <p className="text-muted-foreground text-sm">{t('admin.usersSubtitle')}</p>
         </div>
-        <Button className="h-11" onClick={openCreate}>
-          <Plus /> {t('admin.newUser')}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* r34: reveal archive-deleted accounts */}
+          {deletedCount > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-11"
+              onClick={() => setShowDeleted((v) => !v)}
+              aria-pressed={showDeleted}
+            >
+              <UserX className="size-4" /> {showDeleted ? t('admin.hideDeleted') : t('admin.showDeleted', { count: deletedCount })}
+            </Button>
+          ) : null}
+          <Button className="h-11" onClick={openCreate}>
+            <Plus /> {t('admin.newUser')}
+          </Button>
+        </div>
       </div>
 
       {/* Users table */}
@@ -373,6 +447,17 @@ export default function UsersView() {
               <Plus /> {t('admin.newUser')}
             </Button>
           </div>
+        ) : visibleUsers.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+            <UserX className="size-10 text-muted-foreground/50" aria-hidden />
+            <div>
+              <p className="font-medium">{t('admin.onlyDeletedUsers')}</p>
+              <p className="text-muted-foreground text-sm">{t('admin.onlyDeletedUsersHint')}</p>
+            </div>
+            <Button variant="outline" className="h-11" onClick={() => setShowDeleted(true)}>
+              <UserX className="size-4" /> {t('admin.showDeleted', { count: deletedCount })}
+            </Button>
+          </div>
         ) : (
           <div className="rms-scroll max-h-[520px] overflow-y-auto">
             <Table>
@@ -389,12 +474,15 @@ export default function UsersView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((u) => {
+                {visibleUsers.map((u) => {
                   const isSelf = currentUserId === u.id
+                  const isDeleted = u.deletedAt != null
                   const roleLabel =
                     u.role === 'custom' ? (u.roleName ?? t('role.custom')) : t(`role.${u.role}`)
+                  // r34: protected rows never offer delete (server guards too)
+                  const deleteBlocked = isSelf || u.isSuperAdmin || u.role === 'developer'
                   return (
-                    <TableRow key={u.id} className="h-16">
+                    <TableRow key={u.id} className={cn('h-16', isDeleted && 'opacity-60')}>
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="size-9">
@@ -409,7 +497,7 @@ export default function UsersView() {
                           </Avatar>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-1.5 font-medium">
-                              {u.name}
+                              <span className={cn(isDeleted && 'line-through decoration-muted-foreground/60')}>{u.name}</span>
                               {isSelf ? (
                                 <span className="text-muted-foreground text-xs"> {t('admin.youTag')}</span>
                               ) : null}
@@ -421,6 +509,16 @@ export default function UsersView() {
                                 >
                                   <ShieldCheck className="size-3" aria-hidden />
                                   {t('manager.superAdmin')}
+                                </Badge>
+                              ) : null}
+                              {isDeleted ? (
+                                <Badge
+                                  variant="outline"
+                                  className="gap-1 border-destructive/30 bg-destructive/10 text-[10px] font-semibold text-destructive"
+                                  title={t('admin.deletedOn', { date: formatDate(u.deletedAt!) })}
+                                >
+                                  <Trash2 className="size-3" aria-hidden />
+                                  {t('admin.deletedBadge')}
                                 </Badge>
                               ) : null}
                             </div>
@@ -461,7 +559,11 @@ export default function UsersView() {
                         )}
                       </TableCell>
                       <TableCell>
-                        {isSelf ? (
+                        {isDeleted ? (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            {t('admin.deletedBadge')}
+                          </Badge>
+                        ) : isSelf ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <span className="inline-flex">
@@ -493,23 +595,39 @@ export default function UsersView() {
                         {formatDate(u.createdAt)}
                       </TableCell>
                       <TableCell className="text-end">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-11 text-muted-foreground"
-                              aria-label={t('admin.actionsFor', { name: u.name })}
-                            >
-                              <MoreHorizontal />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openEdit(u)}>
-                              <Pencil /> {t('common.edit')}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        {isDeleted ? (
+                          <span className="text-muted-foreground" aria-hidden>
+                            —
+                          </span>
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-11 text-muted-foreground"
+                                aria-label={t('admin.actionsFor', { name: u.name })}
+                              >
+                                <MoreHorizontal />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEdit(u)}>
+                                <Pencil /> {t('common.edit')}
+                              </DropdownMenuItem>
+                              {/* r34: delete — protected rows (self / manager /
+                                  developer) never show it; server re-guards */}
+                              {!deleteBlocked ? (
+                                <DropdownMenuItem
+                                  className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                                  onClick={() => setDeleting(u)}
+                                >
+                                  <Trash2 /> {t('admin.deleteUser')}
+                                </DropdownMenuItem>
+                              ) : null}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -523,6 +641,45 @@ export default function UsersView() {
       {/* R19: people roster — the actual humans behind each account,
           with per-person activity stats (checks / moves / actions) */}
       <PeopleRoster users={users} />
+
+      {/* r34: delete-user confirmation — mode is decided server-side by
+          the account's operational history (permanent vs archive) */}
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleting(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="size-5 text-destructive" aria-hidden />
+              {t('admin.deleteUserTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('admin.deleteUserDesc', { name: deleting?.name ?? '' })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <p className="rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+            {t('admin.deleteUserHistoryNote')}
+          </p>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive"
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault() // keep the dialog open until the mutation settles
+                if (deleting) deleteMutation.mutate(deleting)
+              }}
+            >
+              {deleteMutation.isPending ? t('admin.saving') : t('admin.deleteUserConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Create / edit dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>

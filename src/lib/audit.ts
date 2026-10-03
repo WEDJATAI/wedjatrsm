@@ -23,9 +23,14 @@ export const AUDIT_ACTIONS = [
   'user.create',
   'user.update',
   'user.delete',
+  // r34: delete-user — permanent removal vs archive-tombstone (history kept)
+  'user.hardDelete',
+  'user.archiveDelete',
   'role.create',
   'role.update',
   'role.delete',
+  // r34: permanent role removal (no users assigned)
+  'role.hardDelete',
   // R19: person-level tracking — who is using each account
   'person.create',
   'person.update',

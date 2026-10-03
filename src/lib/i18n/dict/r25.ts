@@ -59,6 +59,16 @@ export const r25Dict: DictPair = {
     'home.windowsAppDownload': 'Download .exe',
     'home.windowsAppDownloading': 'Downloading…',
     'home.windowsAppDone': 'Downloaded ({size}) — double-click it on the PC to install.',
+    // r34: native-download ready state (direct signed link + GitHub mirror)
+    'home.windowsAppStarted': 'Download started — if nothing happens, use the direct link',
+    'home.windowsAppReady':
+      'Download unlocked ({size}). If it didn’t start automatically, use the buttons below.',
+    'home.windowsAppSaveFile': 'Save RSM-Windows-Agent-Setup.exe ({size})',
+    'home.windowsAppMirror': 'Direct GitHub mirror (always available)',
+    'home.windowsAppCopyLink': 'Copy download link',
+    'home.windowsAppCopied': 'Link copied',
+    'home.windowsAppIframeHint':
+      'Tip: if this preview blocks downloads, click “Open in New Tab” above the preview panel and try the button again — or copy the link and paste it into a new tab.',
     'home.windowsAppHint':
       'Ask the manager for the download password. The agent enrolls itself and starts syncing immediately.',
   },
@@ -113,6 +123,16 @@ export const r25Dict: DictPair = {
     'home.windowsAppDownload': 'تحميل ملف exe',
     'home.windowsAppDownloading': 'جاري التحميل…',
     'home.windowsAppDone': 'تم التحميل ({size}) — دوس عليه دوبل كليك على الجهاز عشان يثبّت.',
+    // r34: حالة التحميل الجاهز (رابط موقّع مباشر + مرآة GitHub)
+    'home.windowsAppStarted': 'بدأ التحميل — لو ما حصلش شيء استخدم الرابط المباشر',
+    'home.windowsAppReady':
+      'تم فتح التحميل ({size}). لو ما بدأش تلقائيًا استخدم الأزرار بالأسفل.',
+    'home.windowsAppSaveFile': 'احفظ RSM-Windows-Agent-Setup.exe ({size})',
+    'home.windowsAppMirror': 'مرآة GitHub المباشرة (متاحة دائمًا)',
+    'home.windowsAppCopyLink': 'نسخ رابط التحميل',
+    'home.windowsAppCopied': 'تم نسخ الرابط',
+    'home.windowsAppIframeHint':
+      'ملاحظة: لو المعاينة تمنع التحميل، اضغط «Open in New Tab» فوق لوحة المعاينة وحاول تاني — أو انسخ الرابط وافتحه في تاب جديد.',
     'home.windowsAppHint':
       'اطلب كلمة سر التحميل من المدير. الوكيل يسجّل نفسه ويبدأ المزامنة فورًا.',
   },

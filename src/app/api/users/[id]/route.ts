@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { ROLES } from '@/lib/constants'
+import { deletedAtFromEmail, isDeletedEmail, tombstoneEmail } from '@/lib/user-deletion'
 
 // Never expose passwordHash in responses.
 const USER_SAFE_SELECT = {
@@ -58,6 +60,8 @@ function serializeUser(user: UserRowWithRole) {
     isSuperAdmin: user.isSuperAdmin,
     hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
+    // r34: derived archive-deletion marker (null for live users)
+    deletedAt: deletedAtFromEmail(user.email),
     // R19: people registered under this account
     people: user.people,
   }
@@ -96,6 +100,146 @@ async function requireActiveRole(roleId: number): Promise<void> {
     select: { id: true },
   })
   if (!roleRecord) throw new ApiError('Role not found', 400)
+}
+
+/**
+ * r34: delete a user account — the safe restaurant way.
+ *
+ * Two modes, chosen by the account's operational history:
+ *
+ * 1. PERMANENT — the account has NO history anywhere (no orders served,
+ *    no attendance, no cash drawer sessions/entries, no waste logs, no
+ *    issued checks through its persons): the row (and its persons, which
+ *    cascade) is hard-deleted. Persons are deactivated first so the
+ *    reconcile delta (Person rides rsm-hybrid/1) marks them inactive on
+ *    the cloud side before they vanish locally.
+ *
+ * 2. ARCHIVED — the account HAS history: financial records must survive.
+ *    The row stays (name kept → old reports stay readable) but the
+ *    account is tombstoned: inactive, PIN cleared, password randomized,
+ *    email replaced by a unique `deleted.<id>.<epoch>@deleted.rsm` marker
+ *    (frees the original address). The UI hides tombstones behind a
+ *    “show deleted” toggle; login is impossible.
+ *
+ * Guards: an admin can never delete their own account, the manager
+ * (super admin) or the developer account — same protection as PUT.
+ * Audit: 'user.hardDelete' / 'user.archiveDelete' with full counts.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const session = await requireAuth(req, ['admin', 'users'])
+    const { id } = await params
+    const userId = Number(id)
+    if (!Number.isInteger(userId)) {
+      throw new ApiError('Invalid user id', 400)
+    }
+
+    // NB: getSessionUser returns the DB row shape defensively (see PUT).
+    const rawSession = session as unknown as { userId?: number; id?: number }
+    const sessionUserId = rawSession.userId ?? rawSession.id
+
+    if (userId === sessionUserId) {
+      throw new ApiError('You cannot delete your own account', 400)
+    }
+
+    const existing = await db.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isSuperAdmin: true,
+      },
+    })
+    if (!existing) throw new ApiError('User not found', 404)
+
+    if (existing.isSuperAdmin) {
+      throw new ApiError('The manager account cannot be deleted', 403)
+    }
+    if (existing.role === 'developer') {
+      throw new ApiError('The developer account cannot be deleted', 403)
+    }
+    if (isDeletedEmail(existing.email)) {
+      throw new ApiError('This user is already deleted', 409)
+    }
+
+    // ── operational-history census ────────────────────────────────────
+    const [ordersServed, attendanceRows, cashSessions, cashEntries, wasteLogs, personRows] =
+      await Promise.all([
+        db.order.count({ where: { userId } }),
+        db.attendance.count({ where: { userId } }),
+        db.cashDrawerSession.count({ where: { userId } }),
+        db.cashDrawerEntry.count({ where: { userId } }),
+        db.wasteLog.count({ where: { userId } }),
+        db.person.findMany({
+          where: { userId },
+          select: { id: true, _count: { select: { issuedChecks: true } } },
+        }),
+      ])
+    const issuedChecks = personRows.reduce((sum, p) => sum + p._count.issuedChecks, 0)
+
+    // Persons are deactivated first in BOTH modes so the reconcile delta
+    // (Person is revision-aware, rides rsm-hybrid/1) carries the
+    // deactivation to the cloud even when the rows then vanish locally.
+    await db.person.updateMany({
+      where: { userId },
+      data: { active: false, updatedAt: new Date() },
+    })
+
+    const counts = {
+      ordersServed,
+      attendanceRows,
+      cashSessions,
+      cashEntries,
+      wasteLogs,
+      issuedChecks,
+      persons: personRows.length,
+    }
+    const hasHistory =
+      ordersServed + attendanceRows + cashSessions + cashEntries + wasteLogs + issuedChecks > 0
+
+    if (!hasHistory) {
+      // ── permanent delete (persons cascade — they carry no checks) ──
+      await db.user.delete({ where: { id: userId } })
+      await logAudit({
+        user: session,
+        action: 'user.hardDelete',
+        entity: 'user',
+        entityId: userId,
+        details: `Permanently deleted user ${existing.name} (${existing.email}) — no operational history (persons released: ${personRows.length})`,
+      })
+      return NextResponse.json({ deleted: true, mode: 'permanent' as const, counts })
+    }
+
+    // ── archive delete — history preserved, login revoked ──
+    await db.user.update({
+      where: { id: userId },
+      data: {
+        active: false,
+        pin: null,
+        passwordHash: await hashPassword(randomUUID()),
+        email: tombstoneEmail(userId),
+      },
+    })
+    await logAudit({
+      user: session,
+      action: 'user.archiveDelete',
+      entity: 'user',
+      entityId: userId,
+      details:
+        `Archive-deleted user ${existing.name} (${existing.email}) — history preserved ` +
+        `(orders ${ordersServed}, attendance ${attendanceRows}, cash sessions ${cashSessions}, ` +
+        `cash entries ${cashEntries}, waste ${wasteLogs}, issued checks ${issuedChecks}, ` +
+        `persons deactivated ${personRows.length}); login revoked, email freed`,
+    })
+    return NextResponse.json({ deleted: true, mode: 'archived' as const, counts })
+  } catch (err) {
+    return errorResponse(err)
+  }
 }
 
 export async function PUT(

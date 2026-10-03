@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { ApiError, derivePermissions, errorResponse, hashPassword, requireAuth } from '@/lib/auth'
 import { logAudit } from '@/lib/audit'
 import { ROLES } from '@/lib/constants'
+import { deletedAtFromEmail } from '@/lib/user-deletion'
 
 // Never expose passwordHash in responses.
 const USER_SAFE_SELECT = {
@@ -58,6 +59,8 @@ function serializeUser(user: UserRowWithRole) {
     isSuperAdmin: user.isSuperAdmin,
     hourlyRate: user.hourlyRate,
     createdAt: user.createdAt,
+    // r34: derived archive-deletion marker (null for live users)
+    deletedAt: deletedAtFromEmail(user.email),
     // R19: people registered under this account (all states — the admin
     // view manages the roster; login/switcher filters to active)
     people: user.people,

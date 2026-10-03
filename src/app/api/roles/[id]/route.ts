@@ -131,3 +131,52 @@ export async function PUT(
     return errorResponse(err)
   }
 }
+
+/**
+ * r34: permanently delete a custom role.
+ *
+ * Blocked with 409 while ANY user is still assigned to the role — the
+ * users' logins depend on it (role switch shows "Role not found"
+ * otherwise). Reassign or deactivate instead in that case.
+ *
+ * NB: rsm-hybrid/1 carries no delete events — the cloud copy of an
+ * unused role remains as an inert, user-less row (same class as the
+ * documented September artifacts). It cannot affect anything: no user
+ * references it locally after the delete.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const session = await requireAuth(req, ['admin', 'roles'])
+    const { id } = await params
+    const roleId = parseIdParam(id)
+
+    const existing = await db.customRole.findUnique({
+      where: { id: roleId },
+      select: { id: true, name: true },
+    })
+    if (!existing) throw new ApiError('Role not found', 404)
+
+    const assignedUsers = await db.user.count({ where: { roleId } })
+    if (assignedUsers > 0) {
+      throw new ApiError(
+        `Role is assigned to ${assignedUsers} user${assignedUsers === 1 ? '' : 's'} — reassign them first (or deactivate the role)`,
+        409,
+      )
+    }
+
+    await db.customRole.delete({ where: { id: roleId } })
+    await logAudit({
+      user: session,
+      action: 'role.hardDelete',
+      entity: 'role',
+      entityId: roleId,
+      details: `Permanently deleted role ${existing.name} (no users assigned)`,
+    })
+    return NextResponse.json({ deleted: true })
+  } catch (err) {
+    return errorResponse(err)
+  }
+}
