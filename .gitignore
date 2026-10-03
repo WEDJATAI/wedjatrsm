@@ -86,3 +86,6 @@ server.log
 
 # R23: production secrets saved for ops reference — NEVER track
 /.zscripts/prod-*.txt
+
+# r32: desktop agent build artifacts (97MB self-contained executables — never track)
+/agent-desktop/dist/

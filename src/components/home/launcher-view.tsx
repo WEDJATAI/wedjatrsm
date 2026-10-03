@@ -55,6 +55,7 @@ import { cn } from '@/lib/utils'
 import type { Order, SessionUser } from '@/lib/types'
 import { ManagerPinDialog } from '@/components/auth/manager-pin-dialog'
 import { DeveloperPinDialog } from '@/components/auth/developer-pin-dialog'
+import { WindowsDownloadDialog, WindowsLogo } from '@/components/home/windows-download-dialog'
 
 // ── warm palette (deterministic per module; literals so Tailwind sees them)
 type TileDef = {
@@ -284,6 +285,10 @@ export default function LauncherView({
   }
   const showDevPinBanner = onDefaultDevPin && !devPinDialogOpen
 
+  // ── r32: Windows 10 agent download (password-gated .exe — installs +
+  // two-way syncs with the 5-cloud stack) ──
+  const [windowsOpen, setWindowsOpen] = useState(false)
+
   const badges: Record<string, number> = {
     openOrders: openOrdersCount,
     pendingItems: pendingItemsCount,
@@ -345,6 +350,24 @@ export default function LauncherView({
                 <div className="text-3xl font-bold tabular-nums leading-none sm:text-4xl">{clockText}</div>
                 <p className="mt-1 text-xs text-muted-foreground">{t('home.tapToStart')}</p>
               </div>
+              {/* r32: Windows 10 agent — the downloadable .exe icon */}
+              <button
+                type="button"
+                onClick={() => {
+                  sndTap()
+                  haptic(8)
+                  setWindowsOpen(true)
+                }}
+                aria-label={t('home.windowsAppTitle')}
+                title={t('home.windowsAppTitle')}
+                className={cn(
+                  'flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-muted-foreground transition hover:bg-accent hover:text-foreground active:scale-95',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                <WindowsLogo className="size-4" aria-hidden />
+                <span className="hidden sm:inline">{t('home.windowsApp')}</span>
+              </button>
               {/* R27: the manager's own PIN tool — always one tap away */}
               {isManager && (
                 <button
@@ -507,6 +530,9 @@ export default function LauncherView({
       {isDeveloper && (
         <DeveloperPinDialog open={devPinDialogOpen} onOpenChange={handleDevPinDialogChange} />
       )}
+
+      {/* r32: Windows 10 agent download dialog (password-gated .exe) */}
+      <WindowsDownloadDialog open={windowsOpen} onOpenChange={setWindowsOpen} />
     </section>
   )
 }

@@ -387,6 +387,19 @@ export const posDict: DictPair = {
     'pos.pinPlaceholder': '6-digit PIN',
     'pos.pinConfirm': 'Remove item',
     'pos.pinWrong': 'Wrong PIN',
+
+    // r32: revoke a payment after it was made (cashier PIN + reason)
+    'pos.revokePayment': 'Revoke payment',
+    'pos.revokeTitle': 'Revoke this payment',
+    'pos.revokeDescription':
+      'Order #{order} ({table}) — voids the payment of {amount}, marks the check as revoked and reverses the money. This cannot be undone.',
+    'pos.revokeReasonLabel': 'Reason for revocation (required)',
+    'pos.revokeReasonPlaceholder': 'e.g. wrong amount entered, wrong table, card machine error…',
+    'pos.revokePinLabel': 'Cashier PIN authorization',
+    'pos.revokeHint':
+      'The 6-digit cashier PIN and the reason are recorded in the activity log.',
+    'pos.revokeConfirm': 'Revoke payment',
+    'pos.revokeDoneToast': 'Payment revoked — order #{id} ({amount}) authorized by {by}',
   },
   ar: {
     // floor / tables
@@ -761,5 +774,17 @@ export const posDict: DictPair = {
     'pos.deliveryPhoneInvalid': 'أدخل رقم هاتف صحيحًا (من 5 إلى 20 خانة)',
     'pos.deliveryStart': 'بدء الطلب',
     'pos.openDeliveries': 'طلبات الدليفري المفتوحة',
+
+    // r32: إلغاء الدفع بعد الاستلام (رمز الكاشير + السبب)
+    'pos.revokePayment': 'إلغاء الدفع',
+    'pos.revokeTitle': 'إلغاء دفع هذه الفاتورة',
+    'pos.revokeDescription':
+      'طلب #{order} ({table}) — بيلغي دفع مبلغ {amount} ويعلّم الفاتورة ملغاة ويرجّع الفلوس. مفيش رجوع في الخطوة دي.',
+    'pos.revokeReasonLabel': 'سبب الإلغاء (مطلوب)',
+    'pos.revokeReasonPlaceholder': 'مثال: المبلغ غلط، الطاولة غلط، عطل في ماكينة الكارت…',
+    'pos.revokePinLabel': 'تفويض برمز الكاشير',
+    'pos.revokeHint': 'رمز الكاشير المكون من 6 أرقام + السبب بيتسجلوا في سجل النشاط.',
+    'pos.revokeConfirm': 'إلغاء الدفع',
+    'pos.revokeDoneToast': 'تم إلغاء الدفع — طلب #{id} ({amount}) بتفويض {by}',
   },
 }

@@ -65,6 +65,8 @@ export const AUDIT_ACTIONS = [
   'order.externalCreate',
   // R17: refunds — negative-payment issuance against paid checks
   'order.refund',
+  // r32: revoke a payment after it was made (cashier PIN + reason)
+  'order.revoke',
   'invoice.export',
   // R14: data safety — consistent snapshots (auto/manual/download)
   'backup.auto',
@@ -76,6 +78,7 @@ export const AUDIT_ACTIONS = [
   'sync.push',
   'sync.settings',
   'desktop.package',
+  'desktop.agentDownload',
   // R17: Foodics/Odoo-level modules — purchasing, counts, waste, promos, payroll
   'supplier.create',
   'supplier.update',
@@ -104,6 +107,7 @@ export const AUDIT_ACTIONS = [
   // R30: local-first hybrid sync — device registry + staged restore
   'hybrid.deviceCreate',
   'hybrid.deviceUpdate',
+  'hybrid.deviceSelfEnroll',
   'backup.restoreStage',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

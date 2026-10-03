@@ -45,6 +45,22 @@ export const r25Dict: DictPair = {
     'kds.soundOn': 'Sound on — rings when a new order arrives',
     'kds.soundOff': 'Sound off',
     'kds.newOrderAlert': 'New order!',
+
+    // r32: Windows 10 agent download (password-gated .exe from the Launcher)
+    'home.windowsApp': 'Windows App',
+    'home.windowsAppTitle': 'Download for Windows 10',
+    'home.windowsAppDesc':
+      'A single .exe that installs itself on the PC and keeps your data in two-way sync with the cloud — GitHub, Vercel, Turso, Neon and Inngest — automatically, ready to work right away.',
+    'home.windowsAppFeatureOne': 'Installs itself: shortcuts, auto-start with Windows, zero dependencies.',
+    'home.windowsAppFeatureTwo': 'Two-way sync every 30 seconds + a live dashboard at 127.0.0.1:9753.',
+    'home.windowsAppFeatureThree':
+      'Connects to GitHub · Vercel · Turso · Neon · Inngest and shows their live status.',
+    'home.windowsAppPasswordLabel': 'Download password',
+    'home.windowsAppDownload': 'Download .exe',
+    'home.windowsAppDownloading': 'Downloading…',
+    'home.windowsAppDone': 'Downloaded ({size}) — double-click it on the PC to install.',
+    'home.windowsAppHint':
+      'Ask the manager for the download password. The agent enrolls itself and starts syncing immediately.',
   },
   ar: {
     // Launcher Home — greeting + status
@@ -83,5 +99,21 @@ export const r25Dict: DictPair = {
     'kds.soundOn': 'الصوت شغال — بيرن لما ييجي أوردر جديد',
     'kds.soundOff': 'الصوت مقفول',
     'kds.newOrderAlert': 'أوردر جديد!',
+
+    // r32: تحميل وكيل ويندوز 10 (ملف exe بكلمة سر من الشاشة الرئيسية)
+    'home.windowsApp': 'تطبيق ويندوز',
+    'home.windowsAppTitle': 'تحميل نسخة ويندوز 10',
+    'home.windowsAppDesc':
+      'ملف exe واحد يثبّت نفسه على الجهاز ويزامن بياناتك في الاتجاهين مع السحابة — GitHub وVercel وTurso وNeon وInngest — تلقائيًا، وجاهز للشغل على طول.',
+    'home.windowsAppFeatureOne': 'يثبّت نفسه: اختصارات وتشغيل تلقائي مع ويندوز، من غير أي متطلبات.',
+    'home.windowsAppFeatureTwo': 'مزامنة في الاتجاهين كل 30 ثانية + لوحة حالة حية على 127.0.0.1:9753.',
+    'home.windowsAppFeatureThree':
+      'يتصل بـ GitHub وVercel وTurso وNeon وInngest ويعرض حالتهم لحظة بلحظة.',
+    'home.windowsAppPasswordLabel': 'كلمة سر التحميل',
+    'home.windowsAppDownload': 'تحميل ملف exe',
+    'home.windowsAppDownloading': 'جاري التحميل…',
+    'home.windowsAppDone': 'تم التحميل ({size}) — دوس عليه دوبل كليك على الجهاز عشان يثبّت.',
+    'home.windowsAppHint':
+      'اطلب كلمة سر التحميل من المدير. الوكيل يسجّل نفسه ويبدأ المزامنة فورًا.',
   },
 }

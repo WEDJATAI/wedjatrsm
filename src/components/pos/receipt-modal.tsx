@@ -1,6 +1,7 @@
 'use client'
 
-import { Check, Printer } from 'lucide-react'
+import { useState } from 'react'
+import { Ban, Check, Printer } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -15,6 +16,7 @@ import { paperCss } from '@/lib/print'
 import { useAppSettings } from '@/lib/use-settings'
 import type { Order } from '@/lib/types'
 import { escapeHtml, round2 } from './pos-utils'
+import { RevokeDialog } from './revoke-dialog'
 
 type ReceiptModalProps = {
   order: Order
@@ -218,6 +220,10 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose, sessi
   const paidStamp = bothLabels('pos.paidStamp')
   const deferredStamp = bothLabels('pos.deferredStamp')
 
+  // r32: revoke the just-made payment (cashier PIN + reason)
+  const [revokeOpen, setRevokeOpen] = useState(false)
+  const canRevoke = order.status === 'paid'
+
   const handlePrint = () => {
     const html = buildReceiptHtml(model, restaurantName, restaurantNameAr, isRTL)
     const w = window.open('', '_blank', 'width=380,height=640')
@@ -249,7 +255,8 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose, sessi
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-[380px]">
         <DialogHeader className="sr-only">
           <DialogTitle>
@@ -383,6 +390,17 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose, sessi
           <p className="text-center">{bilingualLabel('pos.thankYouReceipt')}</p>
         </div>
 
+        {/* r32: revoke the payment that was just made (cashier PIN + reason) */}
+        {canRevoke && (
+          <Button
+            variant="ghost"
+            className="h-10 w-full rounded-xl text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setRevokeOpen(true)}
+          >
+            <Ban className="size-4" aria-hidden /> {t('pos.revokePayment')}
+          </Button>
+        )}
+
         <div className="flex gap-2">
           <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={handlePrint}>
             <Printer /> {t('common.print')}
@@ -396,6 +414,17 @@ export default function ReceiptModal({ order, open, onOpenChange, onClose, sessi
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* r32: the revoke flow lives on top of the receipt (PIN pad + reason) */}
+    {canRevoke && (
+      <RevokeDialog
+        order={order}
+        open={revokeOpen}
+        onOpenChange={setRevokeOpen}
+        onRevoked={() => onClose()}
+      />
+    )}
+    </>
   )
 }
 
