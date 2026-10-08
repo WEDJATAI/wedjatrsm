@@ -1,0 +1,14 @@
+═══ R51 DEPLOYMENT EVIDENCE — 2026-10-08T20:47:17Z ═══
+
+── GITHUB (WEDJATAI/wedjatrsm) ──
+main HEAD: 07c14b55 | RSM Platform — r51: Lilo menu v11 live (dedup 4 · renames 14 · reactivate 13 · moves 13 · 
+protection: enforce_admins=True allow_force_pushes=False allow_deletions=False
+
+── VERCEL (wedjatrsm) ──
+prod: READY | commit: 07c14b55 | url: wedjatrsm-8ybln9rzz-tonsy.vercel.app
+
+── NEON / TURSO / INNGEST / AI ──
+Neon: 14/14 v11 checks passed (users 5, products 331, active sellable 200) — see scripts/r51/neon-v11-verify.ts
+Turso: full replica refresh OK — 35 tables, 1759 rows, exact parity (FK-order regression FIXED this round)
+Inngest: auth wall healthy (401), mazaj jobs firing every 15 min (inventory) + hourly (catalog)
+AI: 5/5 PASS — fallback chain live (openrouter+nvidia healthy; groq/gemini/hf dead keys skipped by the chain)

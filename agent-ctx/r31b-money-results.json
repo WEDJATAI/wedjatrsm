@@ -1,0 +1,148 @@
+{
+  "generatedAt": "2026-10-02T11:14:41.370Z",
+  "stockCountCleanup": {
+    "status": 500,
+    "ms": 10334,
+    "after": null
+  },
+  "money": [
+    {
+      "id": 108,
+      "status": "paid",
+      "stored": {
+        "subtotal": 148,
+        "discount": 0,
+        "tax": 20.72,
+        "serviceTax": 17.76,
+        "total": 186.48,
+        "paidAmount": 0,
+        "remaining": 186.48
+      },
+      "calc": {
+        "subtotal": 0,
+        "base": 0,
+        "tax": 0,
+        "serviceTax": 0,
+        "total": 0
+      },
+      "payments": {
+        "count": 0,
+        "grossPaid": 0,
+        "refunds": 0,
+        "netPaid": 0,
+        "tips": 0
+      },
+      "checks": {
+        "subtotalMatch": false,
+        "taxMatch": false,
+        "serviceTaxMatch": false,
+        "totalMatch": false,
+        "paymentsMatchTotal": false
+      },
+      "lines": [],
+      "paymentRows": []
+    },
+    {
+      "id": 126,
+      "status": "paid",
+      "stored": {
+        "subtotal": 315,
+        "discount": 0,
+        "tax": 44.1,
+        "serviceTax": 37.8,
+        "total": 396.9,
+        "paidAmount": 0,
+        "remaining": 396.9
+      },
+      "calc": {
+        "subtotal": 0,
+        "base": 0,
+        "tax": 0,
+        "serviceTax": 0,
+        "total": 0
+      },
+      "payments": {
+        "count": 0,
+        "grossPaid": 0,
+        "refunds": 0,
+        "netPaid": 0,
+        "tips": 0
+      },
+      "checks": {
+        "subtotalMatch": false,
+        "taxMatch": false,
+        "serviceTaxMatch": false,
+        "totalMatch": false,
+        "paymentsMatchTotal": false
+      },
+      "lines": [],
+      "paymentRows": []
+    },
+    {
+      "id": 127,
+      "status": "paid",
+      "stored": {
+        "subtotal": 297,
+        "discount": 0,
+        "tax": 41.58,
+        "serviceTax": 35.64,
+        "total": 374.22,
+        "paidAmount": 0,
+        "remaining": 374.22
+      },
+      "calc": {
+        "subtotal": 0,
+        "base": 0,
+        "tax": 0,
+        "serviceTax": 0,
+        "total": 0
+      },
+      "payments": {
+        "count": 0,
+        "grossPaid": 0,
+        "refunds": 0,
+        "netPaid": 0,
+        "tips": 0
+      },
+      "checks": {
+        "subtotalMatch": false,
+        "taxMatch": false,
+        "serviceTaxMatch": false,
+        "totalMatch": false,
+        "paymentsMatchTotal": false
+      },
+      "lines": [],
+      "paymentRows": []
+    }
+  ],
+  "pinVisibility": {
+    "customStatus": 200,
+    "customPinNonNull": 0,
+    "customUserCount": 9,
+    "adminPinNonNull": 9,
+    "adminUserCount": 9,
+    "customShowsEmail": true
+  },
+  "heavyLatency": {
+    "/api/audit": {
+      "status": 200,
+      "ms": 16
+    },
+    "/api/reports/zreport": {
+      "status": 200,
+      "ms": 81
+    },
+    "/api/reports/payroll": {
+      "status": 200,
+      "ms": 50
+    },
+    "/api/reports/sales": {
+      "status": 200,
+      "ms": 47
+    },
+    "/api/reports/menu-engineering": {
+      "status": 200,
+      "ms": 15
+    }
+  }
+}

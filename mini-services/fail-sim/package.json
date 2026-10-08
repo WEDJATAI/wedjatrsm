@@ -1,0 +1,9 @@
+{
+  "name": "rsm-fail-sim",
+  "version": "1.0.0",
+  "description": "P6 failure-simulation endpoints: :3101 always-500 cloud, :3102 never-responding blackhole — for hybrid engine failure-path testing.",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  }
+}

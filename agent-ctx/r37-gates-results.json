@@ -1,0 +1,325 @@
+{
+  "summary": {
+    "ranAt": "2026-10-04T06:32:32.439Z",
+    "wallSec": 130,
+    "total": 35,
+    "passed": 33,
+    "failed": 2,
+    "failures": [
+      {
+        "phase": "D",
+        "probe": "12 rapid wrong logins",
+        "expect": "429 by attempt ≤ 11",
+        "status": 401,
+        "ms": 6,
+        "pass": false,
+        "note": "never throttled"
+      },
+      {
+        "phase": "E",
+        "probe": "GET floorplan 999999999",
+        "expect": "404",
+        "status": 405,
+        "ms": 696,
+        "pass": false
+      }
+    ]
+  },
+  "rows": [
+    {
+      "phase": "A",
+      "probe": "custom GET /ai/briefing",
+      "expect": "200",
+      "status": 200,
+      "ms": 25216,
+      "pass": true,
+      "note": "was 403 pre-r37 (dashboard perm)"
+    },
+    {
+      "phase": "A",
+      "probe": "custom GET /reports/sales",
+      "expect": "200",
+      "status": 200,
+      "ms": 253,
+      "pass": true
+    },
+    {
+      "phase": "A",
+      "probe": "custom GET /reports/forecast",
+      "expect": "200",
+      "status": 200,
+      "ms": 157,
+      "pass": true
+    },
+    {
+      "phase": "A",
+      "probe": "custom GET /inventory/low-stock",
+      "expect": "200",
+      "status": 200,
+      "ms": 60,
+      "pass": true
+    },
+    {
+      "phase": "A",
+      "probe": "custom POST /modifier-groups (junk)",
+      "expect": "400 (gate passed)",
+      "status": 400,
+      "ms": 124,
+      "pass": true,
+      "note": "was 403 pre-r37 (products perm)"
+    },
+    {
+      "phase": "A",
+      "probe": "waiter POST /modifier-groups",
+      "expect": "403",
+      "status": 403,
+      "ms": 19,
+      "pass": true,
+      "note": "waiter lacks products perm"
+    },
+    {
+      "phase": "A",
+      "probe": "unauth POST /modifier-groups",
+      "expect": "401",
+      "status": 401,
+      "ms": 17,
+      "pass": true
+    },
+    {
+      "phase": "A",
+      "probe": "waiter GET /ai/briefing",
+      "expect": "403",
+      "status": 403,
+      "ms": 25,
+      "pass": true
+    },
+    {
+      "phase": "B",
+      "probe": "digest no secret",
+      "expect": "401",
+      "status": 401,
+      "ms": 24,
+      "pass": true
+    },
+    {
+      "phase": "B",
+      "probe": "turso-sync no secret",
+      "expect": "401",
+      "status": 401,
+      "ms": 237,
+      "pass": true
+    },
+    {
+      "phase": "B",
+      "probe": "turso-sync correct secret",
+      "expect": "200",
+      "status": 200,
+      "ms": 49740,
+      "pass": true,
+      "note": "idempotent replica refresh"
+    },
+    {
+      "phase": "B",
+      "probe": "turso-sync wrong secret",
+      "expect": "401",
+      "status": 401,
+      "ms": 7,
+      "pass": true
+    },
+    {
+      "phase": "B",
+      "probe": "turso-sync ?key= query param",
+      "expect": "200",
+      "status": 200,
+      "ms": 49756,
+      "pass": true,
+      "note": "manual-trigger path"
+    },
+    {
+      "phase": "B",
+      "probe": "digest correct secret",
+      "expect": "200",
+      "status": 200,
+      "ms": 14,
+      "pass": true,
+      "note": "idempotent by date"
+    },
+    {
+      "phase": "C",
+      "probe": "windows unauth POST",
+      "expect": "401",
+      "status": 401,
+      "ms": 150,
+      "pass": true
+    },
+    {
+      "phase": "C",
+      "probe": "windows wrong password",
+      "expect": "403",
+      "status": 403,
+      "ms": 616,
+      "pass": true,
+      "note": "600ms penalty applies"
+    },
+    {
+      "phase": "C",
+      "probe": "windows correct password",
+      "expect": "200 + signed URL",
+      "status": 200,
+      "ms": 12,
+      "pass": true,
+      "note": "grant issued (full artifact download verified in r34-r36 E2E)"
+    },
+    {
+      "phase": "C",
+      "probe": "windows GET without token",
+      "expect": "401",
+      "status": 401,
+      "ms": 9,
+      "pass": true
+    },
+    {
+      "phase": "C",
+      "probe": "windows GET with valid token",
+      "expect": "200 or 302→mirror",
+      "status": 302,
+      "ms": 0,
+      "pass": true,
+      "note": "→ GitHub mirror (dist not built locally)"
+    },
+    {
+      "phase": "C",
+      "probe": "macos unauth POST",
+      "expect": "401",
+      "status": 401,
+      "ms": 140,
+      "pass": true
+    },
+    {
+      "phase": "C",
+      "probe": "macos wrong password",
+      "expect": "403",
+      "status": 403,
+      "ms": 611,
+      "pass": true,
+      "note": "600ms penalty applies"
+    },
+    {
+      "phase": "C",
+      "probe": "macos correct password",
+      "expect": "200 + signed URL",
+      "status": 200,
+      "ms": 12,
+      "pass": true,
+      "note": "grant issued (full artifact download verified in r34-r36 E2E)"
+    },
+    {
+      "phase": "C",
+      "probe": "macos GET without token",
+      "expect": "401",
+      "status": 401,
+      "ms": 5,
+      "pass": true
+    },
+    {
+      "phase": "C",
+      "probe": "macos GET with valid token",
+      "expect": "200 or 302→mirror",
+      "status": 302,
+      "ms": 0,
+      "pass": true,
+      "note": "→ GitHub mirror (dist not built locally)"
+    },
+    {
+      "phase": "C",
+      "probe": "windows token on macos route",
+      "expect": "401",
+      "status": 401,
+      "ms": 5,
+      "pass": true,
+      "note": "purpose-scoped tokens"
+    },
+    {
+      "phase": "C",
+      "probe": "macos token on windows route",
+      "expect": "401",
+      "status": 401,
+      "ms": 5,
+      "pass": true,
+      "note": "purpose-scoped tokens"
+    },
+    {
+      "phase": "D",
+      "probe": "12 rapid wrong logins",
+      "expect": "429 by attempt ≤ 11",
+      "status": 401,
+      "ms": 6,
+      "pass": false,
+      "note": "never throttled"
+    },
+    {
+      "phase": "E",
+      "probe": "GET order 999999999",
+      "expect": "404",
+      "status": 404,
+      "ms": 815,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "POST /orders empty body",
+      "expect": "400",
+      "status": 400,
+      "ms": 62,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "POST /orders malformed JSON",
+      "expect": "400",
+      "status": 400,
+      "ms": 8,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "SQLi-shaped order search",
+      "expect": "200 (sanitized)",
+      "status": 200,
+      "ms": 11,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "SQLi-shaped product search",
+      "expect": "200 (sanitized)",
+      "status": 200,
+      "ms": 149,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "invalid status filter",
+      "expect": "200 (fallback)",
+      "status": 400,
+      "ms": 10,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "pay nonexistent order",
+      "expect": "404",
+      "status": 404,
+      "ms": 751,
+      "pass": true
+    },
+    {
+      "phase": "E",
+      "probe": "GET floorplan 999999999",
+      "expect": "404",
+      "status": 405,
+      "ms": 696,
+      "pass": false
+    }
+  ]
+}

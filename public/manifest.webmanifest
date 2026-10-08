@@ -1,0 +1,33 @@
+{
+  "name": "Lilo Cafe & Restaurant — RMS",
+  "short_name": "RMS",
+  "description": "Restaurant management: POS with split payments, kitchen display, inventory, customers & loyalty, AI vision seating intelligence.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFFFFF",
+  "theme_color": "#714B67",
+  "lang": "en",
+  "dir": "auto",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

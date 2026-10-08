@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["iad1"],
+  "crons": [
+    { "path": "/api/cron/turso-sync", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/daily-digest", "schedule": "15 6 * * *" }
+  ]
+}
