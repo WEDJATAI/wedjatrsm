@@ -1,0 +1,24 @@
+R54 FIVE-PLATFORM DEPLOYMENT EVIDENCE — 2026-10-14 (Cairo) / 20:35Z
+════════════════════════════════════════════════════════════════
+COMMIT   : 6fb9576218 (single-commit invariant; root == HEAD == origin/main == tag platform-setup-v2)
+SUBJECT  : RSM Platform — r54: guided cash checkout (print invoice → amount received → auto change
+           → PAID receipt → post-payment tip recorder) + tip API + i18n EN/AR · r53: cafe location
+           on every identity surface · r52: splash guard + SW v3 · cross-plane divergence repaired
+GITHUB   : pushed (forced through relaxed protection window, then RESTORED+verified:
+           enforce_admins=true, allow_force_pushes=false, allow_deletions=false,
+           required_linear_history=true) · git:guard GREEN — no older git state exists.
+VERCEL   : production READY on 6fb9576 (wedjatrsm-7nwnh2hed-tonsy.vercel.app) in ~60s ·
+           prod URL http 200 in 1.08s · crons enabled (daily-digest 06:15 · turso-sync 03:00 UTC).
+NEON     : RW smoke ok · users=7 · FULL PARITY with local (orders 17/17, payments 20/20 byte-identical,
+           order_items 113/113, users 7/7, attendance 6/6, inventory 250/250, products 331/331
+           stock zero-divergence, tables 54/54) · engine 0 pending / 0 failed.
+TURSO    : replica refreshed on demand — ok=true, 35/35 tables exact parity, 2979 rows, 52.8s.
+INNGEST  : auth wall 401 (healthy) · signing key present · crons firing.
+HARMONY  : scripts/p13-harmony-check.ts — ALL CRITICAL PLATFORMS GREEN.
+REPAIR   : scripts/r54/e2e-repair.ts — E2E residue purged both planes; order 2201 cluster
+           (3496.50 dine-in + payment + 11 items + stock 771-787 + attendance) mirrored to local;
+           ghost payments 288/289 (7387.38 phantom) deleted everywhere; users 17/18 mirrored;
+           user-12 soft-delete mirrored; Payment/291 id-collision resolved via authoritative
+           supersede update (NOT delete — protects 2201's row on every device).
+RECOVERY : download/rsm-platform-database.db — 12,013,568 bytes, sha256 882beaf279cb…,
+           integrity ok, 0 FK violations (orders 17 / payments 20 / products 331 / users 7).

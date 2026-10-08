@@ -1,0 +1,1752 @@
+'use client'
+
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowLeftRight,
+  Ban,
+  Check,
+  CreditCard,
+  Loader2,
+  Minus,
+  Pencil,
+  Plus,
+  Printer,
+  Send,
+  ShieldAlert,
+  ShoppingBag,
+  StickyNote,
+  Trash2,
+  UserPlus2,
+  Users,
+  X,
+} from 'lucide-react'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import { toast } from 'sonner'
+import { apiFetch, fetcher } from '@/lib/api'
+import { COURSES, DELETE_PIN_LENGTH, SERVICE_TAX_RATE, TAX_RATE } from '@/lib/constants'
+import { formatCurrency, formatQty } from '@/lib/format'
+import { useI18n, localizedName } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
+import { bestPromotion, isPromoReason, type CartLine } from '@/lib/promotions'
+import type { Customer, Order, OrderItem, Product, PromotionDTO } from '@/lib/types'
+import { computeCartTotals, lineUnitPrice, modifierDeltaLabel, round2, type DraftItem } from './pos-utils'
+
+type CartPanelProps = {
+  order: Order | null
+  orderLoading?: boolean
+  draft: DraftItem[]
+  table: { id: number | null; name: string }
+  onDraftChange: (draft: DraftItem[]) => void
+  onSend: () => void
+  onPay: () => void
+  /** Open the pre-payment guest check (pos-view flushes the draft first). */
+  onPrintCheck?: () => void
+  onCancel: () => void
+  canCancel?: boolean
+  sending?: boolean
+  userRole?: string
+  /** R13: loyalty — draft-scoped customer (pos-view owns the state). */
+  draftCustomer?: Customer | null
+  onDraftCustomerChange?: (customer: Customer | null) => void
+  /** R17 promotions — the sellable catalog (pos-view's live query), used
+   *  to resolve productId → categoryId for the category-scoped promo preview. */
+  products?: Product[]
+}
+
+const STATUS_CHIP: Record<string, string> = {
+  new: 'bg-muted text-muted-foreground',
+  preparing: 'bg-amber-100 text-amber-700 animate-pulse',
+  ready: 'bg-success/15 text-success',
+  served: 'bg-muted/70 text-muted-foreground',
+}
+
+export default function CartPanel({
+  order,
+  orderLoading = false,
+  draft,
+  table,
+  onDraftChange,
+  onSend,
+  onPay,
+  onPrintCheck,
+  onCancel,
+  canCancel = false,
+  sending = false,
+  userRole,
+  draftCustomer = null,
+  onDraftCustomerChange,
+  products = [],
+}: CartPanelProps) {
+  const queryClient = useQueryClient()
+  const { t, lang } = useI18n()
+  const orderId = order?.id ?? null
+
+  const [editing, setEditing] = useState<DraftItem | null>(null)
+  const [editQty, setEditQty] = useState('1')
+  const [editNotes, setEditNotes] = useState('')
+  const [editCourse, setEditCourse] = useState('main')
+
+  const [discountOpen, setDiscountOpen] = useState(false)
+  const [discountTab, setDiscountTab] = useState<'percent' | 'fixed'>('percent')
+  const [percentInput, setPercentInput] = useState('')
+  const [fixedInput, setFixedInput] = useState('')
+  // R8: manager-approved discounts — justification + waiter PIN gate.
+  const [discountReason, setDiscountReason] = useState('')
+  const [discountReasonError, setDiscountReasonError] = useState(false)
+  const [discountPin, setDiscountPin] = useState('')
+
+  // ── PIN-gated item deletion state ─────────────────────────────────
+  // Sent items may only be removed with the admin's 6-digit PIN; the
+  // dialog stays open on a wrong PIN so the user can retry.
+  const [pinDialogItem, setPinDialogItem] = useState<OrderItem | null>(null)
+  const [pinInput, setPinInput] = useState('')
+  const [pinWrong, setPinWrong] = useState(false)
+
+  // ── Item transfer ("Move items") state ────────────────────────────
+  // moveQty holds a per-row quantity to move (default = the row's full
+  // quantity when selected); a partial value splits the row on the server —
+  // the classic "wrong check" fix (e.g. move just 1 of 3 Koshari).
+  const [moveMode, setMoveMode] = useState(false)
+  const [moveSelected, setMoveSelected] = useState<Set<number>>(() => new Set())
+  const [moveQty, setMoveQty] = useState<Record<number, number>>({})
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+
+  // ── R13: customer attach popover state ──────────────────────
+  const [customerOpen, setCustomerOpen] = useState(false)
+  const [customerQuery, setCustomerQuery] = useState('')
+  const [newCustomerMode, setNewCustomerMode] = useState(false)
+  const [newCustomerName, setNewCustomerName] = useState('')
+  const [newCustomerPhone, setNewCustomerPhone] = useState('')
+
+  const activeCustomer: Customer | null = order?.customer != null
+    ? {
+        id: order.customer.id,
+        name: order.customer.name,
+        phone: order.customer.phone ?? null,
+        visits: 0,
+        points: order.customer.points ?? 0,
+        totalSpent: 0,
+        lastVisitAt: null,
+        notes: null,
+        active: true,
+        createdAt: '',
+      }
+    : draftCustomer
+
+  const customerSearch = useQuery({
+    queryKey: ['customers', 'pos-search', customerQuery],
+    queryFn: () =>
+      fetcher<{ customers: Customer[] }>(
+        `/api/customers?q=${encodeURIComponent(customerQuery)}&limit=8`,
+      ),
+    enabled: customerOpen,
+    staleTime: 10_000,
+  })
+
+  // attach / detach on an EXISTING order (draft customers are held by
+  // pos-view and sent with the create payload)
+  const attachCustomer = useMutation({
+    mutationFn: (customerId: number | null) => {
+      if (orderId == null) throw new Error(t('pos.notSent'))
+      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        body: { customerId },
+      })
+    },
+    onSuccess: async ({ order: updated }) => {
+      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+      toast.success(
+        updated.customerId != null ? t('pos.customerAttached') : t('pos.customerDetached'),
+      )
+      setCustomerOpen(false)
+      setNewCustomerMode(false)
+      setNewCustomerName('')
+      setNewCustomerPhone('')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // quick-create from the POS (name + optional phone)
+  const createCustomer = useMutation({
+    mutationFn: () =>
+      apiFetch<{ customer: Customer }>('/api/customers', {
+        method: 'POST',
+        body: { name: newCustomerName, phone: newCustomerPhone || undefined },
+      }),
+    onSuccess: async ({ customer }) => {
+      toast.success(t('pos.customerSaved'))
+      if (orderId != null) {
+        attachCustomer.mutate(customer.id)
+      } else {
+        onDraftCustomerChange?.(customer)
+        setCustomerOpen(false)
+      }
+      setNewCustomerMode(false)
+      setNewCustomerName('')
+      setNewCustomerPhone('')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const totals = computeCartTotals(order, draft)
+  const noItems = (order?.items.length ?? 0) + draft.length === 0
+
+  // ── R17 promotions: live preview of the best automatic discount ──
+  // DISPLAY-ONLY: the promotion is (re)computed server-side at every order
+  // create / item mutation (lib/orders.ts recomputeTotals is authoritative);
+  // this preview never changes what the waiter sends. A failed promo fetch
+  // is non-fatal — the cart simply shows the plain totals.
+  const promosQuery = useQuery({
+    queryKey: ['promotions', 'active'],
+    queryFn: () => fetcher<{ promotions: PromotionDTO[] }>('/api/promotions?activeOnly=1'),
+    enabled: !noItems,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  // productId → categoryId (sent order lines don't embed categoryId; the
+  // POS catalog resolves it — products whose category is unknown simply
+  // only match whole-order promotions)
+  const productCategoryById = useMemo(() => {
+    const map = new Map<number, number | null>()
+    for (const p of products) map.set(p.id, p.categoryId ?? null)
+    return map
+  }, [products])
+
+  const promoCartLines = useMemo<CartLine[]>(() => {
+    const lines: CartLine[] = []
+    for (const item of order?.items ?? []) {
+      if (item.productId == null) continue
+      lines.push({
+        productId: item.productId,
+        categoryId: productCategoryById.get(item.productId) ?? null,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+      })
+    }
+    for (const d of draft) {
+      lines.push({
+        productId: d.productId,
+        categoryId: productCategoryById.get(d.productId) ?? null,
+        unitPrice: lineUnitPrice(d),
+        quantity: d.quantity,
+      })
+    }
+    return lines
+  }, [order, draft, productCategoryById])
+
+  // manager discount wins — promotions never stack on top of it
+  const managerDiscountActive =
+    (order?.discountReason ?? '').trim() !== '' &&
+    !isPromoReason(order?.discountReason) &&
+    (order?.discountAmount ?? 0) > 0
+
+  const promoPreview = useMemo(() => {
+    const promos = promosQuery.data?.promotions
+    if (!promos || promoCartLines.length === 0 || managerDiscountActive) return null
+    return bestPromotion(promos, promoCartLines, new Date())
+  }, [promosQuery.data, promoCartLines, managerDiscountActive])
+
+  // When the promo preview applies, the displayed discount/taxes mirror
+  // what the server will compute on send (same math as computeCartTotals).
+  const displayTotals = useMemo(() => {
+    if (promoPreview == null) return totals
+    const discount = round2(Math.min(promoPreview.discount, totals.subtotal))
+    const base = Math.max(0, round2(totals.subtotal - discount))
+    const tax = round2(base * TAX_RATE)
+    const serviceTax = round2(base * SERVICE_TAX_RATE)
+    return { ...totals, discount, tax, serviceTax, total: round2(base + tax + serviceTax) }
+  }, [totals, promoPreview])
+
+  // Open orders (for the move-items target picker) — only fetched while the
+  // picker dialog is open; the query key matches the floor's live query.
+  const { data: openOrdersData, isLoading: openOrdersLoading } = useQuery({
+    queryKey: ['orders', 'open'],
+    queryFn: () => fetcher<{ orders: Order[] }>('/api/orders?status=open'),
+    enabled: moveDialogOpen,
+  })
+  const otherOpenOrders = (openOrdersData?.orders ?? []).filter((o) => o.id !== orderId)
+
+  // ── Server mutations (sent items) ─────────────────────────────────
+  const markServed = useMutation({
+    mutationFn: (itemId: number) =>
+      apiFetch<{ item: OrderItem }>(`/api/order-items/${itemId}`, {
+        method: 'PUT',
+        body: { status: 'served' },
+      }),
+    onSuccess: async (data) => {
+      toast.success(
+        t('pos.markedServedToast', {
+          name: data.item.product
+            ? localizedName(data.item.product.name, data.item.product.nameAr, lang)
+            : t('pos.item'),
+        }),
+      )
+      await queryClient.invalidateQueries({ queryKey: ['pos-order'] })
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // Item removal is PIN-gated (PUT /api/orders/[id] { removeItemIds, removePin }):
+  // the dialog collects the 6-digit PIN and the API verifies it server-side
+  // (403 with a descriptive message on a wrong or missing PIN).
+  const removeItem = useMutation({
+    mutationFn: ({ itemId, pin }: { itemId: number; pin: string }) => {
+      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        body: { removeItemIds: [itemId], removePin: pin },
+      })
+    },
+    onSuccess: async ({ order: updated }) => {
+      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+      toast.success(t('pos.itemRemovedToast'))
+      closePinDialog()
+    },
+    onError: (err: Error) => {
+      // The API message is descriptive (403 wrong/missing PIN); the dialog
+      // stays open with the inline wrong-PIN hint so the user can retry.
+      toast.error(err.message)
+      setPinWrong(true)
+    },
+  })
+
+  // ── PIN dialog helpers ────────────────────────────────────────────
+  const openPinDialog = (item: OrderItem) => {
+    setPinDialogItem(item)
+    setPinInput('')
+    setPinWrong(false)
+  }
+
+  const closePinDialog = () => {
+    setPinDialogItem(null)
+    setPinInput('')
+    setPinWrong(false)
+  }
+
+  const confirmPin = () => {
+    if (!pinDialogItem || pinInput.length < DELETE_PIN_LENGTH || removeItem.isPending) return
+    removeItem.mutate({ itemId: pinDialogItem.id, pin: pinInput })
+  }
+
+  // R8: discounts with a resulting amount > 0 need a reason (+ manager PIN
+  // unless the logged-in user is an admin). Removing a discount (0) needs
+  // neither. Validation is mirrored server-side (PUT /api/orders/[id]).
+  const discountNeedsPin = userRole !== 'admin'
+
+  const applyDiscount = useMutation({
+    mutationFn: (vars: { amount: number; reason: string | null; pin: string | null }) => {
+      if (orderId == null) throw new Error(t('pos.noActiveOrder'))
+      return apiFetch<{ order: Order }>(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        body: {
+          discountAmount: vars.amount,
+          ...(vars.amount > 0
+            ? {
+                discountReason: vars.reason ?? undefined,
+                approvalPin: vars.pin ?? undefined,
+              }
+            : {}),
+        },
+      })
+    },
+    onSuccess: async ({ order: updated }) => {
+      queryClient.setQueryData(['pos-order', updated.id], { order: updated })
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+      await queryClient.invalidateQueries({ queryKey: ['floorplans'] })
+      await queryClient.invalidateQueries({ queryKey: ['tables-status'] })
+      toast.success(t('pos.discountUpdatedToast'))
+      setDiscountOpen(false)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const submitDiscount = () => {
+    const needsApproval = previewDiscount > 0
+    if (needsApproval && discountReason.trim().length < 2) {
+      setDiscountReasonError(true)
+      return
+    }
+    applyDiscount.mutate({
+      amount: previewDiscount,
+      reason: needsApproval ? discountReason.trim() : null,
+      pin: needsApproval && discountNeedsPin ? discountPin : null,
+    })
+  }
+
+  // ── Item transfer mutation (move sent items to another open order) ──
+  // Sends the per-row quantities so the server can split rows (partial moves).
+  const transferItems = useMutation({
+    mutationFn: (vars: {
+      sourceId: number
+      items: { id: number; quantity: number }[]
+      targetOrderId: number
+      targetLabel: string
+    }) =>
+      apiFetch<{ source: Order; target: Order }>(`/api/orders/${vars.sourceId}/transfer-items`, {
+        method: 'POST',
+        body: { items: vars.items, targetOrderId: vars.targetOrderId },
+      }),
+    onSuccess: async (_data, vars) => {
+      const totalUnitsMoved = round2(vars.items.reduce((n, entry) => n + entry.quantity, 0))
+      toast.success(
+        t('pos.itemsMovedToast', { n: totalUnitsMoved, target: vars.targetLabel }),
+      )
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['orders', 'open'] }),
+        queryClient.invalidateQueries({ queryKey: ['floorplans'] }),
+        queryClient.invalidateQueries({ queryKey: ['tables-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.sourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['pos-order', vars.targetOrderId] }),
+      ])
+      exitMoveMode()
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  // ── Move-items helpers ───────────────────────────────────────────
+  const enterMoveMode = () => {
+    setMoveMode(true)
+    setMoveSelected(new Set())
+    setMoveQty({})
+  }
+
+  const exitMoveMode = () => {
+    setMoveMode(false)
+    setMoveSelected(new Set())
+    setMoveQty({})
+    setMoveDialogOpen(false)
+  }
+
+  // Toggling a row ON seeds its move quantity with the FULL row quantity;
+  // toggling OFF forgets the per-row quantity.
+  const toggleMoveItem = (item: OrderItem) => {
+    if (moveSelected.has(item.id)) {
+      setMoveSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(item.id)
+        return next
+      })
+      setMoveQty((prev) => {
+        const next = { ...prev }
+        delete next[item.id]
+        return next
+      })
+    } else {
+      setMoveSelected((prev) => {
+        const next = new Set(prev)
+        next.add(item.id)
+        return next
+      })
+      setMoveQty((prev) => ({ ...prev, [item.id]: item.quantity }))
+    }
+  }
+
+  // Only ids that still exist on the (live-polled) order — stale ids are dropped.
+  const selectedMoveIds = (order?.items ?? []).filter((i) => moveSelected.has(i.id)).map((i) => i.id)
+  const moveCount = selectedMoveIds.length
+  const liveItemById = new Map((order?.items ?? []).map((i) => [i.id, i]))
+
+  // Effective units to move for a row: the stepper value when present,
+  // clamped against the LIVE row quantity (polling may have changed it).
+  const moveQtyFor = (id: number): number => {
+    const live = liveItemById.get(id)
+    if (!live) return 0
+    return round2(Math.min(moveQty[id] ?? live.quantity, live.quantity))
+  }
+
+  // Stepper handler — clamps between 1 and the live row quantity.
+  const changeMoveQty = (item: OrderItem, delta: number) => {
+    setMoveQty((prev) => {
+      const current = prev[item.id] ?? item.quantity
+      const next = Math.min(Math.max(round2(current + delta), 1), item.quantity)
+      return { ...prev, [item.id]: round2(next) }
+    })
+  }
+
+  // Direct-set handler (typed input / “Move All”) — clamps between 1 and
+  // the live row quantity so staff can never request an impossible move.
+  const setMoveQtyExact = (item: OrderItem, value: number) => {
+    if (!Number.isFinite(value)) return
+    setMoveQty((prev) => ({
+      ...prev,
+      [item.id]: Math.min(Math.max(round2(value), 1), item.quantity),
+    }))
+  }
+
+  // Total UNITS selected to move (CTA label + moved toast).
+  const moveUnits = round2(selectedMoveIds.reduce((n, id) => n + moveQtyFor(id), 0))
+
+  const pickMoveTarget = (target: Order) => {
+    if (orderId == null || moveCount === 0) return
+    transferItems.mutate({
+      sourceId: orderId,
+      items: selectedMoveIds.map((id) => ({ id, quantity: moveQtyFor(id) })),
+      targetOrderId: target.id,
+      targetLabel: target.table?.name ?? t('common.takeaway'),
+    })
+  }
+
+  // ── Draft helpers ─────────────────────────────────────────────────
+  const updateDraft = (key: string, patch: Partial<DraftItem>) =>
+    onDraftChange(draft.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+
+  const changeQty = (d: DraftItem, delta: number) => {
+    const next = round2(d.quantity + delta)
+    if (next <= 0) onDraftChange(draft.filter((x) => x.key !== d.key))
+    else updateDraft(d.key, { quantity: next })
+  }
+
+  const openEdit = (d: DraftItem) => {
+    setEditing(d)
+    setEditQty(String(d.quantity))
+    setEditNotes(d.notes)
+    setEditCourse(d.course)
+  }
+
+  const saveEdit = () => {
+    if (!editing) return
+    const qty = round2(parseFloat(editQty))
+    if (!Number.isFinite(qty) || qty <= 0) return
+    updateDraft(editing.key, { quantity: qty, notes: editNotes.trim(), course: editCourse })
+    setEditing(null)
+  }
+
+  // Seed discount dialog inputs from the current order discount when opening.
+  const openDiscountDialog = () => {
+    const current = order?.discountAmount ?? 0
+    const subtotal = order?.subtotalAmount ?? 0
+    setPercentInput(current > 0 && subtotal > 0 ? String(round2((current / subtotal) * 100)) : '')
+    setFixedInput(current > 0 ? String(current) : '')
+    setDiscountReason(order?.discountReason ?? '')
+    setDiscountReasonError(false)
+    setDiscountPin('')
+    setDiscountOpen(true)
+  }
+
+  // Effective discount from the dialog inputs (clamped to [0, order subtotal]).
+  const orderSubtotal = round2(order?.subtotalAmount ?? 0)
+  const previewDiscount = (() => {
+    if (!order) return 0
+    const raw =
+      discountTab === 'percent'
+        ? (orderSubtotal * (parseFloat(percentInput) || 0)) / 100
+        : parseFloat(fixedInput) || 0
+    if (!Number.isFinite(raw) || raw < 0) return 0
+    return round2(Math.min(raw, orderSubtotal))
+  })()
+  const previewBase = round2(orderSubtotal - previewDiscount)
+  const previewVat = round2(previewBase * TAX_RATE)
+  const previewServiceTax = round2(previewBase * SERVICE_TAX_RATE)
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Header */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-base font-bold">{table.name}</p>
+          {(order?.user?.name || userRole) && (
+            <p className="text-[11px] text-muted-foreground">
+              {t('pos.server')}:{' '}
+              {order?.user?.name ?? (userRole ? t(`role.${userRole}`) : '')}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {/* R13: loyalty — attached customer chip + attach/detach popover */}
+          <Popover open={customerOpen} onOpenChange={(open) => {
+            setCustomerOpen(open)
+            if (open) {
+              setCustomerQuery('')
+              setNewCustomerMode(false)
+            }
+          }}>
+            <PopoverTrigger asChild>
+              {activeCustomer != null ? (
+                <button
+                  type="button"
+                  title={t('pos.attachCustomer')}
+                  className="inline-flex h-9 max-w-[160px] items-center gap-1.5 rounded-full border border-primary/40 bg-primary/[0.07] px-2.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/15"
+                >
+                  <span aria-hidden>⭐</span>
+                  <span className="truncate">
+                    {t('pos.loyaltyCustomerChip', {
+                      name: activeCustomer.name,
+                      n: round2(activeCustomer.points ?? 0),
+                    })}
+                  </span>
+                </button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  title={t('pos.attachCustomer')}
+                  aria-label={t('pos.attachCustomer')}
+                  className="h-9 gap-1 rounded-full border-primary/40 px-2.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
+                >
+                  <UserPlus2 className="size-3.5" aria-hidden />
+                  <span className="hidden lg:inline">{t('pos.attachCustomer')}</span>
+                </Button>
+              )}
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-3">
+              {activeCustomer != null && (
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.05] p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-primary">
+                      {activeCustomer.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {t('pos.pointsBalance', { n: round2(activeCustomer.points ?? 0) })}
+                      {activeCustomer.phone ? ` · ${activeCustomer.phone}` : ''}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10"
+                    disabled={attachCustomer.isPending}
+                    onClick={() => {
+                      if (orderId != null) attachCustomer.mutate(null)
+                      else onDraftCustomerChange?.(null)
+                    }}
+                  >
+                    <X className="size-3.5" aria-hidden />
+                  </Button>
+                </div>
+              )}
+
+              {newCustomerMode ? (
+                <div className="space-y-2">
+                  <Input
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder={t('pos.customerNamePh')}
+                    maxLength={60}
+                    autoFocus
+                    className="h-10"
+                  />
+                  <Input
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder={t('pos.customerPhonePh')}
+                    maxLength={20}
+                    inputMode="tel"
+                    className="h-10"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-10 flex-1"
+                      onClick={() => setNewCustomerMode(false)}
+                    >
+                      {t('common.cancel')}
+                    </Button>
+                    <Button
+                      type="button"
+                      className="h-10 flex-1 bg-primary text-white hover:bg-primary/90"
+                      disabled={createCustomer.isPending || newCustomerName.trim().length < 2}
+                      onClick={() => createCustomer.mutate()}
+                    >
+                      {createCustomer.isPending ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        t('pos.saveCustomer')
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Input
+                    value={customerQuery}
+                    onChange={(e) => setCustomerQuery(e.target.value)}
+                    placeholder={t('pos.customerSearchPh')}
+                    className="h-10"
+                    autoFocus
+                  />
+                  <div className="max-h-56 space-y-1 overflow-y-auto rms-scroll">
+                    {customerSearch.isLoading ? (
+                      <div className="flex justify-center py-4">
+                        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : (customerSearch.data?.customers ?? []).length === 0 ? (
+                      <p className="py-3 text-center text-sm text-muted-foreground">
+                        {t('pos.noCustomers')}
+                      </p>
+                    ) : (
+                      (customerSearch.data?.customers ?? []).map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (orderId != null) attachCustomer.mutate(c.id)
+                            else {
+                              onDraftCustomerChange?.(c)
+                              setCustomerOpen(false)
+                            }
+                          }}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-primary/[0.07]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium">{c.name}</span>
+                            {c.phone && (
+                              <span className="block text-xs text-muted-foreground">{c.phone}</span>
+                            )}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-primary/40 text-primary"
+                          >
+                            {t('pos.pointsBalance', { n: c.points })}
+                          </Badge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full border-dashed"
+                    onClick={() => setNewCustomerMode(true)}
+                  >
+                    <Plus className="size-4" aria-hidden /> {t('pos.newCustomer')}
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+
+          {order ? (
+            <Badge className="shrink-0 bg-primary text-white hover:bg-primary">
+              {t('common.order')} #{order.id}
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="shrink-0">
+              {t('pos.notSent')}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Body: order items + the payment card in ONE scroll area — p21:
+          the payment card is a sticky-bottom element, so it sits right
+          under the last order line on short tickets and stays glued to
+          the visible bottom when the list grows (no more scrolling all
+          the way down to reach Pay). */}
+      <div className="rms-scroll min-h-0 flex-1 overflow-y-auto">
+        <div className="px-4">
+        {orderLoading && !order && draft.length === 0 ? (
+          <div className="space-y-3 py-4">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+          </div>
+        ) : noItems ? (
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 py-8 text-muted-foreground">
+            <span className="grid size-16 place-items-center rounded-full border border-dashed border-border bg-muted/40">
+              <ShoppingBag className="size-8 text-muted-foreground/60" aria-hidden />
+            </span>
+            <p className="text-sm">{t('pos.tapToAdd')}</p>
+          </div>
+        ) : (
+          <>
+            {/* Sent to kitchen */}
+            {order && order.items.length > 0 && (
+              <section className="py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {t('pos.sentItems')} ({order.items.length})
+                  </h3>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {!moveMode && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 px-2 text-xs border-primary/40 text-primary hover:bg-primary/10 hover:text-primary"
+                        title={t('pos.transferItems')}
+                        onClick={enterMoveMode}
+                      >
+                        <ArrowLeftRight className="size-3.5" /> {t('pos.transferItems')}
+                      </Button>
+                    )}
+                    {moveMode ? (
+                      <span className="text-[11px] text-muted-foreground">{t('pos.moveModeHint')}</span>
+                    ) : (
+                      canCancel && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          title={t('pos.cancelOrder')}
+                          onClick={onCancel}
+                        >
+                          <Ban className="size-3.5" /> {t('pos.cancelOrder')}
+                        </Button>
+                      )
+                    )}
+                  </div>
+                </div>
+                {order.items.map((item) => (
+                  <SentItemRow
+                    key={item.id}
+                    item={item}
+                    onServed={() => markServed.mutate(item.id)}
+                    onRemove={() => openPinDialog(item)}
+                    servedPending={markServed.isPending && markServed.variables === item.id}
+                    removePending={removeItem.isPending && removeItem.variables?.itemId === item.id}
+                    moveMode={moveMode}
+                    moveSelected={moveSelected.has(item.id)}
+                    onToggleMove={() => toggleMoveItem(item)}
+                    moveQty={moveMode && moveSelected.has(item.id) ? moveQtyFor(item.id) : undefined}
+                    onMoveQty={
+                      moveMode && moveSelected.has(item.id)
+                        ? (delta: number) => changeMoveQty(item, delta)
+                        : undefined
+                    }
+                    onSetMoveQty={
+                      moveMode && moveSelected.has(item.id)
+                        ? (value: number) => setMoveQtyExact(item, value)
+                        : undefined
+                    }
+                  />
+                ))}
+              </section>
+            )}
+
+            {/* New items (draft) */}
+            {draft.length > 0 && (
+              <section className="py-2">
+                <h3 className="py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t('pos.newItemsNotSent')} ({draft.length})
+                </h3>
+                {draft.map((d) => (
+                  <DraftRow
+                    key={d.key}
+                    item={d}
+                    onQty={(delta) => changeQty(d, delta)}
+                    onEdit={() => openEdit(d)}
+                    onRemove={() => onDraftChange(draft.filter((x) => x.key !== d.key))}
+                  />
+                ))}
+              </section>
+            )}
+          </>
+        )}
+        </div>
+
+        {/* Payment card — sticky bottom: hugs the last order line, never
+            leaves the screen (p21). r48: frosted card surface with a soft
+            key-light shadow above it. */}
+        <div className="sticky bottom-0 z-10 space-y-1.5 border-t border-border bg-card/95 p-4 shadow-[0_-8px_24px_-12px_oklch(0.29_0.012_75/0.35)] backdrop-blur-sm">
+        <SummaryRow label={t('money.subtotal')} value={formatCurrency(displayTotals.subtotal)} />
+        {/* R17: when the live promo preview applies, this row becomes the
+            promo line — badge + promotion name (lang-aware) + −amount; the
+            pencil still offers a manager override (which replaces the promo
+            server-side: one discount source per order, manager wins). */}
+        <div className="flex items-center justify-between text-sm">
+          <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            {promoPreview ? (
+              <>
+                <Badge
+                  className="h-5 shrink-0 border-primary/30 bg-primary/10 px-1.5 text-[10px] font-bold tracking-wide text-primary"
+                  title={promoPreview.scopeLabel ?? undefined}
+                >
+                  {t('r17.promo.badge')}
+                </Badge>
+                <span className="truncate">
+                  {localizedName(
+                    promoPreview.promotion.name,
+                    promoPreview.promotion.nameAr,
+                    lang,
+                  )}
+                </span>
+              </>
+            ) : (
+              t('money.discount')
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground"
+              disabled={!order}
+              title={order ? t('pos.applyDiscount') : t('pos.sendFirst')}
+              onClick={openDiscountDialog}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          </span>
+          <span className="tabular-nums text-muted-foreground">
+            − {formatCurrency(displayTotals.discount)}
+          </span>
+        </div>
+        <SummaryRow label={t('money.tax')} value={formatCurrency(displayTotals.tax)} />
+        <SummaryRow label={t('money.serviceTax')} value={formatCurrency(displayTotals.serviceTax)} />
+        <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-border pt-2.5">
+          <span className="text-sm font-semibold">{t('money.total')}</span>
+          <span className="text-xl font-bold tracking-tight tabular-nums">
+            {formatCurrency(displayTotals.total)}
+          </span>
+        </div>
+        {order && order.paidAmount > 0 && (
+          <>
+            <SummaryRow
+              label={t('money.paid')}
+              value={formatCurrency(order.paidAmount)}
+              valueClassName="text-success"
+            />
+            <SummaryRow
+              label={t('money.remaining')}
+              value={formatCurrency(Math.max(0, order.remainingAmount))}
+              valueClassName="font-bold text-warning"
+            />
+          </>
+        )}
+
+        {moveMode ? (
+          /* ── Item-transfer footer ── */
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              className="h-14 flex-1 rounded-xl border-border text-sm"
+              onClick={exitMoveMode}
+              disabled={transferItems.isPending}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              className="h-14 flex-[1.6] rounded-xl bg-primary text-base font-semibold text-white shadow-sm hover:bg-primary/90"
+              disabled={moveCount === 0 || transferItems.isPending}
+              onClick={() => setMoveDialogOpen(true)}
+            >
+              {transferItems.isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <ArrowLeftRight className="size-5" />
+              )}
+              <span className="truncate">{t('pos.moveNUnits', { n: moveUnits })}</span>
+            </Button>
+          </div>
+        ) : (
+          /* ── Normal actions ── */
+          <>
+            <Button
+              variant="secondary"
+              className="h-12 w-full rounded-xl bg-linear-to-br from-[oklch(0.48_0.1_338)] to-[oklch(0.32_0.09_338)] text-base font-semibold text-white shadow-sm transition hover:opacity-95"
+              disabled={draft.length === 0 || sending}
+              onClick={onSend}
+            >
+              {sending ? <Loader2 className="animate-spin" /> : <Send />} {t('pos.sendToKitchen')}
+              {draft.length > 0 && (
+                <Badge className="ms-1 h-5 min-w-5 rounded-full bg-white/20 px-1.5 tabular-nums text-white">
+                  {draft.reduce((n, d) => n + d.quantity, 0)}
+                </Badge>
+              )}
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="h-14 flex-1 rounded-xl border-border text-sm"
+                disabled={!order || sending || !onPrintCheck}
+                title={!order ? t('pos.printCheckDisabled') : t('pos.printCheckHint')}
+                onClick={onPrintCheck}
+              >
+                <Printer />
+                <span className="hidden sm:inline">{t('pos.printCheck')}</span>
+              </Button>
+              <Button
+                className="h-14 flex-[1.6] rounded-xl bg-success text-base font-semibold text-white shadow-sm hover:bg-success/90"
+                disabled={noItems || sending}
+                onClick={onPay}
+              >
+                {sending ? <Loader2 className="animate-spin" /> : <CreditCard />}
+                <span className="truncate">
+                  {/* R17: promo-aware amount (mirrors the summary rows above —
+                      the server recomputes it authoritatively on payment).
+                      r31 audit fix: once payments exist, show the REMAINING
+                      balance — after a partial payment the button must not
+                      advertise the full bill again. */}
+                  {t('pos.payment')} ·{' '}
+                  {formatCurrency(
+                    order && order.paidAmount > 0 ? Math.max(0, order.remainingAmount) : displayTotals.total,
+                  )}
+                </span>
+              </Button>
+            </div>
+          </>
+        )}
+        </div>
+      </div>
+
+      {/* Move-items target picker dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="size-5 text-primary" /> {t('pos.moveItemsTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('pos.moveItemsDesc', { n: moveCount })}</DialogDescription>
+          </DialogHeader>
+          <div className="rms-scroll max-h-[50dvh] space-y-2 overflow-y-auto">
+            {openOrdersLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </div>
+            ) : otherOpenOrders.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {t('pos.noOtherOpenOrders')}
+              </p>
+            ) : (
+              otherOpenOrders.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  disabled={transferItems.isPending}
+                  onClick={() => pickMoveTarget(o)}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card p-3 text-start card-elevated transition hover:border-primary/50 hover:bg-primary/[0.04] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">
+                      {o.table?.name ?? t('common.takeaway')}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      {t('common.order')} #{o.id}
+                      <span className="inline-flex items-center gap-1">
+                        <Users className="size-3.5" aria-hidden /> {o.guests} {t('common.people')}
+                      </span>
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-primary">
+                    {formatCurrency(o.totalAmount)}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-11 rounded-xl"
+              onClick={() => setMoveDialogOpen(false)}
+              disabled={transferItems.isPending}
+            >
+              {t('common.cancel')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Draft item edit dialog */}
+      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {editing ? localizedName(editing.name, editing.nameAr, lang) : ''}
+            </DialogTitle>
+            <DialogDescription>{t('pos.editItemDesc')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* R8: chosen options are read-only here — remove + re-add the
+                line to change them (qty/notes/course stay editable). */}
+            {editing?.modifiers?.length ? (
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">{t('pos.modsIncluded')}</p>
+                <p
+                  className="flex flex-wrap items-center gap-1"
+                  title={editing.modifiers
+                    .map((m) => localizedName(m.name, m.nameAr, lang))
+                    .join(', ')}
+                >
+                  {editing.modifiers.map((m, i) => (
+                    <span
+                      key={`${m.id}-${i}`}
+                      className="rounded-full border border-primary/40 bg-primary/[0.06] px-2 py-0.5 text-xs text-primary"
+                    >
+                      {localizedName(m.name, m.nameAr, lang)}
+                      {m.priceDelta !== 0 && (
+                        <span className="ms-1 font-semibold tabular-nums">
+                          {modifierDeltaLabel(m.priceDelta)}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </p>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-center gap-3">
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-11"
+                onClick={() => setEditQty(String(Math.max(1, round2((parseFloat(editQty) || 1) - 1))))}
+              >
+                <Minus />
+              </Button>
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                value={editQty}
+                onChange={(e) => setEditQty(e.target.value)}
+                className="h-11 w-20 text-center text-lg font-semibold tabular-nums"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-11"
+                onClick={() => setEditQty(String(round2((parseFloat(editQty) || 0) + 1)))}
+              >
+                <Plus />
+              </Button>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('common.notes')}</p>
+              <Textarea
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                placeholder={t('pos.notesPlaceholder')}
+                rows={2}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('pos.course')}</p>
+              <Select value={editCourse} onValueChange={setEditCourse}>
+                <SelectTrigger className="h-11 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {COURSES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {t(`course.${c}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="h-11 rounded-xl" onClick={() => setEditing(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button className="h-11 rounded-xl" onClick={saveEdit} disabled={!(parseFloat(editQty) > 0)}>
+              {t('common.save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Discount dialog */}
+      <Dialog open={discountOpen} onOpenChange={setDiscountOpen}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t('pos.applyDiscount')}</DialogTitle>
+            <DialogDescription>{t('pos.discountDesc')}</DialogDescription>
+          </DialogHeader>
+          <Tabs value={discountTab} onValueChange={(v) => setDiscountTab(v as 'percent' | 'fixed')}>
+            <TabsList className="grid h-10 w-full grid-cols-2">
+              <TabsTrigger value="percent">{t('pos.percent')}</TabsTrigger>
+              <TabsTrigger value="fixed">{t('pos.fixed')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="percent" className="pt-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={percentInput}
+                  onChange={(e) => setPercentInput(e.target.value)}
+                  placeholder="0"
+                  className="h-11 text-right text-base tabular-nums"
+                />
+                <span className="text-lg font-semibold text-muted-foreground">%</span>
+              </div>
+            </TabsContent>
+            <TabsContent value="fixed" className="pt-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={fixedInput}
+                  onChange={(e) => setFixedInput(e.target.value)}
+                  placeholder="0"
+                  className="h-11 text-right text-base tabular-nums"
+                />
+                <span className="text-lg font-semibold text-muted-foreground">
+                  {t('pos.currencySuffix')}
+                </span>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          {/* R8: reason — required whenever the resulting discount > 0 */}
+          {previewDiscount > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('pos.discountReasonLabel')}</p>
+              <Textarea
+                value={discountReason}
+                onChange={(e) => {
+                  setDiscountReason(e.target.value)
+                  if (discountReasonError) setDiscountReasonError(false)
+                }}
+                placeholder={t('pos.discountReasonPh')}
+                rows={2}
+                maxLength={120}
+                aria-invalid={discountReasonError || undefined}
+                className={cn(
+                  'h-auto rounded-xl',
+                  discountReasonError &&
+                    'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+                )}
+              />
+              {discountReasonError && (
+                <p className="text-xs font-medium text-destructive" role="alert">
+                  {t('pos.discountReasonRequired')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* R8: manager approval PIN — waiters only, admins are exempt */}
+          {previewDiscount > 0 && discountNeedsPin && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">{t('pos.discountPinTitle')}</p>
+              <p className="text-xs text-muted-foreground">{t('pos.discountPinDesc')}</p>
+              <Input
+                type="password"
+                inputMode="numeric"
+                maxLength={DELETE_PIN_LENGTH}
+                value={discountPin}
+                onChange={(e) =>
+                  // digits only — a PIN is numeric by definition
+                  setDiscountPin(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+                }
+                placeholder={t('pos.pinPlaceholder')}
+                className="h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums"
+              />
+            </div>
+          )}
+
+          <div className="space-y-1.5 rounded-xl border border-border bg-muted/40 p-3 text-sm">
+            <SummaryRow label={t('money.subtotal')} value={formatCurrency(orderSubtotal)} />
+            <SummaryRow label={t('money.discount')} value={`− ${formatCurrency(previewDiscount)}`} />
+            <SummaryRow label={t('money.tax')} value={formatCurrency(previewVat)} />
+            <SummaryRow label={t('money.serviceTax')} value={formatCurrency(previewServiceTax)} />
+            <div className="flex items-center justify-between border-t pt-1.5 font-bold">
+              <span>{t('pos.newTotal')}</span>
+              <span className="tabular-nums">
+                {formatCurrency(round2(previewBase + previewVat + previewServiceTax))}
+              </span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="h-11 rounded-xl" onClick={() => setDiscountOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              className="h-11 rounded-xl font-semibold"
+              onClick={submitDiscount}
+              disabled={
+                applyDiscount.isPending ||
+                (previewDiscount > 0 && discountNeedsPin && discountPin.length < DELETE_PIN_LENGTH)
+              }
+            >
+              {applyDiscount.isPending && <Loader2 className="animate-spin" />} {t('common.apply')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PIN-gated item deletion dialog — sent items only (draft rows keep
+          their instant remove; they were never sent to the kitchen). */}
+      <Dialog open={!!pinDialogItem} onOpenChange={(o) => !o && closePinDialog()}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="size-5 text-destructive" /> {t('pos.pinTitle')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('pos.pinDesc', {
+                name: pinDialogItem
+                  ? pinDialogItem.product
+                    ? localizedName(pinDialogItem.product.name, pinDialogItem.product.nameAr, lang)
+                    : t('pos.item')
+                  : '',
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Input
+              type="password"
+              inputMode="numeric"
+              autoFocus
+              maxLength={DELETE_PIN_LENGTH}
+              value={pinInput}
+              onChange={(e) => {
+                // digits only — a PIN is numeric by definition
+                setPinInput(e.target.value.replace(/\D/g, '').slice(0, DELETE_PIN_LENGTH))
+                if (pinWrong) setPinWrong(false)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  confirmPin()
+                }
+              }}
+              placeholder={t('pos.pinPlaceholder')}
+              aria-invalid={pinWrong || undefined}
+              className={cn(
+                'h-11 text-center text-lg font-semibold tracking-[0.4em] tabular-nums',
+                pinWrong && 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30',
+              )}
+            />
+            {pinWrong && (
+              <p className="text-xs font-medium text-destructive" role="alert">
+                {t('pos.pinWrong')}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-11 rounded-xl"
+              onClick={closePinDialog}
+              disabled={removeItem.isPending}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              className="h-11 rounded-xl font-semibold"
+              onClick={confirmPin}
+              disabled={removeItem.isPending || pinInput.length < DELETE_PIN_LENGTH}
+            >
+              {removeItem.isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}{' '}
+              {t('pos.pinConfirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function SummaryRow({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string
+  value: string
+  valueClassName?: string
+}) {
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn('font-medium tabular-nums', valueClassName)}>{value}</span>
+    </div>
+  )
+}
+
+function SentItemRow({
+  item,
+  onServed,
+  onRemove,
+  servedPending,
+  removePending,
+  moveMode,
+  moveSelected,
+  onToggleMove,
+  moveQty,
+  onMoveQty,
+  onSetMoveQty,
+}: {
+  item: OrderItem
+  onServed: () => void
+  onRemove: () => void
+  servedPending: boolean
+  removePending: boolean
+  moveMode: boolean
+  moveSelected: boolean
+  onToggleMove: () => void
+  /** units to move for this row (partial move); defaults to the full row */
+  moveQty?: number
+  /** stepper delta — the parent clamps against the live row quantity */
+  onMoveQty?: (delta: number) => void
+  /** direct set (typed input / “All”) — the parent clamps 1..available */
+  onSetMoveQty?: (value: number) => void
+}) {
+  const { t, lang } = useI18n()
+  const chip = STATUS_CHIP[item.status] ?? STATUS_CHIP.served
+  const lineTotal = formatCurrency(round2(item.quantity * item.unitPrice))
+  // R8: selected options sub-line (localized names + deltas). The product
+  // sub-object may carry allergens via ORDER_INCLUDE (raw JSON column or a
+  // parsed array) — a local cast + parse keeps the shared type untouched.
+  const mods = item.selectedModifiers ?? []
+  const rawAllergens =
+    (item.product as { allergens?: string[] | string | null } | null)?.allergens ?? []
+  let allergens: string[] = []
+  if (Array.isArray(rawAllergens)) allergens = rawAllergens
+  else {
+    try {
+      const parsed: unknown = JSON.parse(rawAllergens)
+      if (Array.isArray(parsed)) allergens = parsed.map(String)
+    } catch {
+      // invalid JSON — no badges
+    }
+  }
+  // Partial-quantity stepper: only for selected rows holding more than 1 unit.
+  const showMoveQty = moveMode && moveSelected && item.quantity > 1
+  const qty = moveQty ?? item.quantity
+  return (
+    <div
+      onClick={moveMode ? onToggleMove : undefined}
+      role={moveMode ? 'button' : undefined}
+      aria-pressed={moveMode ? moveSelected : undefined}
+      className={cn(
+        'border-b border-border/60 last:border-b-0',
+        moveMode && 'cursor-pointer rounded-lg transition-colors',
+        moveMode && moveSelected && 'bg-primary/10',
+      )}
+    >
+      <div className="flex items-start gap-2 py-2.5">
+        {moveMode && (
+          <span
+            className={cn(
+              'mt-1 flex size-5 shrink-0 items-center justify-center rounded border',
+              moveSelected
+                ? 'border-primary bg-primary text-white'
+                : 'border-border bg-card',
+            )}
+            aria-hidden
+          >
+            {moveSelected && <Check className="size-3.5" />}
+          </span>
+        )}
+        <span
+          className={cn(
+            'mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+            chip,
+          )}
+        >
+          {t(`status.item.${item.status}`)}
+        </span>
+        <div className="min-w-0 flex-1" title={item.notes ?? undefined}>
+          <p className="truncate text-sm font-medium">
+            {formatQty(item.quantity)} ×{' '}
+            {item.product
+              ? localizedName(item.product.name, item.product.nameAr, lang)
+              : t('pos.item')}
+          </p>
+          {mods.length > 0 && (
+            <p
+              className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+              title={mods.map((m) => localizedName(m.name, m.nameAr, lang)).join(', ')}
+            >
+              {mods.map((m, i) => (
+                <span
+                  key={`${m.id}-${i}`}
+                  className="rounded border border-border bg-muted/50 px-1 py-0 leading-4"
+                >
+                  {localizedName(m.name, m.nameAr, lang)}
+                  {m.priceDelta !== 0 && (
+                    <span
+                      className={cn(
+                        'ms-0.5 font-semibold',
+                        m.priceDelta > 0 ? 'text-emerald-700' : 'text-rose-600',
+                      )}
+                    >
+                      {modifierDeltaLabel(m.priceDelta)}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
+          {allergens.length > 0 && (
+            <p
+              className="mt-0.5 flex flex-wrap items-center gap-1"
+              title={allergens.map((a) => t(`allergen.${a}`)).join(', ')}
+            >
+              {allergens.slice(0, 2).map((a) => (
+                <span
+                  key={`al-${a}`}
+                  className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700"
+                >
+                  {t(`allergen.${a}`)}
+                </span>
+              ))}
+              {allergens.length > 2 && (
+                <span className="rounded border border-rose-300 bg-rose-50 px-1 py-0 text-[10px] font-medium leading-4 text-rose-700">
+                  +{allergens.length - 2}
+                </span>
+              )}
+            </p>
+          )}
+          {item.notes && (
+            <p className="flex items-center gap-1 truncate text-xs text-amber-600">
+              <StickyNote className="size-3 shrink-0" />
+              <span className="truncate">{item.notes}</span>
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className="text-sm font-semibold tabular-nums">{lineTotal}</span>
+          {!moveMode && (
+            <div className="flex gap-1">
+              {item.status === 'ready' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                  disabled={servedPending}
+                  onClick={onServed}
+                  title={t('pos.markServed')}
+                >
+                  {servedPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5" />
+                  )}
+                  {t('status.item.served')}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground hover:text-destructive"
+                disabled={removePending}
+                onClick={onRemove}
+                title={t('pos.removeItem')}
+              >
+                {removePending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4" />
+                )}
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+      {showMoveQty && (
+        /* Partial-quantity stepper — clicks here never toggle the selection.
+           R19: shows the AVAILABLE quantity up front, a direct numeric input
+           and an “All” quick action (Move All) next to the − / + stepper. */
+        <div
+          role="group"
+          aria-label={t('pos.moveQtyLabel')}
+          title={t('pos.moveQtyLabel')}
+          onClick={(e) => e.stopPropagation()}
+          className="mb-2 ms-7 space-y-1.5 rounded-b-lg bg-primary/[0.06] px-2 py-1.5"
+        >
+          <p className="text-xs font-medium text-muted-foreground">
+            {t('pos.moveAvailable', { qty: formatQty(item.quantity) })}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              disabled={qty <= 1}
+              onClick={() => onMoveQty?.(-1)}
+            >
+              <Minus className="size-4" />
+              <span className="sr-only">−</span>
+            </Button>
+            <MoveQtyInput
+              value={qty}
+              max={item.quantity}
+              ariaLabel={t('pos.moveQtyLabel')}
+              onCommit={(value) => onSetMoveQty?.(value)}
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              disabled={qty >= item.quantity}
+              onClick={() => onMoveQty?.(1)}
+            >
+              <Plus className="size-4" />
+              <span className="sr-only">+</span>
+            </Button>
+            {qty < item.quantity && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-10 shrink-0 px-3"
+                onClick={() => onSetMoveQty?.(item.quantity)}
+              >
+                {t('pos.moveAll')}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Direct quantity input for partial moves — keeps its own text state while
+ *  focused so typing is never fought by the parent's clamping; commits a
+ *  parsed value on every valid change and clamps 1..max on blur. */
+function MoveQtyInput({
+  value,
+  max,
+  ariaLabel,
+  onCommit,
+}: {
+  value: number
+  max: number
+  ariaLabel: string
+  onCommit: (value: number) => void
+}) {
+  const [text, setText] = useState<string | null>(null) // null = not focused
+  const display = text ?? formatQty(value)
+  const commit = (raw: string) => {
+    const parsed = parseFloat(raw.replace(',', '.'))
+    if (Number.isFinite(parsed) && parsed > 0) onCommit(Math.min(parsed, max))
+  }
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      value={display}
+      onChange={(e) => {
+        setText(e.target.value)
+        commit(e.target.value)
+      }}
+      onFocus={(e) => e.target.select()}
+      onBlur={() => {
+        setText(null) // snap back to the (clamped) parent value
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+      }}
+      className="h-10 w-14 shrink-0 rounded-md border border-input bg-background text-center text-sm font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    />
+  )
+}
+
+function DraftRow({
+  item,
+  onQty,
+  onEdit,
+  onRemove,
+}: {
+  item: DraftItem
+  onQty: (delta: number) => void
+  onEdit: () => void
+  onRemove: () => void
+}) {
+  const { t, lang } = useI18n()
+  const unit = lineUnitPrice(item)
+  return (
+    <div className="flex items-center gap-2 border-b border-border/60 py-2.5 transition-colors last:border-b-0 hover:bg-muted/40">
+      <div className="flex shrink-0 items-center gap-1">
+        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(-1)}>
+          <Minus className="size-3.5" />
+        </Button>
+        <span className="w-8 text-center text-sm font-semibold tabular-nums">
+          {formatQty(item.quantity)}
+        </span>
+        <Button variant="outline" size="icon" className="size-8" onClick={() => onQty(1)}>
+          <Plus className="size-3.5" />
+        </Button>
+      </div>
+      <button
+        type="button"
+        className="min-w-0 flex-1 text-start"
+        onClick={onEdit}
+        title={t('pos.editItemDesc')}
+      >
+        <p className="flex items-center gap-1 truncate text-sm font-medium">
+          <span className="truncate">{localizedName(item.name, item.nameAr, lang)}</span>
+        </p>
+        {item.notes && (
+          <p
+            className="flex items-center gap-1 truncate text-[11px] text-amber-600"
+            title={item.notes}
+          >
+            <StickyNote className="size-3 shrink-0" />
+            <span className="truncate">{item.notes}</span>
+          </p>
+        )}
+        {item.modifiers?.length ? (
+          <p
+            className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+            title={item.modifiers
+              .map((m) => localizedName(m.name, m.nameAr, lang))
+              .join(', ')}
+          >
+            {item.modifiers.map((m, i) => (
+              <span
+                key={`${m.id}-${i}`}
+                className="rounded border border-border bg-muted/50 px-1 py-0 leading-4"
+              >
+                {localizedName(m.name, m.nameAr, lang)}
+                {m.priceDelta !== 0 && (
+                  <span
+                    className={cn(
+                      'ms-0.5 font-semibold',
+                      m.priceDelta > 0 ? 'text-emerald-700' : 'text-rose-600',
+                    )}
+                  >
+                    {modifierDeltaLabel(m.priceDelta)}
+                  </span>
+                )}
+              </span>
+            ))}
+          </p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">{t(`course.${item.course}`)}</p>
+        )}
+      </button>
+      <span className="shrink-0 text-sm font-semibold tabular-nums">
+        {formatCurrency(round2(item.quantity * unit))}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+        onClick={onRemove}
+        title={t('pos.removeLine')}
+      >
+        <X className="size-4" />
+      </Button>
+    </div>
+  )
+}

@@ -1,0 +1,87 @@
+// /api/orders/[id]/cancel — cancel an order (admin OR the creating waiter)
+
+import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+import { ApiError, errorResponse, requireAuth } from '@/lib/auth'
+import { logAudit } from '@/lib/audit'
+import { emitOutboxEvent } from '@/lib/hybrid-sync/outbox'
+import {
+  ORDER_INCLUDE,
+  freeTableIfUnused,
+  getOrderOr404,
+  orderTableIds,
+  parseId,
+  round2,
+  serializeOrder,
+  sessionUserId,
+} from '@/lib/orders'
+
+type Ctx = { params: Promise<{ id: string }> }
+
+export async function POST(req: NextRequest, ctx: Ctx) {
+  try {
+    const session = await requireAuth(req) // role checked manually below
+    const { id } = await ctx.params
+    const orderId = parseId(id, 'order id')
+
+    const order = await getOrderOr404(orderId)
+    // r31 audit fix: the developer role is admin-equivalent by design (p11-d)
+    // — a manual `role !== 'admin'` check locked the developer out of
+    // cancelling anyone's orders. Use isSuperAdmin OR developer OR admin.
+    const privileged =
+      session.role === 'admin' || session.role === 'developer' || session.isSuperAdmin === true
+    if (!privileged && order.userId !== sessionUserId(session)) {
+      throw new ApiError('Only an admin or the waiter who created this order can cancel it', 403)
+    }
+    if (order.status === 'paid') {
+      throw new ApiError('Cannot cancel a paid order', 400)
+    }
+    if (order.status === 'cancelled') {
+      throw new ApiError('Order is already cancelled', 400)
+    }
+    // r31 audit fix (F9): a merged order's items live on in the target
+    // order — cancelling the emptied source would orphan the merge trail.
+    if (order.status === 'merged') {
+      throw new ApiError('Cannot cancel a merged order — it lives on in the merged target', 400)
+    }
+
+    // R30 hybrid sync: the cancel write + its outbox event commit together
+    const updated = await db.$transaction(async (tx) => {
+      const saved = await tx.order.update({
+        where: { id: orderId },
+        data: { status: 'cancelled', closedAt: new Date() },
+        include: ORDER_INCLUDE,
+      })
+      const orderRow = await tx.order.findUnique({ where: { id: orderId } })
+      if (orderRow) {
+        await emitOutboxEvent(tx, {
+          entity: 'Order',
+          entityId: orderId,
+          operation: 'update',
+          row: orderRow,
+        })
+      }
+      return saved
+    })
+
+    // Release EVERY seating table (primary + merged extras) — only when no
+    // other open order uses them. Cancelled orders make NO inventory changes.
+    for (const tableId of orderTableIds(order)) {
+      await freeTableIfUnused(tableId, orderId)
+    }
+
+    await logAudit({
+      user: session,
+      action: 'order.cancel',
+      entity: 'order',
+      entityId: orderId,
+      details: `Cancelled order #${orderId} (EGP ${round2(order.totalAmount).toFixed(2)}${
+        order.table ? `, table ${order.table.name}` : ', takeaway'
+      })`,
+    })
+
+    return NextResponse.json({ order: serializeOrder(updated) })
+  } catch (err) {
+    return errorResponse(err)
+  }
+}

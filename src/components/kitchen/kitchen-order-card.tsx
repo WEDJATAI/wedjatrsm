@@ -1,0 +1,367 @@
+'use client'
+
+import { Check, CheckCircle2, Loader2, Play, StickyNote } from 'lucide-react'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { type Course, type ItemStatus, prepStationOf } from '@/lib/constants'
+import { elapsedMinutes, elapsedSince, formatCurrency, formatQty, formatTime } from '@/lib/format'
+import { localizedName, useI18n } from '@/lib/i18n'
+import type { Order } from '@/lib/types'
+import { cn } from '@/lib/utils'
+
+export type CourseFilter = 'all' | Course
+
+/** R11: station routing filter — 'all' or a station slug (kitchen/bar/
+ *  shisha/custom). Mirrors CourseFilter: non-matching items dim in place. */
+export type StationFilter = 'all' | string
+
+/** i18n keys for the preset stations; custom slugs display as-is. */
+export const STATION_LABEL_KEYS: Record<string, string> = {
+  kitchen: 'kds.stationKitchen',
+  bar: 'kds.stationBar',
+  shisha: 'kds.stationShisha',
+}
+
+/** r48: paint for the ACTIVE station pill in kitchen-view's filter row —
+ *  a navbar-style vertical gradient + station-hued glow that the view
+ *  slides between stations via a motion layoutId. Station hues preserved:
+ *  emerald kitchen, amber bar, violet shisha; custom slugs fall back to
+ *  brand plum in the view. */
+export const STATION_PILL_ACTIVE_CLASSES: Record<string, string> = {
+  kitchen: 'bg-linear-to-b from-emerald-400 to-emerald-500 shadow-emerald-500/40',
+  bar: 'bg-linear-to-b from-amber-400 to-amber-500 shadow-amber-500/40',
+  shisha: 'bg-linear-to-b from-violet-400 to-violet-500 shadow-violet-500/40',
+}
+
+/** Small badge tint per station on the item lines (dark KDS cards) —
+ *  custom slugs use brand plum (r48; was sky). */
+const STATION_BADGE_CLASSES: Record<string, string> = {
+  kitchen: 'border-zinc-700 bg-zinc-800 text-zinc-400',
+  bar: 'border-amber-500/40 bg-amber-500/15 text-amber-300',
+  shisha: 'border-violet-500/40 bg-violet-500/15 text-violet-300',
+}
+
+/** r48: brand-plum family lifted for the dark KDS (light-mode tokens are
+ *  too dark against zinc-900) — used for NEW item chips and custom-station
+ *  routing badges. */
+const PLUM_CHIP_CLASSES =
+  'border-[oklch(0.62_0.12_338)]/50 bg-[oklch(0.62_0.12_338)]/15 text-[oklch(0.78_0.1_338)]'
+
+/** Station display label: preset stations localize, custom slugs stay raw. */
+export function stationLabel(station: string, t: (key: string) => string): string {
+  const key = STATION_LABEL_KEYS[station]
+  return key ? t(key) : station
+}
+
+/** R11: tiny routing badge on each item line (kitchen subtle, bar amber,
+ *  shisha violet, custom sky) so cooks see routing at a glance. */
+function StationBadge({ station, t }: { station: string; t: (key: string) => string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[10px] font-bold uppercase tracking-wide',
+        STATION_BADGE_CLASSES[station] ?? PLUM_CHIP_CLASSES,
+      )}
+      title={stationLabel(station, t)}
+    >
+      {stationLabel(station, t)}
+    </span>
+  )
+}
+
+/** r48 status language on the dark KDS: NEW = brand plum family, cooking
+ *  = amber, ready = emerald, served = neutral zinc (meanings unchanged). */
+const STATUS_CHIP_CLASSES: Record<string, string> = {
+  new: PLUM_CHIP_CLASSES,
+  preparing: 'border-amber-500/30 bg-amber-500/15 text-amber-400',
+  ready: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-400',
+  served: 'border-zinc-700 bg-zinc-800 text-zinc-500',
+}
+
+const STATUS_CHIP_LABEL_KEYS: Record<string, string> = {
+  new: 'status.item.new',
+  preparing: 'status.item.preparing',
+  ready: 'status.item.ready',
+  served: 'status.item.served',
+}
+
+const NEXT_STATUS: Record<string, { labelKey: string; status: ItemStatus }> = {
+  new: { labelKey: 'kds.start', status: 'preparing' },
+  preparing: { labelKey: 'status.item.ready', status: 'ready' },
+  ready: { labelKey: 'status.item.served', status: 'served' },
+}
+
+/** Card border urgency: < 10m calm, 10-20m warning, > 20m critical. */
+function urgencyBorder(minutes: number): string {
+  if (minutes > 20) return 'border-rose-500/70'
+  if (minutes >= 10) return 'border-amber-500/60'
+  return 'border-zinc-800'
+}
+
+function urgencyText(minutes: number): string {
+  if (minutes >= 20) return 'text-rose-400'
+  if (minutes >= 10) return 'text-amber-400'
+  return 'text-emerald-400'
+}
+
+type KitchenOrderCardProps = {
+  order: Order
+  /** Parent counter that increments every 5s so elapsed timers re-render. */
+  tick: number
+  courseFilter: CourseFilter
+  /** R11: station routing filter — dims non-matching items like courseFilter. */
+  stationFilter: StationFilter
+  pendingItemId: number | null
+  onUpdateItemStatus: (itemId: number, status: ItemStatus) => void
+  /** R25: true for 12s after this order first appears on the board —
+   *  paints an unmistakable amber attention ring while the parent plays
+   *  the new-order chime (kitchen staff who can't read fluently still
+   *  SEE that fresh work arrived). */
+  highlight?: boolean
+}
+
+export function KitchenOrderCard({
+  order,
+  tick,
+  courseFilter,
+  stationFilter,
+  pendingItemId,
+  onUpdateItemStatus,
+  highlight = false,
+}: KitchenOrderCardProps) {
+  const { t, lang } = useI18n()
+  const minutes = elapsedMinutes(order.createdAt)
+  const items = order.items
+  const completed = items.length > 0 && items.every((item) => item.status === 'served')
+  const readyCount = items.filter((item) => item.status === 'ready' || item.status === 'served').length
+  // r48: presentational ticket states for the start-edge accent + success
+  // glow — cooking = anything on the fire, fullyReady = the whole ticket
+  // is fired and waiting for pickup (the ring-glow moment).
+  const cooking = items.some((item) => item.status === 'preparing')
+  const fullyReady =
+    !completed && items.length > 0 && items.every((item) => item.status === 'ready')
+  const tableName =
+    order.table?.name ??
+    (order.tableId
+      ? `${t('common.table')} #${order.tableId}`
+      : order.orderType === 'delivery'
+        ? t('kds.deliveryName', { phone: order.deliveryPhone ?? '' })
+        : t('common.takeaway'))
+
+  return (
+    <article
+      data-tick={tick}
+      className={cn(
+        // r48: h-full inside the FadeIn wrapper so a board row's tickets
+        // align; border-s-4 = the status start-edge accent (see below).
+        'flex h-full flex-col gap-3 rounded-xl border border-s-4 bg-zinc-900 p-4',
+        urgencyBorder(minutes),
+        // r48 status start-edge: new work = plum, cooking = amber,
+        // fully ready = emerald, done = zinc (same language as the chips).
+        completed
+          ? 'border-s-zinc-700'
+          : fullyReady
+            ? 'border-s-emerald-400'
+            : cooking
+              ? 'border-s-amber-400'
+              : 'border-s-[oklch(0.66_0.12_338)]',
+        // r48: fully-ready tickets wear a ring-glow-style success halo so
+        // runners spot pickup-ready work across the kitchen.
+        fullyReady &&
+          'relative z-10 ring-2 ring-emerald-400/70 shadow-[0_0_32px_oklch(0.627_0.17_150/0.35)]',
+        completed && 'opacity-50',
+        // R25: new-order attention treatment — thick amber ring + glow +
+        // a gentle pulse. Listed LAST so twMerge lets it win cleanly over
+        // the calm urgency border and the state edge; `relative z-10`
+        // (grid items honour z-index without position) lifts the glow
+        // above neighbouring cards so it can't be painted over.
+        highlight &&
+          'relative z-10 animate-pulse border-amber-400 ring-4 ring-amber-400 shadow-[0_0_32px_rgba(251,191,36,0.35)]',
+      )}
+    >
+      {/* Table + order meta + elapsed timer */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-bold leading-tight">{tableName}</h2>
+          <p className="text-sm text-zinc-500">
+            {t('common.order')} #{order.id} · {formatTime(order.createdAt)}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {minutes > 20 && <span className="size-2 animate-pulse rounded-full bg-rose-500" />}
+          {/* r48: big glanceable tabular-nums timer — time is the KDS king */}
+          <span
+            className={cn(
+              'font-mono text-2xl font-bold leading-none tabular-nums',
+              urgencyText(minutes),
+            )}
+          >
+            {elapsedSince(order.createdAt)}
+          </span>
+        </div>
+      </div>
+
+      {/* Items */}
+      <ul className="space-y-1.5">
+        {items.map((item) => {
+          const dimmed = courseFilter !== 'all' && item.course !== courseFilter
+          // R11: station routing — items outside the active station dim too
+          const station = prepStationOf(item.product?.category?.prepDestination)
+          const stationDimmed = stationFilter !== 'all' && station !== stationFilter
+          const next = NEXT_STATUS[item.status]
+          const pending = pendingItemId === item.id
+          return (
+            <li
+              key={item.id}
+              className={cn(
+                'flex items-center justify-between gap-2 rounded-lg px-1 py-0.5',
+                (dimmed || stationDimmed) && 'opacity-30',
+                item.status === 'served' && 'opacity-40',
+              )}
+            >
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                <span
+                  className={cn(
+                    'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                    STATUS_CHIP_CLASSES[item.status] ?? 'border-zinc-700 bg-zinc-800 text-zinc-500',
+                  )}
+                >
+                  {t(STATUS_CHIP_LABEL_KEYS[item.status] ?? 'status.item.served')}
+                </span>
+                {/* R11: prep-station routing badge (Kitchen/Bar/Shisha/…) */}
+                <StationBadge station={station} t={t} />
+                <span className="truncate text-sm font-medium text-zinc-100">
+                  {formatQty(item.quantity)} ×{' '}
+                  {item.product
+                    ? localizedName(item.product.name, item.product.nameAr, lang)
+                    : t('kds.item')}
+                </span>
+                {/* R8: selected options — bold amber so the line sees them fast */}
+                {item.selectedModifiers?.length ? (
+                  <span
+                    className="min-w-0 max-w-full truncate text-xs font-semibold text-amber-300"
+                    title={item.selectedModifiers
+                      .map((m) => localizedName(m.name, m.nameAr, lang))
+                      .join(', ')}
+                  >
+                    •{' '}
+                    {item.selectedModifiers
+                      .map((m) => localizedName(m.name, m.nameAr, lang))
+                      .join(', ')}
+                  </span>
+                ) : null}
+                {/* R8: allergen warning chips — the product sub-object may
+                    carry `allergens` via ORDER_INCLUDE (raw JSON column or a
+                    parsed array); a local cast + parse keeps the shared
+                    OrderItem type untouched. */}
+                {(() => {
+                  const rawAllergens =
+                    (item.product as { allergens?: string[] | string | null } | null)
+                      ?.allergens ?? []
+                  let allergens: string[] = []
+                  if (Array.isArray(rawAllergens)) allergens = rawAllergens
+                  else {
+                    try {
+                      const parsed: unknown = JSON.parse(rawAllergens)
+                      if (Array.isArray(parsed)) allergens = parsed.map(String)
+                    } catch {
+                      // invalid JSON — no badges
+                    }
+                  }
+                  if (allergens.length === 0) return null
+                  return (
+                    <span
+                      className="flex min-w-0 flex-wrap items-center gap-1"
+                      title={`${t('kds.allergens')}: ${allergens
+                        .map((a) => t(`allergen.${a}`))
+                        .join(', ')}`}
+                    >
+                      {allergens.map((a) => (
+                        <span
+                          key={`al-${a}`}
+                          className="rounded border border-rose-500/40 bg-rose-500/15 px-1 py-0 text-[10px] font-semibold leading-4 text-rose-300"
+                        >
+                          {t(`allergen.${a}`)}
+                        </span>
+                      ))}
+                    </span>
+                  )
+                })()}
+                {item.notes ? (
+                  <span
+                    className="flex min-w-0 items-center gap-1 text-amber-300/90"
+                    title={item.notes}
+                  >
+                    <StickyNote className="size-3.5 shrink-0" />
+                    <span className="max-w-40 truncate italic text-xs">{item.notes}</span>
+                  </span>
+                ) : null}
+                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                  {t(`course.${item.course}`)}
+                </span>
+              </div>
+
+              {next ? (
+                <Button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => onUpdateItemStatus(item.id, next.status)}
+                  className={cn(
+                    // r48: 48px touch target (KDS-safe) — primary KDS action
+                    'h-12 min-w-28 shrink-0 rounded-xl font-semibold',
+                    item.status === 'new' &&
+                      'border border-amber-500 bg-amber-500 text-zinc-950 hover:bg-amber-400',
+                    item.status === 'preparing' &&
+                      'border border-emerald-500 bg-emerald-500 text-zinc-950 hover:bg-emerald-400',
+                    item.status === 'ready' &&
+                      'border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100',
+                  )}
+                >
+                  {pending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : item.status === 'new' ? (
+                    <Play className="size-4" />
+                  ) : item.status === 'preparing' ? (
+                    <CheckCircle2 className="size-4" />
+                  ) : (
+                    <Check className="size-4" />
+                  )}
+                  {t(next.labelKey)}
+                </Button>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+
+      {/* Progress footer — mt-auto pins it so h-full tickets align */}
+      <div className="mt-auto border-t border-zinc-800 pt-2">
+        {/* r48: ready-progress track (readyCount counts ready + served) */}
+        <div
+          className="mb-2 h-1.5 overflow-hidden rounded-full bg-zinc-800"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={items.length}
+          aria-valuenow={readyCount}
+        >
+          <div
+            className="h-full rounded-full bg-emerald-400 transition-[width] duration-500"
+            style={{ width: items.length > 0 ? `${(readyCount / items.length) * 100}%` : '0%' }}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-zinc-500">
+            {t('kds.itemsReady', { ready: readyCount, total: items.length })} ·{' '}
+            {formatCurrency(order.totalAmount)}
+          </p>
+          {completed && (
+            <Badge variant="outline" className="border-zinc-700 bg-zinc-800 text-zinc-400">
+              {t('kds.completed')}
+            </Badge>
+          )}
+        </div>
+      </div>
+    </article>
+  )
+}

@@ -1,0 +1,92 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+.claude
+.z-ai-config
+*.log
+dev.log
+dev.out.log
+test
+prompt
+
+server.log
+# Skills directory
+/skills/
+# R16: tool artifact directory (session scratch)
+/tool-results/
+
+# R16 hardening: live DB + snapshots are NEVER tracked — a git checkout
+# of an old commit can no longer clobber live data. Snapshots live on disk
+# (backups/, VACUUM INTO engine) and in git history pre-R16.
+/db/*.db*
+/backups/
+
+# R16: git bundles are offline artifacts — never tracked (a committed bundle
+# snowballs: each regeneration would contain the previous one)
+*.bundle
+.zscripts/dev.pid
+
+# Task 22-c: Electron desktop packaging — everything under desktop/ that is
+# GENERATED. The tracked sources are desktop/package.json, main.js,
+# preload.js, prepare-server.mjs, README.md and resources/icon.png;
+# node_modules/, server/ (assembled by prepare-server.mjs), dist/
+# (electron-builder output) and resources/seed.db (staged by CI from
+# download/rsm-platform-database.db — never commit a database binary) are not.
+/desktop/node_modules/
+/desktop/server/
+/desktop/dist/
+/desktop/resources/seed.db
+
+
+# R22: tool/agent artifacts never tracked (public-repo hygiene)
+/.agent-screens/
+/upload/
+/dev.log*
+/pgtmp-client/
+
+# R23: production secrets saved for ops reference — NEVER track
+/.zscripts/prod-*.txt
+
+# r32: desktop agent build artifacts (97MB self-contained executables — never track)
+/agent-desktop/dist/
+*.bun-build
