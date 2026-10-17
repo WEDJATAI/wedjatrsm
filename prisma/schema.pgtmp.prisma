@@ -216,8 +216,32 @@ model FloorPlan {
   tables          RestaurantTable[]
   visionCameras   VisionCamera[] // R9 back-relation (additive)
   reservations    Reservation[] // R11 back-relation (additive)
+  spaces          FloorSpace[] // r56: custom spaces (lounge/bar/stage/VIP/…)
 
   @@map("floor_plans")
+}
+
+// ─── Custom spaces (r56) ────────────────────────────────────────────
+// Owner-defined zones on the floor plan (shisha lounge, bar counter,
+// stage, VIP corner…). Positions/sizes are floor-relative percentages
+// exactly like RestaurantTable — mirrors prisma/schema.prisma.
+model FloorSpace {
+  id          Int       @id @default(autoincrement())
+  floorPlanId Int?      @map("floor_plan_id")
+  floorPlan   FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  name        String
+  // 'lounge' | 'bar' | 'stage' | 'vip' | 'kids' | 'greenery' | 'walkway' | 'counter' | 'custom'
+  kind        String    @default("lounge")
+  positionX   Float     @default(50) @map("position_x") // percentage 0-100
+  positionY   Float     @default(50) @map("position_y") // percentage 0-100
+  widthUnits  Float     @default(18) @map("width_units") // % of floor width
+  depthUnits  Float     @default(18) @map("depth_units") // % of floor depth
+  rotation    Float     @default(0) // degrees, clockwise
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([floorPlanId])
+  @@map("floor_spaces")
 }
 
 // ─── Tables ─────────────────────────────────────────────────────────

@@ -310,6 +310,26 @@ export const adminDict: DictPair = {
     'admin.floorShapeClampHint':
       'Width and depth control how much of the canvas the floor occupies. Changes sync to every terminal.',
 
+    // r56: custom floor spaces
+    'admin.addSpace': 'Add Space',
+    'admin.addSpaceTitle': 'Add a custom space',
+    'admin.addSpaceDesc':
+      'Zones render on the 3D floor next to tables — a shisha lounge, the bar counter, a stage, a VIP corner…',
+    'admin.spaceNamePlaceholder': 'e.g. Shisha Corner',
+    'admin.spaceNameRequired': 'Space name is required',
+    'admin.spaceKind': 'Type',
+    'admin.spaceWidth': 'Width',
+    'admin.spaceDepth': 'Depth',
+    'admin.spaceRotation': 'Rotation',
+    'admin.spaceUpdated': 'Space updated',
+    'admin.spaceRemoved': 'Space removed',
+    'admin.spaceAdded': 'Space “{name}” added to the floor',
+    'admin.dragHint3d': 'Drag tables and zones to reposition · click to edit',
+    'admin.view3dLabel': '3D camera preset',
+    'admin.view3dPerspective': 'Perspective',
+    'admin.view3dTop': 'Top view',
+    'admin.hallStatsSpaces': '{n} space(s)',
+
     // ── products ──
     'admin.productsSubtitle': 'Menu items and ingredients — prices, costs, availability',
     'admin.newProduct': 'New Product',
@@ -1023,6 +1043,26 @@ export const adminDict: DictPair = {
     'admin.floorGeometrySavedMoved': 'تم تحديث الصالة — تم نقل {n} طاولة إلى داخل الشكل الجديد',
     'admin.floorShapeClampHint':
       'العرض والعمق يحددان مساحة لوحة الرسم التي تشغلها الصالة. التغييرات تُزامن مع كل الأجهزة.',
+
+    // r56: custom floor spaces
+    'admin.addSpace': 'إضافة مساحة',
+    'admin.addSpaceTitle': 'إضافة مساحة مخصصة',
+    'admin.addSpaceDesc':
+      'تظهر المناطق على المخطط ثلاثي الأبعاد بجانب الطاولات — ركن شيشة، كاونتر البار، مسرح، قسم VIP…',
+    'admin.spaceNamePlaceholder': 'مثال: ركن الشيشة',
+    'admin.spaceNameRequired': 'اسم المساحة مطلوب',
+    'admin.spaceKind': 'النوع',
+    'admin.spaceWidth': 'العرض',
+    'admin.spaceDepth': 'العمق',
+    'admin.spaceRotation': 'الدوران',
+    'admin.spaceUpdated': 'تم تحديث المساحة',
+    'admin.spaceRemoved': 'تمت إزالة المساحة',
+    'admin.spaceAdded': 'تمت إضافة المساحة «{name}» إلى الصالة',
+    'admin.dragHint3d': 'اسحب الطاولات والمناطق لتحريكها · انقر للتعديل',
+    'admin.view3dLabel': 'زاوية العرض ثلاثية الأبعاد',
+    'admin.view3dPerspective': 'منظور',
+    'admin.view3dTop': 'عرض علوي',
+    'admin.hallStatsSpaces': '{n} مساحة/مساحات',
 
     // ── products ──
     'admin.productsSubtitle': 'أصناف القائمة والمكونات — الأسعار والتكاليف والتوفر',

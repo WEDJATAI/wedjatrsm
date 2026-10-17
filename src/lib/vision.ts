@@ -1726,7 +1726,10 @@ export async function buildVisionOverview(): Promise<VisionOverviewDTO> {
   // Floor plans + active tables with the POS polling extras
   const plans = await db.floorPlan.findMany({
     where: { active: true },
-    include: { tables: { where: { active: true }, orderBy: { name: 'asc' } } },
+    include: {
+      tables: { where: { active: true }, orderBy: { name: 'asc' } },
+      spaces: { where: { active: true }, orderBy: { id: 'asc' } },
+    },
     orderBy: { id: 'asc' },
   })
   const serializedPlans = await serializeFloorPlans(plans)

@@ -85,6 +85,9 @@ export const HYBRID_ENTITIES: Record<string, { policy: HybridEntityPolicy }> = {
   RestaurantTable: { policy: 'revision-aware' },
   CashDrawerSession: { policy: 'revision-aware' },
   FloorPlan: { policy: 'revision-aware' },
+  // r56: custom floor spaces (3D platform zones) — same convergence rules
+  // as the tables they share the canvas with.
+  FloorSpace: { policy: 'revision-aware' },
 }
 
 /** Policy for a wire entity name (null when the entity is not registered). */

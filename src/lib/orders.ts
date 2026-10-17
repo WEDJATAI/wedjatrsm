@@ -17,6 +17,7 @@ import {
 } from '@/lib/promotions'
 import type {
   FloorPlan,
+  FloorSpace,
   Order,
   OrderItem,
   Payment,
@@ -1099,7 +1100,25 @@ export async function serializeTablesWithOpenOrders(tables: TableRow[]): Promise
   })
 }
 
-export type FloorPlanRow = Prisma.FloorPlanGetPayload<{ include: { tables: true } }>
+export type FloorPlanRow = Prisma.FloorPlanGetPayload<{ include: { tables: true; spaces: true } }>
+type FloorSpaceRow = Prisma.FloorSpaceGetPayload<Record<string, never>>
+
+/** r56: serialize a custom floor space (3D platform zone). */
+export function serializeFloorSpace(space: FloorSpaceRow): FloorSpace {
+  return {
+    id: space.id,
+    floorPlanId: space.floorPlanId,
+    name: space.name,
+    kind: space.kind,
+    positionX: space.positionX,
+    positionY: space.positionY,
+    widthUnits: space.widthUnits,
+    depthUnits: space.depthUnits,
+    rotation: space.rotation,
+    active: space.active,
+    createdAt: space.createdAt.toISOString(),
+  }
+}
 
 /**
  * Serialize floor plans (with already-filtered table rows) attaching the
@@ -1121,5 +1140,9 @@ export async function serializeFloorPlans(plans: FloorPlanRow[]): Promise<FloorP
     tables: plan.tables
       .map((table) => extrasById.get(table.id))
       .filter((table): table is RestaurantTable => table != null),
+    // r56: custom spaces (active only — the manager's zones)
+    spaces: plan.spaces
+      .filter((space) => space.active)
+      .map((space) => serializeFloorSpace(space)),
   }))
 }

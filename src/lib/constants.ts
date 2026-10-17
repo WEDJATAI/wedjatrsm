@@ -180,6 +180,24 @@ export const TABLE_SHAPE_LABELS: Record<string, string> = {
   oval: 'Oval',
 }
 
+// r56: custom floor spaces — owner-defined zones laid onto the floor plan
+// (shisha lounge, bar counter, stage, VIP corner…) rendered as 3D platforms.
+export const FLOOR_SPACE_KINDS = [
+  'lounge',
+  'bar',
+  'stage',
+  'vip',
+  'kids',
+  'greenery',
+  'walkway',
+  'counter',
+  'custom',
+] as const
+export type FloorSpaceKind = (typeof FLOOR_SPACE_KINDS)[number]
+export function isFloorSpaceKind(value: unknown): value is FloorSpaceKind {
+  return typeof value === 'string' && (FLOOR_SPACE_KINDS as readonly string[]).includes(value)
+}
+
 export const ORDER_STATUSES = ['open', 'paid', 'cancelled', 'merged', 'deferred'] as const
 export const ORDER_STATUS_LABELS: Record<string, string> = {
   open: 'Open',

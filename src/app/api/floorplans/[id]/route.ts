@@ -71,6 +71,11 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
           where: { floorPlanId, active: true },
           orderBy: { name: 'asc' },
         }),
+        // r56: custom spaces (active only)
+        spaces: await db.floorSpace.findMany({
+          where: { floorPlanId, active: true },
+          orderBy: { id: 'asc' },
+        }),
       },
     ])
     return NextResponse.json({ floorPlan: serialized })

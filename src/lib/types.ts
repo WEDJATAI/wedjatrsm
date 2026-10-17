@@ -140,6 +140,24 @@ export type FloorPlan = {
   floorShape: string
   active: boolean
   tables: RestaurantTable[]
+  /** r56: custom spaces (lounge/bar/stage/VIP…) rendered as 3D platforms */
+  spaces?: FloorSpace[]
+}
+
+/** r56: owner-defined custom space on a floor plan (3D platform zone). */
+export type FloorSpace = {
+  id: number
+  floorPlanId: number | null
+  name: string
+  /** one of FLOOR_SPACE_KINDS ('lounge' | 'bar' | 'stage' | …) */
+  kind: string
+  positionX: number
+  positionY: number
+  widthUnits: number
+  depthUnits: number
+  rotation: number
+  active: boolean
+  createdAt: string
 }
 
 export type OrderItem = {

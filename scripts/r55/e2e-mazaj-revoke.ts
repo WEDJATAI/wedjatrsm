@@ -104,7 +104,7 @@ async function main() {
   const local = new Database('/home/z/my-project/db/custom.db', { readonly: true })
   const t21 = local.query(`SELECT status FROM tables WHERE id=21`).get() as any
   ok(t21?.status === 'free', `table 21 freed after cancel (${t21?.status})`)
-  const auditA = local.query(`SELECT details FROM audit_logs WHERE action='integration.mazajRevoke' AND entity_id=?`, [orderIdA]).get() as any
+  const auditA = local.query(`SELECT details FROM audit_logs WHERE action='integration.mazajRevoke' AND entity_id=?`).get(orderIdA) as any
   ok(!!auditA && /Amira/.test(auditA.details) && /Mazaj Admin/.test(auditA.details), 'audit row: authorized by Amira, operator recorded')
 
   // ── E. second order → PAY → revoke (paid path) ──
@@ -140,7 +140,7 @@ async function main() {
   ok(R.status === 200 && R.body?.revoke?.mode === 'payment-revoked', 'revoke 200, mode=payment-revoked')
   ok(Math.abs((R.body?.revoke?.amount ?? 0) - 182.7) < 0.01, 'reversed −182.70', `got ${R.body?.revoke?.amount}`)
   ok(R.body?.order?.status === 'revoked', 'order status=revoked')
-  const negPayment = local.query(`SELECT amount, reference FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1`, [orderIdB]).get() as any
+  const negPayment = local.query(`SELECT amount, reference FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1`).get(orderIdB) as any
   ok(negPayment && negPayment.amount < 0 && /mazaj-revoke/.test(negPayment.reference ?? ''), 'negative Payment row with mazaj-revoke reference')
   local.close()
 

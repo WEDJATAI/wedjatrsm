@@ -144,6 +144,17 @@ export const common: DictPair = {
     'floorShape.u_up': 'U — opens up',
     'floorShape.u_down': 'U — opens down',
 
+    // r56: custom floor spaces (zone kinds)
+    'spaceKind.lounge': 'Shisha lounge',
+    'spaceKind.bar': 'Bar',
+    'spaceKind.stage': 'Stage',
+    'spaceKind.vip': 'VIP section',
+    'spaceKind.kids': 'Kids area',
+    'spaceKind.greenery': 'Greenery',
+    'spaceKind.walkway': 'Walkway',
+    'spaceKind.counter': 'Counter',
+    'spaceKind.custom': 'Custom zone',
+
     // item statuses
     'status.item.new': 'New',
     'status.item.preparing': 'Preparing',
@@ -402,6 +413,17 @@ export const common: DictPair = {
     'floorShape.t_top': 'حرف T — الشريط بالأعلى',
     'floorShape.u_up': 'حرف U — مفتوح لأعلى',
     'floorShape.u_down': 'حرف U — مفتوح لأسفل',
+
+    // r56: custom floor spaces (zone kinds)
+    'spaceKind.lounge': 'ركن الشيشة',
+    'spaceKind.bar': 'البار',
+    'spaceKind.stage': 'المسرح',
+    'spaceKind.vip': 'قسم VIP',
+    'spaceKind.kids': 'ركن الأطفال',
+    'spaceKind.greenery': 'مساحة خضراء',
+    'spaceKind.walkway': 'ممر',
+    'spaceKind.counter': 'كاونتر',
+    'spaceKind.custom': 'منطقة مخصصة',
 
     // item statuses
     'status.item.new': 'جديد',

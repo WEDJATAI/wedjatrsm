@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T00:11:04.936Z",
+  "generatedAt": "2026-10-17T04:50:03.256Z",
   "round": "R54 — Guided checkout (print invoice → take payment → auto change → PAID receipt → post-payment tip recorder) + r52 splash guard/SW v3 + r53 location surfaces + cross-plane divergence repair (order 2201 cluster, ghost payments 288/289, users 17/18) — five-platform push",
   "database": {
     "file": "rsm-platform-database.db",
@@ -50,5 +50,55 @@
       "hybrid_sync_state": 11,
       "floor_plans": 6
     }
+  },
+  "reason": "auto-watch",
+  "bytes": 12369920,
+  "tableCount": 40,
+  "totalRows": 19056,
+  "tables": {
+    "app_settings": 14,
+    "attendance": 6,
+    "audit_logs": 1594,
+    "cash_drawer_entries": 0,
+    "cash_drawer_sessions": 1,
+    "categories": 29,
+    "customers": 9,
+    "floor_plans": 6,
+    "floor_spaces": 0,
+    "hybrid_conflicts": 1002,
+    "hybrid_devices": 1,
+    "hybrid_events": 14915,
+    "hybrid_sync_state": 11,
+    "inventory_transactions": 250,
+    "modifier_groups": 14,
+    "modifiers": 43,
+    "movement_candidates": 0,
+    "order_items": 2,
+    "orders": 1,
+    "payments": 0,
+    "persons": 2,
+    "product_modifier_groups": 35,
+    "products": 331,
+    "promotions": 0,
+    "purchase_order_items": 0,
+    "purchase_orders": 0,
+    "recipe_components": 710,
+    "reservations": 0,
+    "roles": 3,
+    "shifts": 2,
+    "stock_count_lines": 0,
+    "stock_counts": 0,
+    "suppliers": 0,
+    "tables": 54,
+    "users": 7,
+    "vision_cameras": 2,
+    "vision_events": 0,
+    "vision_table_states": 6,
+    "vision_zones": 6,
+    "waste_logs": 0
+  },
+  "invariants": {
+    "integrityChecked": true,
+    "recoveryPoint": "download/rsm-platform-database.db (auto-refreshed by src/lib/db-snapshot.ts)"
   }
 }

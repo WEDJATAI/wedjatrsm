@@ -14,7 +14,11 @@ export async function GET(req: NextRequest) {
     const floorPlans = await db.floorPlan.findMany({
       where: includeAll ? {} : { active: true },
       orderBy: { id: 'asc' },
-      include: { tables: { where: { active: true }, orderBy: { name: 'asc' } } },
+      include: {
+        tables: { where: { active: true }, orderBy: { name: 'asc' } },
+        // r56: custom spaces (active only) — the 3D floor zones
+        spaces: { where: { active: true }, orderBy: { id: 'asc' } },
+      },
     })
     return NextResponse.json({ floorPlans: await serializeFloorPlans(floorPlans) })
   } catch (err) {
@@ -75,6 +79,7 @@ export async function POST(req: NextRequest) {
         floorShape: floorPlan.floorShape,
         active: floorPlan.active,
         tables: [],
+        spaces: [],
       },
     })
   } catch (err) {

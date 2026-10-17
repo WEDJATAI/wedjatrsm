@@ -45,6 +45,72 @@ export function floorShapeClip(shape: string | null | undefined): string {
   return FLOOR_SHAPE_CLIP[shape ?? 'rectangle'] ?? FLOOR_SHAPE_CLIP.rectangle
 }
 
+/**
+ * r56: the walkable silhouette as an outline polygon (floor-relative %,
+ * clockwise, y → down). The single source of truth for the 3D renderer:
+ * the floor slab is extruded from this ring and walls rise along its edges.
+ * Vertices mirror FLOOR_SHAPE_CLIP exactly — the 2D clip-path and the 3D
+ * geometry can never disagree.
+ */
+export const FLOOR_SHAPE_OUTLINE: Record<string, [number, number][]> = {
+  rectangle: [
+    [0, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100],
+  ],
+  l_left: [
+    [0, 0],
+    [50, 0],
+    [50, 50],
+    [100, 50],
+    [100, 100],
+    [0, 100],
+  ],
+  l_right: [
+    [50, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100],
+    [0, 50],
+    [50, 50],
+  ],
+  t_top: [
+    [0, 0],
+    [100, 0],
+    [100, 50],
+    [65, 50],
+    [65, 100],
+    [35, 100],
+    [35, 50],
+    [0, 50],
+  ],
+  u_up: [
+    [0, 0],
+    [30, 0],
+    [30, 50],
+    [70, 50],
+    [70, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100],
+  ],
+  u_down: [
+    [0, 0],
+    [100, 0],
+    [100, 100],
+    [70, 100],
+    [70, 50],
+    [30, 50],
+    [30, 100],
+    [0, 100],
+  ],
+}
+
+export function floorOutline(shape: string | null | undefined): [number, number][] {
+  return FLOOR_SHAPE_OUTLINE[shape ?? 'rectangle'] ?? FLOOR_SHAPE_OUTLINE.rectangle
+}
+
 export function isFloorShape(value: unknown): value is FloorShape {
   return typeof value === 'string' && (FLOOR_SHAPES as readonly string[]).includes(value)
 }

@@ -53,7 +53,7 @@ async function main() {
   for (let i = 0; i < 16; i++) {
     await sleep(15000)
     const local = new Database('/home/z/my-project/db/custom.db', { readonly: true })
-    localOrder = local.query(`SELECT id, status, external_ref FROM orders WHERE external_ref=?`, [ext]).get() ?? null
+    localOrder = local.query(`SELECT id, status, external_ref FROM orders WHERE external_ref=?`).get(ext) ?? null
     local.close()
     if (localOrder) break
   }
@@ -62,7 +62,7 @@ async function main() {
   for (let i = 0; i < 12; i++) {
     await sleep(15000)
     const local = new Database('/home/z/my-project/db/custom.db', { readonly: true })
-    localOrder = local.query(`SELECT id, status FROM orders WHERE external_ref=?`, [ext]).get() ?? null
+    localOrder = local.query(`SELECT id, status FROM orders WHERE external_ref=?`).get(ext) ?? null
     const audit = local.query(`SELECT id FROM audit_logs WHERE action='integration.mazajRevoke' AND entity_id=${orderId}`).get()
     local.close()
     if (localOrder?.status === 'cancelled' && audit) { cancelled = true; break }

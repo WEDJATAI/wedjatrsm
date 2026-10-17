@@ -48,7 +48,7 @@ async function main() {
   ok(R.order?.status === 'revoked', `order status=revoked (${R.order?.status})`)
 
   const local = new Database('/home/z/my-project/db/custom.db', { readonly: true })
-  const neg = local.query(`SELECT amount, reference FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1`, [orderId]).get() as any
+  const neg = local.query(`SELECT amount, reference FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1`).get(orderId) as any
   ok(neg && neg.amount < 0 && /mazaj-revoke/.test(neg.reference ?? ''), `negative Payment row (${neg?.amount}, "${neg?.reference?.slice(0, 40)}")`)
   const audit = local.query(`SELECT details FROM audit_logs WHERE action='integration.mazajRevoke' AND entity_id=${orderId}`).get() as any
   ok(!!audit && /payment revoked/.test(audit.details) && /Amira/.test(audit.details), 'audit: payment revoked, authorized by Amira')

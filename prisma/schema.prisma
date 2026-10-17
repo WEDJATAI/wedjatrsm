@@ -207,10 +207,36 @@ model FloorPlan {
   floorShape      String   @default("rectangle") @map("floor_shape")
   active          Boolean  @default(true)
   tables          RestaurantTable[]
+  spaces          FloorSpace[] // r56: custom spaces (lounge/bar/stage/VIP/…)
   visionCameras   VisionCamera[] // R9 back-relation (additive)
   reservations    Reservation[] // R11 back-relation (additive)
 
   @@map("floor_plans")
+}
+
+// ─── Custom spaces (r56) ────────────────────────────────────────────
+// Owner-defined zones laid onto the floor plan next to tables: a shisha
+// lounge corner, the bar counter, a stage, a VIP section, kids area… Each
+// space is a positioned + sized + rotated platform rendered in the 3D
+// floor. Positions/sizes are floor-relative percentages exactly like
+// RestaurantTable positions, so the 2D clamping rules apply unchanged.
+model FloorSpace {
+  id          Int       @id @default(autoincrement())
+  floorPlanId Int?      @map("floor_plan_id")
+  floorPlan   FloorPlan? @relation(fields: [floorPlanId], references: [id])
+  name        String
+  // 'lounge' | 'bar' | 'stage' | 'vip' | 'kids' | 'greenery' | 'walkway' | 'counter' | 'custom'
+  kind        String    @default("lounge")
+  positionX   Float     @default(50) @map("position_x") // percentage 0-100
+  positionY   Float     @default(50) @map("position_y") // percentage 0-100
+  widthUnits  Float     @default(18) @map("width_units") // % of floor width
+  depthUnits  Float     @default(18) @map("depth_units") // % of floor depth
+  rotation    Float     @default(0) // degrees, clockwise
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([floorPlanId])
+  @@map("floor_spaces")
 }
 
 // ─── Tables ─────────────────────────────────────────────────────────
