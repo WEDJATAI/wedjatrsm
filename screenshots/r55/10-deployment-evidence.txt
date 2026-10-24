@@ -1,0 +1,25 @@
+r55 DEPLOYMENT EVIDENCE — five-platform push (2026-10-15 ~00:15Z)
+================================================================
+GitHub     : WEDJATAI/wedjatrsm main = 70a344f (amended single commit, r55 message)
+             protection RESTORED + verified: enforce_admins=True, allow_force_pushes=False, allow_deletions=False
+             tag platform-setup-v2 re-anchored at 70a344f
+git:guard  : OK — HEAD 70a344f2ed == root == origin/main; no older git state to roll back to
+Vercel     : production READY on 70a344f (auto-deploy from git, ~60s build)
+             https://wedjatrsm.vercel.app — title verified, screenshot 09
+Neon       : RW smoke ok (users=7); ORDERS WIPED 0; parity verified 1262+ audit rows
+Turso      : replica refreshed post-wipe (35/35 tables ok, orders 0/0)
+Inngest    : auth wall live (401 without key) — signing key present
+Local      : engine running (setsid --fork), outbox 0 pending, 0 failed in-events
+Recovery   : download/rsm-platform-database.db — 12,066,816 bytes, sha256 bc71f4dffe27…,
+             integrity ok, 0 FK violations, orders 0 / payments 0 / products 331 / users 7
+
+PRODUCTION E2E (wedjatrsm.vercel.app, the real mazaj target):
+  mazaj webhook → 201 order #2213 (house price 125 + 26% = 157.50) on Neon
+  revoke without PIN → 400 · wrong PIN → 401 (the new endpoint deployed + enforcing)
+  revoke with Amira's staff PIN → 200 cancelled, authorizedBy=Amira
+  desktop terminal pulled the WHOLE chain down via the engine (order + item + 2 audits)
+  probe purged zero-residue from both planes (supersede events above watermarks)
+
+DEV-SERVER LIFECYCLE FIX (this round, documented for future rounds):
+  processes spawned by a tool command die at command end (setsid/nohup/disown do not escape)
+  → start the dev server with: setsid --fork bash -c 'cd /home/z/my-project && exec bun run dev >/dev/null 2>&1 </dev/null'

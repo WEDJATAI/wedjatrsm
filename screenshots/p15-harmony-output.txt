@@ -1,0 +1,7 @@
+  [ ✓ ] github   repo reachable; origin/main == local HEAD (65f6fcc) — in sync
+  [ ✓ ] vercel   project ok; prod READY at wedjatrsm-e7n5eis4i-tonsy.vercel.app; crons enabled (/api/cron/daily-digest 15 6 * * * · /api/cron/turso-sync 0 3 * * *)
+  [ ✓ ] neon     RW smoke ok; users=9
+  [ ✓ ] turso    pipeline ping ok with held token
+  [ ✓ ] inngest  auth wall live (401) — signing key present, integration healthy
+  [ · ] local    hybrid outbox: 0 pending, 1 dead — engine syncs with the cloud automatically
+RESULT: ALL CRITICAL PLATFORMS GREEN
